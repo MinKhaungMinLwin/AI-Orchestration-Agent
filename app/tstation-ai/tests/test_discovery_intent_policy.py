@@ -613,6 +613,49 @@ def test_tc037_sound_absorber_with_size_maps_to_technology_filter() -> None:
     assert plan.tool_args_patch == {"rcmd_type": "sound_absorber", "tire_size": "235/55R19"}
 
 
+def test_three_pmsf_filter_search_without_keyword_uses_product_search_tool() -> None:
+    frame = build_discovery_intent_frame("삼봉마크 타이어 찾아줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "certification_filter_search"
+    assert frame.entities["certification_filter"] == "three_pmsf"
+    assert plan.preferred_tool == "search_product_tool"
+    assert plan.tool_args_patch == {"three_pmsf_yn": "Y", "limit": 10}
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_three_pmsf_filter_search_with_size_and_brand_preserves_filters() -> None:
+    frame = build_discovery_intent_frame("미쉐린 235/55R19 3pms 인증 타이어 보여줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.entities["brand_cd"] == "MC"
+    assert frame.entities["tire_size"] == "235/55R19"
+    assert plan.preferred_tool == "search_product_tool"
+    assert plan.tool_args_patch == {
+        "three_pmsf_yn": "Y",
+        "limit": 10,
+        "size": "235/55R19",
+        "brand_cd": "MC",
+    }
+
+
+def test_three_pmsf_filter_search_with_product_keyword_preserves_keyword() -> None:
+    frame = build_discovery_intent_frame("벤투스 S2 AS 삼봉마크 있는지 검색해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.entities["product_names"] == ("Ventus S2 AS",)
+    assert plan.preferred_tool == "search_product_tool"
+    assert plan.tool_args_patch == {
+        "three_pmsf_yn": "Y",
+        "limit": 10,
+        "keyword": "Ventus S2 AS",
+        "brand_cd": "HK",
+    }
+
+
 def test_tc044_sound_absorber_explain_and_buy_keeps_sound_absorber_recommendation() -> None:
     frame = build_discovery_intent_frame("흡음재가 뭐야? 그거들어간 타이어 종류추천해줘 구매할래.")
     plan = plan_discovery_tools(frame)

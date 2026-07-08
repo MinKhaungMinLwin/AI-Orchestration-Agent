@@ -41,6 +41,7 @@ class ProductSearchSummaryItem:
         goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명
         goods_dtl_pfm_nm (None | str | Unset): 세부 퍼포먼스 분류명
         sound_absorber_yn (None | str | Unset): 흡음재 적용 여부 Y/N
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 여부 Y/N
         season_nm (None | str | Unset): 계절 속성
         car_knd_nm (None | str | Unset): 차종 속성
         brand_nm (None | str | Unset): 브랜드명
@@ -80,6 +81,7 @@ class ProductSearchSummaryItem:
     goods_pfm_nm: None | str | Unset = UNSET
     goods_dtl_pfm_nm: None | str | Unset = UNSET
     sound_absorber_yn: None | str | Unset = UNSET
+    three_pmsf_yn: None | str | Unset = UNSET
     season_nm: None | str | Unset = UNSET
     car_knd_nm: None | str | Unset = UNSET
     brand_nm: None | str | Unset = UNSET
@@ -194,6 +196,12 @@ class ProductSearchSummaryItem:
             sound_absorber_yn = UNSET
         else:
             sound_absorber_yn = self.sound_absorber_yn
+
+        three_pmsf_yn: None | str | Unset
+        if isinstance(self.three_pmsf_yn, Unset):
+            three_pmsf_yn = UNSET
+        else:
+            three_pmsf_yn = self.three_pmsf_yn
 
         season_nm: None | str | Unset
         if isinstance(self.season_nm, Unset):
@@ -336,6 +344,8 @@ class ProductSearchSummaryItem:
             field_dict["goods_dtl_pfm_nm"] = goods_dtl_pfm_nm
         if sound_absorber_yn is not UNSET:
             field_dict["sound_absorber_yn"] = sound_absorber_yn
+        if three_pmsf_yn is not UNSET:
+            field_dict["three_pmsf_yn"] = three_pmsf_yn
         if season_nm is not UNSET:
             field_dict["season_nm"] = season_nm
         if car_knd_nm is not UNSET:
@@ -510,6 +520,15 @@ class ProductSearchSummaryItem:
 
         sound_absorber_yn = _parse_sound_absorber_yn(d.pop("sound_absorber_yn", UNSET))
 
+        def _parse_three_pmsf_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        three_pmsf_yn = _parse_three_pmsf_yn(d.pop("three_pmsf_yn", UNSET))
+
         def _parse_season_nm(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -674,6 +693,7 @@ class ProductSearchSummaryItem:
             goods_pfm_nm=goods_pfm_nm,
             goods_dtl_pfm_nm=goods_dtl_pfm_nm,
             sound_absorber_yn=sound_absorber_yn,
+            three_pmsf_yn=three_pmsf_yn,
             season_nm=season_nm,
             car_knd_nm=car_knd_nm,
             brand_nm=brand_nm,

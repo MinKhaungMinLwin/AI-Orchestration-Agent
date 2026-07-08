@@ -15,6 +15,7 @@ def _get_kwargs(
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
@@ -40,6 +41,13 @@ def _get_kwargs(
     else:
         json_brand_cd = brand_cd
     params["brand_cd"] = json_brand_cd
+
+    json_three_pmsf_yn: None | str | Unset
+    if isinstance(three_pmsf_yn, Unset):
+        json_three_pmsf_yn = UNSET
+    else:
+        json_three_pmsf_yn = three_pmsf_yn
+    params["three_pmsf_yn"] = json_three_pmsf_yn
 
     params["limit"] = limit
 
@@ -90,6 +98,7 @@ def sync_detailed(
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
@@ -102,6 +111,7 @@ def sync_detailed(
         size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어). 미지정 시 전 브랜드 검색
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -116,6 +126,7 @@ def sync_detailed(
         keyword=keyword,
         size=size,
         brand_cd=brand_cd,
+        three_pmsf_yn=three_pmsf_yn,
         limit=limit,
     )
 
@@ -132,6 +143,7 @@ def sync(
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
@@ -144,6 +156,7 @@ def sync(
         size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어). 미지정 시 전 브랜드 검색
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -159,6 +172,7 @@ def sync(
         keyword=keyword,
         size=size,
         brand_cd=brand_cd,
+        three_pmsf_yn=three_pmsf_yn,
         limit=limit,
     ).parsed
 
@@ -169,6 +183,7 @@ async def asyncio_detailed(
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
@@ -181,6 +196,7 @@ async def asyncio_detailed(
         size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어). 미지정 시 전 브랜드 검색
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -195,6 +211,7 @@ async def asyncio_detailed(
         keyword=keyword,
         size=size,
         brand_cd=brand_cd,
+        three_pmsf_yn=three_pmsf_yn,
         limit=limit,
     )
 
@@ -209,6 +226,7 @@ async def asyncio(
     keyword: None | str | Unset = UNSET,
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
@@ -221,6 +239,7 @@ async def asyncio(
         size (None | str | Unset): 타이어 사이즈 (예: '2254517' 또는 '225/45R17')
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어). 미지정 시 전 브랜드 검색
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -237,6 +256,7 @@ async def asyncio(
             keyword=keyword,
             size=size,
             brand_cd=brand_cd,
+            three_pmsf_yn=three_pmsf_yn,
             limit=limit,
         )
     ).parsed

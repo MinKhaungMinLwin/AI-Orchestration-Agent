@@ -33,6 +33,7 @@ class ProductSearchItem:
             'SPORT'(고속/제동성) / 'RUNFLAT'(런플랫) 등. 표시·답변용 — 검색 정렬/필터 기준 아님
         goods_dtl_pfm_nm (None | str | Unset): 세부 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_DTL_PFM_NM)
         sound_absorber_yn (None | str | Unset): 흡음재 적용 여부 Y/N (GOODS_DTL_PFM_NM LIKE '%흡음%' 기준)
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 여부 Y/N (PR_PATTERN_BASE.AUTHENTICATION_NAME='3PMSF' 기준)
         t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
         oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
         sale_prc (int | None | Unset): 기본 판매가 (PR_ITEM_PRC_INFO.SALE_PRC)
@@ -87,6 +88,7 @@ class ProductSearchItem:
     goods_pfm_nm: None | str | Unset = UNSET
     goods_dtl_pfm_nm: None | str | Unset = UNSET
     sound_absorber_yn: None | str | Unset = UNSET
+    three_pmsf_yn: None | str | Unset = UNSET
     t_oe_maker_1: None | str | Unset = UNSET
     oe_badge_yn: None | str | Unset = UNSET
     sale_prc: int | None | Unset = UNSET
@@ -202,6 +204,12 @@ class ProductSearchItem:
             sound_absorber_yn = UNSET
         else:
             sound_absorber_yn = self.sound_absorber_yn
+
+        three_pmsf_yn: None | str | Unset
+        if isinstance(self.three_pmsf_yn, Unset):
+            three_pmsf_yn = UNSET
+        else:
+            three_pmsf_yn = self.three_pmsf_yn
 
         t_oe_maker_1: None | str | Unset
         if isinstance(self.t_oe_maker_1, Unset):
@@ -449,6 +457,8 @@ class ProductSearchItem:
             field_dict["goods_dtl_pfm_nm"] = goods_dtl_pfm_nm
         if sound_absorber_yn is not UNSET:
             field_dict["sound_absorber_yn"] = sound_absorber_yn
+        if three_pmsf_yn is not UNSET:
+            field_dict["three_pmsf_yn"] = three_pmsf_yn
         if t_oe_maker_1 is not UNSET:
             field_dict["t_oe_maker_1"] = t_oe_maker_1
         if oe_badge_yn is not UNSET:
@@ -633,6 +643,15 @@ class ProductSearchItem:
             return cast(None | str | Unset, data)
 
         sound_absorber_yn = _parse_sound_absorber_yn(d.pop("sound_absorber_yn", UNSET))
+
+        def _parse_three_pmsf_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        three_pmsf_yn = _parse_three_pmsf_yn(d.pop("three_pmsf_yn", UNSET))
 
         def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
             if data is None:
@@ -966,6 +985,7 @@ class ProductSearchItem:
             goods_pfm_nm=goods_pfm_nm,
             goods_dtl_pfm_nm=goods_dtl_pfm_nm,
             sound_absorber_yn=sound_absorber_yn,
+            three_pmsf_yn=three_pmsf_yn,
             t_oe_maker_1=t_oe_maker_1,
             oe_badge_yn=oe_badge_yn,
             sale_prc=sale_prc,

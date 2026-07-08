@@ -263,7 +263,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_highspd", "t_highspd_cd", "t_high_hand_avg",
     "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
-    "goods_dtl_pfm_nm", "sound_absorber_yn",
+    "goods_dtl_pfm_nm", "sound_absorber_yn", "three_pmsf_yn",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
     "t_oe_maker_1", "oe_badge_yn",
@@ -641,6 +641,7 @@ def search_product_tool(
     limit: int = 10,
     size: str | None = None,
     brand_cd: str | None = None,
+    three_pmsf_yn: str | None = None,
     sort_by: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
@@ -652,6 +653,7 @@ def search_product_tool(
     - User searches for a specific tire by name/keyword
     - Resolving goods_no for price/stock/order handoff (Flow C/D)
     - User mentions ONLY a brand name with size → keyword=None, use brand_cd + size
+    - User asks for 3PMSF / 3PMS / 삼봉마크 certified tires → pass three_pmsf_yn="Y"
 
     Important: keyword는 **한글로 전달**한다. BE는 한글 GOODS_NM에 LIKE 매칭하고
     alias.json으로 한글→영문을 자동 확장한다 (영문→한글 역확장은 없음).
@@ -682,6 +684,8 @@ def search_product_tool(
             - BS: Bridgestone 브리지스톤
             - CT: Continental 콘티넨탈
             - GY: Goodyear 굿이어
+        three_pmsf_yn (str | None): 3PMSF/3PMS/삼봉마크 인증 타이어만 검색하려면 "Y".
+            "눈길 인증", "스노우플레이크", "Three-Peak Mountain Snowflake" 요청도 "Y"로 전달한다.
         sort_by (str | None): 정렬 의도. 사용자가 정렬을 명시하면 전달한다. Optional.
             - "price_asc": 가장 저렴한 순 (가장 저렴한, 제일 싼, 최저가, 싼 것부터)
             - "price_desc": 비싼 순 (비싼 것부터, 고가, 프리미엄 순)
@@ -708,6 +712,8 @@ def search_product_tool(
         - {"keyword": "벤투스", "size": "225/45R17", "sort_by": "rating_desc"}  # 평점 높은 순
         - {"brand_cd": "HK", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 한국타이어
         - {"keyword": "벤투스 S2", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
+        - {"three_pmsf_yn": "Y", "limit": 10}  # 삼봉마크/3PMSF 인증 타이어 검색
+        - {"size": "235/55R19", "three_pmsf_yn": "Y"}  # 특정 규격의 삼봉마크 인증 타이어 검색
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...}
@@ -717,7 +723,7 @@ def search_product_tool(
     Item field hints (사용자 질문 → 참조 필드):
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
-        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn, three_pmsf_yn
         - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
         - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
         - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심보험)
@@ -728,12 +734,15 @@ def search_product_tool(
             "keyword": keyword,
             "size": size,
             "brand_cd": brand_cd,
+            "three_pmsf_yn": three_pmsf_yn,
             "sort_by": sort_by,
             "min_price": min_price,
             "max_price": max_price,
         }
         if not size and policy_patch.get("size"):
             size = str(policy_patch["size"])
+        if not three_pmsf_yn and policy_patch.get("three_pmsf_yn"):
+            three_pmsf_yn = str(policy_patch["three_pmsf_yn"])
         logger.info(
             "[TOOL][search_product_tool] Applied discovery policy patch=%s before=%s after=%s",
             policy_patch,
@@ -742,6 +751,7 @@ def search_product_tool(
                 "keyword": keyword,
                 "size": size,
                 "brand_cd": brand_cd,
+                "three_pmsf_yn": three_pmsf_yn,
                 "sort_by": sort_by,
                 "min_price": min_price,
                 "max_price": max_price,
@@ -760,9 +770,10 @@ def search_product_tool(
         fetch_limit = max(fetch_limit, 100)
     normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
     brand_arg = normalized_brand_cd if normalized_brand_cd else UNSET
+    three_pmsf_arg = str(three_pmsf_yn).strip().upper() if three_pmsf_yn else UNSET
     logger.debug(
-        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
-        normalized_keyword, limit, size, normalized_brand_cd, sort_by, min_price, max_price,
+        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, three_pmsf_yn=%s, sort_by=%s, min_price=%s, max_price=%s",
+        normalized_keyword, limit, size, normalized_brand_cd, three_pmsf_arg, sort_by, min_price, max_price,
     )
 
     try:
@@ -772,6 +783,7 @@ def search_product_tool(
             limit=fetch_limit,
             size=size,
             brand_cd=brand_arg,
+            three_pmsf_yn=three_pmsf_arg,
         )
         if response.parsed is None:
             return _error_response(

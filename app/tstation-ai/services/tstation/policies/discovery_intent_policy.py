@@ -247,6 +247,10 @@ _SUV_RECOMMENDATION_RE = re.compile(r"SUV|스포츠\s*유틸리티", re.IGNORECA
 _PASSENGER_RECOMMENDATION_RE = re.compile(r"승용차|세단|SEDAN|스포츠카", re.IGNORECASE)
 _TRUCK_VAN_RECOMMENDATION_RE = re.compile(r"경트럭|화물차|카고트럭|덤프트럭|트럭|밴|승합차", re.IGNORECASE)
 _SOUND_ABSORBER_RE = re.compile(r"흡음재|흡음|sound\s*absorber|소음\s*저감", re.IGNORECASE)
+_THREE_PMSF_RE = re.compile(
+    r"3\s*PMSF?|three[-\s]*peak|mountain\s*snowflake|스노우\s*플레이크|삼봉\s*마크|삼봉마크|눈길\s*인증",
+    re.IGNORECASE,
+)
 _SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
 _OE_REPLACEMENT_TYPE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("oe", re.compile(r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)", re.IGNORECASE)),
@@ -1118,6 +1122,9 @@ def build_discovery_intent_frame(
     if _SOUND_ABSORBER_RE.search(text):
         entities["technology"] = "sound_absorber"
         entities["rcmd_type"] = "sound_absorber"
+    if _THREE_PMSF_RE.search(text):
+        entities["certification_filter"] = "three_pmsf"
+        entities["three_pmsf_yn"] = "Y"
     if _SAFE_SERVICE_RE.search(text):
         entities["service_program"] = "safe_service"
         entities["rcmd_type"] = "safe_kids"
@@ -1352,6 +1359,19 @@ def build_discovery_intent_frame(
     elif concept and _SOUND_ABSORBER_RE.search(text) and entities["purchase_intent"]:
         intent = "product_recommendation"
         sub_intent = "technology_explain_then_recommend"
+    elif entities.get("certification_filter") == "three_pmsf" and (
+        not concept
+        or entities["purchase_intent"]
+        or _RECOMMEND_RE.search(text)
+        or _STOCK_OR_BOOKING_RE.search(text)
+        or _PRICE_OR_COUPON_RE.search(text)
+        or products
+        or product_families
+        or tire_size
+        or brand_cd
+    ):
+        intent = "product_search"
+        sub_intent = "certification_filter_search"
     elif variant_constraints and len(variant_constraints) >= 2:
         intent = "product_recommendation"
         sub_intent = "general_recommendation"
@@ -1444,6 +1464,28 @@ def build_discovery_intent_frame(
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
     tire_size = entities.get("tire_size")
+    if entities.get("certification_filter") == "three_pmsf":
+        product_names = entities.get("product_names") or ()
+        product_families = entities.get("product_family_names") or ()
+        keyword = (
+            entities.get("product_keyword")
+            or (product_names[0] if product_names else None)
+            or (product_families[0] if product_families else None)
+        )
+        args: dict[str, Any] = {"three_pmsf_yn": "Y", "limit": 10}
+        if keyword:
+            args["keyword"] = keyword
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        return ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=("get_products_recommendations_tool",),
+            metadata={"response_intent": "certification_filter_search"},
+        )
     if frame.sub_intent == "vehicle_information":
         return ToolPlan(
             allowed_tools=("get_my_cars_tool",),

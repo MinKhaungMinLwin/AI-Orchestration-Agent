@@ -987,7 +987,7 @@
                     "Price AF - \uac00\uaca9 \ubc0f \ud560\uc778 \uc870\ud68c"
                 ],
                 "summary": "\ud68c\uc6d0 \ubcf4\uc720 \ucfe0\ud3f0 \uae30\ubc18 \uc0c1\ud488\ubcc4 \ucd5c\uc800\uac00 \uc2dc\ubbac\ub808\uc774\uc158",
-                "description": "\ud68c\uc6d0 \ubcf4\uc720 \ucfe0\ud3f0\uc744 \uc0c1\ud488\u2192\uacb0\uc81c\u2192\ud50c\ub7ec\uc2a4 \uc21c\uc73c\ub85c \uadf8\ub9ac\ub514 \uc801\uc6a9\ud558\uc5ec \uc0c1\ud488\ubcc4 \ucd5c\uc885 \ud61c\ud0dd\uac00\ub97c \uacc4\uc0b0\ud569\ub2c8\ub2e4. \uac01 \ub2e8\uacc4\uc5d0\uc11c \uc801\uc6a9 \uac00\ub2a5\ud55c \ucfe0\ud3f0 \uc911 \ud560\uc778\uae08\uc561\uc774 \uac00\uc7a5 \ud070 1\uac1c\ub97c \uc790\ub3d9 \uc120\ud0dd\ud569\ub2c8\ub2e4. \uc0c1\ud488\ucfe0\ud3f0\uc758 CPN_DUP_USE_YN='N' \uc774\uba74 \uacb0\uc81c\ucfe0\ud3f0 \ub2e8\uacc4\ub97c \uac74\ub108\ub701\ub2c8\ub2e4. \uc5ec\ub7ec \uc0c1\ud488\uc744 \ubc1b\uc544 \uac01\uac01 \ub3c5\ub9bd\uc801\uc73c\ub85c \uc2dc\ubbac\ub808\uc774\uc158\ud569\ub2c8\ub2e4(\uc5ec\ub7ec \uc0c1\ud488 \uc911 1\uac1c\ub97c \uace0\ub974\ub294 \uac83\uc774 \uc544\ub2d8). \ud68c\uc6d0\ubc88\ud638/\uc81c\ud734\uc0ac\ubc88\ud638\ub294 JWT \ud074\ub808\uc784\uc5d0\uc11c, \ub9e4\uc7a5 ID \uc640 \ucc44\ub110\uc740 query \ub85c \ubc1b\uc2b5\ub2c8\ub2e4.",
+                "description": "\ud68c\uc6d0 \ubcf4\uc720 \ucfe0\ud3f0\uc744 \uc0c1\ud488\u2192\uacb0\uc81c\u2192\uc11c\ube44\uc2a4\u2192\ud50c\ub7ec\uc2a4 \uc21c\uc73c\ub85c \uadf8\ub9ac\ub514 \uc801\uc6a9\ud558\uc5ec \uc0c1\ud488\ubcc4 \ucd5c\uc885 \ud61c\ud0dd\uac00\ub97c \uacc4\uc0b0\ud569\ub2c8\ub2e4. \uac01 \ub2e8\uacc4\uc5d0\uc11c \uc801\uc6a9 \uac00\ub2a5\ud55c \ucfe0\ud3f0 \uc911 \ud560\uc778\uae08\uc561\uc774 \uac00\uc7a5 \ud070 1\uac1c\ub97c \uc790\ub3d9 \uc120\ud0dd\ud569\ub2c8\ub2e4. \uc0c1\ud488\ucfe0\ud3f0\uc758 CPN_DUP_USE_YN='N' \uc774\uba74 \uacb0\uc81c\ucfe0\ud3f0 \ub2e8\uacc4\ub97c \uac74\ub108\ub701\ub2c8\ub2e4. \uc11c\ube44\uc2a4\ucfe0\ud3f0\uacfc \ud50c\ub7ec\uc2a4\ucfe0\ud3f0\uc740 \uc0c1\ud488/\uacb0\uc81c\ucfe0\ud3f0\uacfc \ub3c5\ub9bd\uc801\uc73c\ub85c \ucd5c\ub300 1\uac1c\uc529 \uc801\uc6a9\ud569\ub2c8\ub2e4. \uc5ec\ub7ec \uc0c1\ud488\uc744 \ubc1b\uc544 \uac01\uac01 \ub3c5\ub9bd\uc801\uc73c\ub85c \uc2dc\ubbac\ub808\uc774\uc158\ud569\ub2c8\ub2e4(\uc5ec\ub7ec \uc0c1\ud488 \uc911 1\uac1c\ub97c \uace0\ub974\ub294 \uac83\uc774 \uc544\ub2d8). \ud68c\uc6d0\ubc88\ud638/\uc81c\ud734\uc0ac\ubc88\ud638\ub294 JWT \ud074\ub808\uc784\uc5d0\uc11c, \ub9e4\uc7a5 ID \uc640 \ucc44\ub110\uc740 query \ub85c \ubc1b\uc2b5\ub2c8\ub2e4.",
                 "operationId": "get_cheapest_by_coupon_api_prices_cheapest_by_coupon_get",
                 "security": [
                     {
@@ -1468,6 +1468,24 @@
                         "description": "\ube0c\ub79c\ub4dc \ucf54\ub4dc (HK=\ud55c\uad6d\ud0c0\uc774\uc5b4, LF=\ub77c\uc6b0\ud39c, MC=\ubbf8\uc250\ub9b0, PI=\ud53c\ub810\ub9ac, BS=\ube0c\ub9ac\uc9c0\uc2a4\ud1a4, CT=\ucf58\ud2f0\ub128\ud0c8, GY=\uad7f\uc774\uc5b4)"
                     },
                     {
+                        "name": "three_pmsf_yn",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "3PMSF/\uc0bc\ubd09\ub9c8\ud06c \uc778\uc99d \ud0c0\uc774\uc5b4\ub9cc \uac80\uc0c9\ud558\ub824\uba74 Y",
+                            "title": "Three Pmsf Yn"
+                        },
+                        "description": "3PMSF/\uc0bc\ubd09\ub9c8\ud06c \uc778\uc99d \ud0c0\uc774\uc5b4\ub9cc \uac80\uc0c9\ud558\ub824\uba74 Y"
+                    },
+                    {
                         "name": "limit",
                         "in": "query",
                         "required": false,
@@ -1573,6 +1591,24 @@
                             "title": "Brand Cd"
                         },
                         "description": "\ube0c\ub79c\ub4dc \ucf54\ub4dc (HK=\ud55c\uad6d\ud0c0\uc774\uc5b4, LF=\ub77c\uc6b0\ud39c, MC=\ubbf8\uc250\ub9b0, PI=\ud53c\ub810\ub9ac, BS=\ube0c\ub9ac\uc9c0\uc2a4\ud1a4, CT=\ucf58\ud2f0\ub128\ud0c8, GY=\uad7f\uc774\uc5b4). \ubbf8\uc9c0\uc815 \uc2dc \uc804 \ube0c\ub79c\ub4dc \uac80\uc0c9"
+                    },
+                    {
+                        "name": "three_pmsf_yn",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "3PMSF/\uc0bc\ubd09\ub9c8\ud06c \uc778\uc99d \ud0c0\uc774\uc5b4\ub9cc \uac80\uc0c9\ud558\ub824\uba74 Y",
+                            "title": "Three Pmsf Yn"
+                        },
+                        "description": "3PMSF/\uc0bc\ubd09\ub9c8\ud06c \uc778\uc99d \ud0c0\uc774\uc5b4\ub9cc \uac80\uc0c9\ud558\ub824\uba74 Y"
                     },
                     {
                         "name": "limit",
@@ -1833,7 +1869,7 @@
                     "Product Recommendation AF - \uc0c1\ud488 \ucd94\ucc9c"
                 ],
                 "summary": "\uc0c1\ud488 \ucd94\ucc9c",
-                "description": "\ucd94\ucc9c \ud0c0\uc785(rcmd_type)\uc5d0 \ub530\ub77c \uc0c1\uc704 N\uac1c \uc0c1\ud488\uc744 \ubc18\ud658\ud569\ub2c8\ub2e4.\n\n**\uae30\uc874 \ud0c0\uc785 (\uc804\uc6a9 SQL)**\n- **tstation**: \ud2f0\uc2a4\ud14c\uc774\uc158 \ucd94\ucc9c (`TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10)` \ub192\uc740 \uc21c, `PR_GOODS_RCMD_SUM`)\n- **discount**: \ucd5c\uace0 \ud560\uc778\uc728 (`EXTRA_FVR_SALE_PER` \ub192\uc740 \uc21c, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: \uac00\uc131\ube44 Good (\ud560\uc778\uac00 20\ub9cc \uc6d0 \uc774\ud558, \uc218\uba85\u00b7\uc5f0\ube44 \ub192\uc740 \uc21c, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)\n- **fuel_efficiency**: \uc5f0\ube44 \uc911\uc2ec (`T_FUEL_EFF_CONVERT` \ub192\uc740 \uc21c, \ub3d9\uc810 \uc2dc \uc22b\uc790\ud615 `RR` \ub0ae\uc740 \uc21c)\n\n**\uc2e0\uaddc \ud0c0\uc785 (\ubca0\uc774\uc2a4 \ud15c\ud50c\ub9bf + \uc124\uc815 \uae30\ubc18, `entr_yn=y` \uc2dc \uc81c\ud734\uc0ac \uac00\uaca9 \uc790\ub3d9 \uc801\uc6a9)**\n- **wet**: \ube57\uae38 \uc131\ub2a5 (`WET` \ub192\uc740 \uc21c)\n- **snow**: \ub208\uae38/\ube59\ud310 (`T_SNOW`, `T_ICE` \ub192\uc740 \uc21c)\n- **high_speed**: \uace0\uc18d \uc8fc\ud589 (`T_HIGHSPD` \ub192\uc740 \uc21c)\n- **handling**: \ud578\ub4e4\ub9c1 (`T_HIGH_HAND_AVG` \ub192\uc740 \uc21c)\n- **low_vibration**: \uc9c4\ub3d9 \uc801\uc740 (`T_COM_SIL_AVG`, `T_COM_CVS` \ub192\uc740 \uc21c)\n- **performance**: \ud37c\ud3ec\uba3c\uc2a4 (`GOODS_PFM_NM='SPORT'` + `T_HIGH_HAND_AVG` \ub192\uc740 \uc21c)\n- **commute**: \ucd9c\ud1f4\uadfc (`SEASON_NM='\uc0ac\uacc4\uc808'` + `T_MILG_CVS` \ub192\uc740 \uc21c)\n- **long_distance**: \uc7a5\uac70\ub9ac (`T_COM_SIL_AVG`/`T_COM_CVS`/`T_MILG_CVS` \ub192\uc740 \uc21c)\n- **urban**: \ub3c4\uc2ec \uc8fc\ud589 (`SEASON_NM='\uc0ac\uacc4\uc808'` + `GOODS_PFM_NM='COMFORT'`)\n- **family**: \uac00\uc871\uc6a9 (`GOODS_PFM_NM IN ('COMFORT','RUNFLAT')`)\n- **ev**: \uc804\uae30\ucc28\uc6a9 (`CAR_KND_NM='\uc804\uae30\ucc28'`)\n- **heavy_load**: \uc9d0 \ub9ce\uc774 (`T_WGT_IDX`, `T_WGT_IDX_KG` \ub192\uc740 \uc21c)\n- **weekend**: \uc8fc\ub9d0 (`SEASON_NM='\uc0ac\uacc4\uc808'` + `PRC_GRD_NM='\uc2a4\ud0e0\ub2e4\ub4dc'`, `T_TRAY_WARE` \ub192\uc740 \uc21c)\n- **safe_kids**: \uc544\uc774 \uc548\uc804 (`T_RLX_ISN_YN='O'` + \uc815\uc219\u00b7\ud558\uc911 \ub192\uc740 \uc21c)\n- **all_weather**: \ub208\uae38/\ube44 \uc804\ucc9c\ud6c4 (`WET`/`T_SNOW`/`T_ICE` \ub192\uc740 \uc21c)\n- **warranty**: \uc6cc\ub7f0\ud2f0 \uac00\ub2a5 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` \uae34 \uc21c)\n- **summer**: \uc5ec\ub984\uc6a9 (`SEASON_NM='\uc5ec\ub984'`, `WET`/`T_HIGH_HAND_AVG` \ub192\uc740 \uc21c)\n- **sound_absorber**: \ud761\uc74c\uc7ac \uc801\uc6a9 (`GOODS_DTL_PFM_NM LIKE '%\ud761\uc74c%'` \u2014 '\ud761\uc74c\uc7ac'/'\ud761\uc74c\uc81c'/\ubcf5\ud569 \ubaa8\ub450 \ud3ec\ud568, \uc815\uc219\uc131 \uc810\uc218 \uc815\ub82c)\n\n**\uac00\uaca9 \ub4f1\uae09 \ud544\ud130 (\uc635\uc158, tstation + \ub3d9\uc801 rcmd_type \uc5d0\ub9cc \uc801\uc6a9)**\n- `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` \ub9e4\uce6d. \uac12 '\ud504\ub9ac\ubbf8\uc5c4'/'\uc2a4\ud0e0\ub2e4\ub4dc'/'\uc774\ucf54\ub178\ubbf8'. '\ud504\ub9ac\ubbf8\uc5c4' \uc785\ub825 \uc2dc LIKE '\ud504\ub9ac\ubbf8\uc5c4%' \ub85c raw '\ud504\ub9ac\ubbf8\uc5c4' + '\ud504\ub9ac\ubbf8\uc5c4+' \ub458 \ub2e4 \ub9e4\uce6d.\n\n**\uac00\uaca9 \ud544\ud130 (\ubaa8\ub4e0 rcmd_type \uacf5\ud1b5, \uc635\uc158)**\n- `min_price`/`max_price`: SQL WHERE \uc808\uc5d0\uc11c `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (\ud560\uc778\uac00 \uc6b0\uc120) \uae30\uc900 \ubc94\uc704 \ud544\ud130. `max_price` (\ubaa9\ud45c \uac00\uaca9) \ub9cc \uc9c0\uc815\ub418\uba74 \uc608\uc0b0\ub300 \uc694\uccad\uc73c\ub85c \ubcf4\uace0 0~max \ubc94\uc704\uc5d0\uc11c \uac00\uaca9 \ub0b4\ub9bc\ucc28\uc21c \uc0c1\uc704 N \uac1c\ub97c \ubc18\ud658\ud558\uba70 \ube0c\ub79c\ub4dc \ud544\ud130(HK \ub4f1)\uac00 \ud574\uc81c\ub418\uc5b4 \ubaa8\ub4e0 \ube0c\ub79c\ub4dc\ub97c \ud3ec\ud568\ud569\ub2c8\ub2e4.\n\n**\ucc28\ub7c9 \ud0c0\uc785 \ud544\ud130 (\ubaa8\ub4e0 rcmd_type \uacf5\ud1b5, \uc635\uc158)**\n- `vehicle_type`: `CAR_KND_NM` \uae30\uc900 \uc9c1\uad50 \ud544\ud130. \uac12: passenger/suv/ev/truck_van. passenger\ub294 '\uc2b9\uc6a9\ucc28'/'SEDAN'/'\uc2a4\ud3ec\uce20\uce74', suv\ub294 'SUV', ev\ub294 '\uc804\uae30\ucc28', truck_van\uc740 '\uacbd\ud2b8\ub7ed&\ubc34'/'\uacbd\ud2b8\ub7ed'/'\uce74\uace0\ud2b8\ub7ed'/'\ub364\ud504\ud2b8\ub7ed'\uc744 \ub9e4\uce6d.",
+                "description": "\ucd94\ucc9c \ud0c0\uc785(rcmd_type)\uc5d0 \ub530\ub77c \uc0c1\uc704 N\uac1c \uc0c1\ud488\uc744 \ubc18\ud658\ud569\ub2c8\ub2e4.\n\n**\uae30\uc874 \ud0c0\uc785 (\uc804\uc6a9 SQL)**\n- **tstation**: \ud2f0\uc2a4\ud14c\uc774\uc158 \ucd94\ucc9c (`TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10)` \ub192\uc740 \uc21c, `PR_GOODS_RCMD_SUM`)\n- **discount**: \ucd5c\uace0 \ud560\uc778\uc728 (`EXTRA_FVR_SALE_PER` \ub192\uc740 \uc21c, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: \uac00\uc131\ube44 Good (\ud560\uc778\uac00 20\ub9cc \uc6d0 \uc774\ud558, \uc218\uba85\u00b7\uc5f0\ube44 \ub192\uc740 \uc21c, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)\n- **fuel_efficiency**: \uc5f0\ube44 \uc911\uc2ec (`T_FUEL_EFF_CONVERT` \ub192\uc740 \uc21c, \ub3d9\uc810 \uc2dc \uc22b\uc790\ud615 `RR` \ub0ae\uc740 \uc21c)\n\n**\uc2e0\uaddc \ud0c0\uc785 (\ubca0\uc774\uc2a4 \ud15c\ud50c\ub9bf + \uc124\uc815 \uae30\ubc18, `entr_yn=y` \uc2dc \uc81c\ud734\uc0ac \uac00\uaca9 \uc790\ub3d9 \uc801\uc6a9)**\n- **wet**: \ube57\uae38 \uc131\ub2a5 (`WET` \ub192\uc740 \uc21c)\n- **snow**: \ub208\uae38/\ube59\ud310 (`T_SNOW`, `T_ICE` \ub192\uc740 \uc21c)\n- **high_speed**: \uace0\uc18d \uc8fc\ud589 (`T_HIGHSPD` \ub192\uc740 \uc21c)\n- **handling**: \ud578\ub4e4\ub9c1 (`T_HIGH_HAND_AVG` \ub192\uc740 \uc21c)\n- **low_vibration**: \uc9c4\ub3d9 \uc801\uc740 (`T_COM_SIL_AVG`, `T_COM_CVS` \ub192\uc740 \uc21c)\n- **performance**: \ud37c\ud3ec\uba3c\uc2a4 (`GOODS_PFM_NM='SPORT'` + `T_HIGH_HAND_AVG` \ub192\uc740 \uc21c)\n- **commute**: \ucd9c\ud1f4\uadfc (`SEASON_NM='\uc0ac\uacc4\uc808'` + `T_MILG_CVS` \ub192\uc740 \uc21c)\n- **long_distance**: \uc7a5\uac70\ub9ac (`T_COM_SIL_AVG`/`T_COM_CVS`/`T_MILG_CVS` \ub192\uc740 \uc21c)\n- **urban**: \ub3c4\uc2ec \uc8fc\ud589 (`SEASON_NM='\uc0ac\uacc4\uc808'` + `GOODS_PFM_NM='COMFORT'`)\n- **family**: \uac00\uc871\uc6a9 (`GOODS_PFM_NM IN ('COMFORT','RUNFLAT')`)\n- **ev**: \uc804\uae30\ucc28\uc6a9 (`CAR_KND_NM='\uc804\uae30\ucc28'`)\n- **heavy_load**: \uc9d0 \ub9ce\uc774 (`T_WGT_IDX`, `T_WGT_IDX_KG` \ub192\uc740 \uc21c)\n- **weekend**: \uc8fc\ub9d0 (`SEASON_NM='\uc0ac\uacc4\uc808'` + `PRC_GRD_NM='\uc2a4\ud0e0\ub2e4\ub4dc'`, `T_TRAY_WARE` \ub192\uc740 \uc21c)\n- **safe_kids**: \uc544\uc774 \uc548\uc804 (`T_RLX_ISN_YN='O'` + \uc815\uc219\u00b7\ud558\uc911 \ub192\uc740 \uc21c)\n- **all_weather**: \ub208\uae38/\ube44 \uc804\ucc9c\ud6c4 (`WET`/`T_SNOW`/`T_ICE` \ub192\uc740 \uc21c)\n- **warranty**: \uc6cc\ub7f0\ud2f0 \uac00\ub2a5 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` \uae34 \uc21c)\n- **summer**: \uc5ec\ub984\uc6a9 (`SEASON_NM='\uc5ec\ub984'`, `WET`/`T_HIGH_HAND_AVG` \ub192\uc740 \uc21c)\n- **sound_absorber**: \ud761\uc74c\uc7ac \uc801\uc6a9 (`GOODS_DTL_PFM_NM LIKE '%\ud761\uc74c%'` \u2014 '\ud761\uc74c\uc7ac'/'\ud761\uc74c\uc81c'/\ubcf5\ud569 \ubaa8\ub450 \ud3ec\ud568, \uc815\uc219\uc131 \uc810\uc218 \uc815\ub82c)\n\n**\uac00\uaca9 \ub4f1\uae09 \ud544\ud130 (\uc635\uc158, tstation + \ub3d9\uc801 rcmd_type \uc5d0\ub9cc \uc801\uc6a9)**\n- `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` \ub9e4\uce6d. \uac12 '\ud504\ub9ac\ubbf8\uc5c4'/'\uc2a4\ud0e0\ub2e4\ub4dc'/'\uc774\ucf54\ub178\ubbf8'. '\ud504\ub9ac\ubbf8\uc5c4' \uc785\ub825 \uc2dc LIKE '\ud504\ub9ac\ubbf8\uc5c4%' \ub85c raw '\ud504\ub9ac\ubbf8\uc5c4' + '\ud504\ub9ac\ubbf8\uc5c4+' \ub458 \ub2e4 \ub9e4\uce6d.\n\n**\uac00\uaca9 \ud544\ud130 (\ubaa8\ub4e0 rcmd_type \uacf5\ud1b5, \uc635\uc158)**\n- `min_price`/`max_price`: SQL WHERE \uc808\uc5d0\uc11c `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (\ud560\uc778\uac00 \uc6b0\uc120) \uae30\uc900 \ubc94\uc704 \ud544\ud130. `max_price` (\ubaa9\ud45c \uac00\uaca9) \ub9cc \uc9c0\uc815\ub418\uba74 \uc608\uc0b0\ub300 \uc694\uccad\uc73c\ub85c \ubcf4\uace0 0~max \ubc94\uc704\uc5d0\uc11c \uac00\uaca9 \ub0b4\ub9bc\ucc28\uc21c \uc0c1\uc704 N \uac1c\ub97c \ubc18\ud658\ud558\uba70 \ube0c\ub79c\ub4dc \ud544\ud130(HK \ub4f1)\uac00 \ud574\uc81c\ub418\uc5b4 \ubaa8\ub4e0 \ube0c\ub79c\ub4dc\ub97c \ud3ec\ud568\ud569\ub2c8\ub2e4. \uc774\ud6c4 \ud68c\uc6d0 \ucfe0\ud3f0 \ucd5c\uc800\uac00(`cheapest_final_prc`) \uacc4\uc0b0\uc774 \uc131\uacf5\ud558\uba74 \ud574\ub2f9 \ud6c4\ubcf4 \uc548\uc5d0\uc11c \ub2e4\uc2dc 0~max \uae30\uc900\uc73c\ub85c \ud544\ud130\ub9c1\ud558\uace0 \ucd5c\uc800\uac00 \ub0b4\ub9bc\ucc28\uc21c\uc73c\ub85c \ubc18\ud658\ud569\ub2c8\ub2e4.\n\n**\ucc28\ub7c9 \ud0c0\uc785 \ud544\ud130 (\ubaa8\ub4e0 rcmd_type \uacf5\ud1b5, \uc635\uc158)**\n- `vehicle_type`: `CAR_KND_NM` \uae30\uc900 \uc9c1\uad50 \ud544\ud130. \uac12: passenger/suv/ev/truck_van. passenger\ub294 '\uc2b9\uc6a9\ucc28'/'SEDAN'/'\uc2a4\ud3ec\uce20\uce74', suv\ub294 'SUV', ev\ub294 '\uc804\uae30\ucc28', truck_van\uc740 '\uacbd\ud2b8\ub7ed&\ubc34'/'\uacbd\ud2b8\ub7ed'/'\uce74\uace0\ud2b8\ub7ed'/'\ub364\ud504\ud2b8\ub7ed'\uc744 \ub9e4\uce6d.",
                 "operationId": "get_recommendations_api_product_recommend_get",
                 "security": [
                     {
@@ -3077,7 +3113,7 @@
                     "Reservation AF - \ub9e4\uc7a5 \ubc29\ubb38 \uc608\uc57d \uc870\ud68c"
                 ],
                 "summary": "\ub9e4\uc7a5 \ubc29\ubb38 \uc608\uc57d \uc870\ud68c",
-                "description": "\uc778\uc99d\ub41c \ud68c\uc6d0(MBR_NO) \ubcf8\uc778\uc758 \ub9e4\uc7a5 \ubc29\ubb38 \uc608\uc57d \ubaa9\ub85d\uc744 `ET_SHOP_RSV_INFO` \uc5d0\uc11c \uc870\ud68c\ud569\ub2c8\ub2e4.\n\n**\ub9e4\uc7a5\uc608\uc57d\uad6c\ubd84 (`SHOP_RSV_SCT_CD` [SHOP001])**\n- `100`: \ubc29\ubb38\uc608\uc57d (\ub2e8\uc21c \ub9e4\uc7a5 \ubc29\ubb38 \uc608\uc57d \u2014 \ub178\ucd9c \uae30\ubcf8\uac12)\n- `200`: \uad6c\ub9e4\ud6c4\ubc29\ubb38\uc608\uc57d (`ORD_NO` \ud568\uaed8 \uc874\uc7ac)\n- `300`: \uc624\ud504\ub77c\uc778\uc608\uc57d\n\n**\uc608\uc57d \uc0c1\ud0dc \ub77c\ubca8 \uadf8\ub8f9 (`SHOP_VST_RSV_STS_CD` [SHOP002])**\n- \uc608\uc57d\ub300\uae30: `100`/`110`/`120`/`400`/`410`/`420`/`430`/`440`\n- \uc608\uc57d\uc644\ub8cc: `130`/`140`\n- \uc11c\ube44\uc2a4\uc644\ub8cc: `300`\n- \uc11c\ube44\uc2a4\ucde8\uc18c: `900`/`910`/`920`/`930`/`950`/`960`\n\n`sct_cd` \ud30c\ub77c\ubbf8\ud130\ub85c \uc885\ub958\ub97c \ud544\ud130\ub9c1\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4 (\uae30\ubcf8: `100` \ub2e8\uc21c \ubc29\ubb38\uc608\uc57d\ub9cc, `all` \uc9c0\uc815 \uc2dc \uc804\uccb4 \ub178\ucd9c). \ub9e4\uc7a5\uba85/\uc804\ud654\ubc88\ud638\ub294 `VW_ET_SHOP_INFO` LEFT JOIN. \uc815\ub82c\uc740 \ubc29\ubb38\uc608\uc57d\uc77c\uc2dc \ub0b4\ub9bc\ucc28\uc21c.",
+                "description": "\uc778\uc99d\ub41c \ud68c\uc6d0(MBR_NO) \ubcf8\uc778\uc758 \ub9e4\uc7a5 \ubc29\ubb38 \uc608\uc57d \ubaa9\ub85d\uc744 `ET_SHOP_RSV_INFO` \uc5d0\uc11c \uc870\ud68c\ud569\ub2c8\ub2e4.\n\n**\ub9e4\uc7a5\uc608\uc57d\uad6c\ubd84 (`SHOP_RSV_SCT_CD` [SHOP001])**\n- `100`: \ubc29\ubb38\uc608\uc57d (\ub2e8\uc21c \ub9e4\uc7a5 \ubc29\ubb38 \uc608\uc57d \u2014 \ub178\ucd9c \uae30\ubcf8\uac12)\n- `200`: \uad6c\ub9e4\ud6c4\ubc29\ubb38\uc608\uc57d (`ORD_NO` \ud568\uaed8 \uc874\uc7ac)\n- `300`: \uc624\ud504\ub77c\uc778\uc608\uc57d\n\n**\uc608\uc57d \uc0c1\ud0dc \ub77c\ubca8 \uadf8\ub8f9 (`SHOP_VST_RSV_STS_CD` [SHOP002])**\n- \uc608\uc57d\ub300\uae30: `100`/`110`/`120`/`400`/`410`/`420`/`430`/`440`\n- \uc608\uc57d\uc644\ub8cc: `130`/`140`\n- \uc11c\ube44\uc2a4\uc644\ub8cc: `300`\n- \uc11c\ube44\uc2a4\ucde8\uc18c: `900`/`910`/`920`/`930`/`950`/`960`\n\n\uc8fc\ubb38\ucde8\uc18c\ub41c \uad6c\ub9e4\ud6c4\ubc29\ubb38\uc608\uc57d\uc740 `OP_ORD_DTL_INFO.ORD_DTL_SCT_CD='20'` \uae30\uc900\uc73c\ub85c \uc81c\uc678\ud569\ub2c8\ub2e4.\n\n`sct_cd` \ud30c\ub77c\ubbf8\ud130\ub85c \uc885\ub958\ub97c \ud544\ud130\ub9c1\ud560 \uc218 \uc788\uc2b5\ub2c8\ub2e4 (\uae30\ubcf8: `100` \ub2e8\uc21c \ubc29\ubb38\uc608\uc57d\ub9cc, `all` \uc9c0\uc815 \uc2dc \uc804\uccb4 \ub178\ucd9c). \ub9e4\uc7a5\uba85/\uc804\ud654\ubc88\ud638\ub294 `VW_ET_SHOP_INFO` LEFT JOIN. \uc815\ub82c\uc740 \ubc29\ubb38\uc608\uc57d\uc77c\uc2dc \ub0b4\ub9bc\ucc28\uc21c.",
                 "operationId": "get_reservations_api_reservations__get",
                 "security": [
                     {
@@ -9362,6 +9398,18 @@
                         "title": "Sound Absorber Yn",
                         "description": "\ud761\uc74c\uc7ac \uc801\uc6a9 \uc5ec\ubd80 Y/N (GOODS_DTL_PFM_NM LIKE '%\ud761\uc74c%' \uae30\uc900)"
                     },
+                    "three_pmsf_yn": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Three Pmsf Yn",
+                        "description": "3PMSF/\uc0bc\ubd09\ub9c8\ud06c \uc778\uc99d \uc5ec\ubd80 Y/N (PR_PATTERN_BASE.AUTHENTICATION_NAME='3PMSF' \uae30\uc900)"
+                    },
                     "t_oe_maker_1": {
                         "anyOf": [
                             {
@@ -10011,6 +10059,18 @@
                         ],
                         "title": "Sound Absorber Yn",
                         "description": "\ud761\uc74c\uc7ac \uc801\uc6a9 \uc5ec\ubd80 Y/N"
+                    },
+                    "three_pmsf_yn": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Three Pmsf Yn",
+                        "description": "3PMSF/\uc0bc\ubd09\ub9c8\ud06c \uc778\uc99d \uc5ec\ubd80 Y/N"
                     },
                     "season_nm": {
                         "anyOf": [
