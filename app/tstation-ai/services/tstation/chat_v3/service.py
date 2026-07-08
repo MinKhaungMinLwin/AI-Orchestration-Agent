@@ -113,8 +113,17 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     result["answer"] = answer
     yield sse.message(answer)
     chips: list[dict] = []
-    rich_event = await templates.build_rich_data_event(answer, executor.tool_calls)
-    if rich_event:
+    quantity_chips = templates.quantity_quick_replies(answer)
+    rich_event = None if quantity_chips else await templates.build_rich_data_event(answer, executor.tool_calls)
+    if quantity_chips:
+        chips = quantity_chips
+        predicted_domains = ["TRANSACTION"]
+        yield sse.data_event(
+            "quickReply",
+            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": predicted_domains},
+            source_domain=domain,
+        )
+    elif rich_event:
         predicted_domains = [domain]
         yield sse.sse({**rich_event, "source_domain": domain})
     else:

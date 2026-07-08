@@ -187,3 +187,17 @@ def test_compact_answer_spacing_reduces_blank_lines_to_single_newline():
         "   - 등록된 차량 기준으로 찾아드릴 수 있어요.\n"
         "원하시면 바로 추천해드릴게요."
     )
+
+
+def test_quantity_question_uses_fixed_quantity_quick_replies():
+    chips = templates.quantity_quick_replies(
+        "구매 진행을 위해 수량과 장착 매장을 선택해야 해요.\n"
+        "보통 타이어는 4개 기준으로 주문하시는데, **4개로 진행할까요?**"
+    )
+
+    assert chips == [
+        {"label": "1개", "domain": "TRANSACTION"},
+        {"label": "2개", "domain": "TRANSACTION"},
+        {"label": "3개", "domain": "TRANSACTION"},
+        {"label": "4개", "domain": "TRANSACTION"},
+    ]

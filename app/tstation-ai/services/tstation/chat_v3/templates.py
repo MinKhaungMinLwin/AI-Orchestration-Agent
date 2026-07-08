@@ -39,6 +39,13 @@ _SERVICE_LABELS = {
     "126": "무상점검",
 }
 
+_QUANTITY_CHIPS = [
+    {"label": "1개", "domain": "TRANSACTION"},
+    {"label": "2개", "domain": "TRANSACTION"},
+    {"label": "3개", "domain": "TRANSACTION"},
+    {"label": "4개", "domain": "TRANSACTION"},
+]
+
 # Which template a tool's output can feed — data availability, not routing.
 _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "search_product_tool": ("product", ProductTemplate),
@@ -188,6 +195,21 @@ def compact_answer_spacing(answer: str) -> str:
     while "\n\n" in text:
         text = text.replace("\n\n", "\n")
     return text.strip()
+
+
+def quantity_quick_replies(answer: str) -> list[dict]:
+    text = str(answer or "")
+    asks_quantity = (
+        "몇 개" in text
+        or "몇 본" in text
+        or "수량" in text
+        or "4개로 진행" in text
+        or "4개 기준" in text
+    )
+    asks_confirmation = "진행할까요" in text or "선택" in text or "알려" in text or "말씀" in text
+    if asks_quantity and asks_confirmation:
+        return [dict(chip) for chip in _QUANTITY_CHIPS]
+    return []
 
 
 def format_location_answer(answer: str, tool_calls: list[dict]) -> str:
