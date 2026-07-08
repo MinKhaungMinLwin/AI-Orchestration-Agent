@@ -175,9 +175,10 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     yield sse.message(answer)
     chips: list[dict] = []
     quantity_chips = templates.quantity_quick_replies(answer, slots.ord_qty)
+    preorder_event = None if quantity_chips else templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
-        if quantity_chips
+        if quantity_chips or preorder_event
         else await templates.build_rich_data_event(
             answer,
             executor.tool_calls,
@@ -188,12 +189,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 tags=["template"],
             ),
         )
-    )
-    # K2 fallback: when the model answered with a plain order summary instead of
-    # emitting the preOrder card via present_order_preview_tool (K1 → rich_event),
-    # rebuild the card from slots. Guarded by build_preorder_fallback (needs goods_no).
-    preorder_event = (
-        None if (quantity_chips or rich_event) else templates.build_preorder_fallback(answer, slots, decision)
     )
     if quantity_chips:
         chips = quantity_chips
