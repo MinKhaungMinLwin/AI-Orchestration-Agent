@@ -20,6 +20,8 @@ MAX_TOOL_ROUNDS = 4
 _TOOL_OUTPUT_PREVIEW_CHARS = 4000
 _CAR_MODEL_GROUP_TOOL = "search_car_model_groups_tool"
 _RECOMMENDATION_TOOL = "get_products_recommendations_tool"
+_STORE_INVENTORY_TOOL = "get_store_inventory_tool"
+_STORE_SCHEDULE_TOOL = "get_store_schedule_tool"
 
 
 def _tool_output_text(output: object) -> str:
@@ -62,6 +64,70 @@ def _normalize_tool_call(call: dict) -> dict:
         recommendation_args,
     )
     return normalized
+
+
+def _shop_ids_from_inventory_rows(rows: object) -> set[str]:
+    if not isinstance(rows, list):
+        return set()
+    result: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        shop_id = str(row.get("shopId") or row.get("shop_id") or "").strip()
+        if shop_id:
+            result.add(shop_id)
+    return result
+
+
+def _inventory_arrays_from_tool_output(output_text: str) -> tuple[set[str], set[str]]:
+    try:
+        payload = json.loads(output_text)
+    except (TypeError, ValueError):
+        return set(), set()
+    if not isinstance(payload, dict):
+        return set(), set()
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict):
+        return set(), set()
+    return (
+        _shop_ids_from_inventory_rows(data.get("todayShopArray")),
+        _shop_ids_from_inventory_rows(data.get("tnaShopArray")),
+    )
+
+
+def _normalize_schedule_tool_call_with_inventory(call: dict, previous_tool_calls: list[dict]) -> dict:
+    """Keep single-store schedule mode aligned with proven inventory tier."""
+
+    name = call.get("name") or ""
+    if name != _STORE_SCHEDULE_TOOL:
+        return call
+    raw_args = call.get("args")
+    args = raw_args if isinstance(raw_args, dict) else {}
+    shop_id = str(args.get("shop_id") or args.get("shopId") or "").strip()
+    if not shop_id:
+        return call
+
+    today_ids: set[str] = set()
+    tna_ids: set[str] = set()
+    for previous in previous_tool_calls:
+        if previous.get("name") != _STORE_INVENTORY_TOOL:
+            continue
+        prev_today, prev_tna = _inventory_arrays_from_tool_output(str(previous.get("output") or ""))
+        today_ids |= prev_today
+        tna_ids |= prev_tna
+
+    if shop_id in tna_ids and shop_id not in today_ids:
+        normalized = dict(call)
+        normalized_args = dict(args)
+        normalized_args["mode"] = "tna_only"
+        normalized["args"] = normalized_args
+        logger.info(
+            "[CHAT_V3] corrected %s mode to tna_only for TNA-only shop_id=%s",
+            _STORE_SCHEDULE_TOOL,
+            shop_id,
+        )
+        return normalized
+    return call
 
 
 class ToolLoopExecutor:
@@ -123,6 +189,7 @@ class ToolLoopExecutor:
 
     async def _run_tool(self, call: dict):
         call = _normalize_tool_call(call)
+        call = _normalize_schedule_tool_call_with_inventory(call, self.tool_calls)
         name = call.get("name") or ""
         args = call.get("args") or {}
         call_id = call.get("id") or name

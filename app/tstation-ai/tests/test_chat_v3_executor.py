@@ -46,7 +46,10 @@ _TEST_ENV_DEFAULTS = {
 for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
-from services.tstation.chat_v3.executor import _normalize_tool_call  # noqa: E402
+from services.tstation.chat_v3.executor import (  # noqa: E402
+    _normalize_schedule_tool_call_with_inventory,
+    _normalize_tool_call,
+)
 from services.tstation.chat_v3.tools.discovery import DISCOVERY_TOOLS  # noqa: E402
 from services.tstation.chat_v3.tools import tools_for_domain  # noqa: E402
 
@@ -85,3 +88,45 @@ def test_non_removed_tool_call_is_preserved() -> None:
     call = {"name": "search_product_tool", "args": {"keyword": "벤투스"}}
 
     assert _normalize_tool_call(call) is call
+
+
+def test_schedule_call_rewrites_tna_only_shop_from_prior_inventory_result() -> None:
+    call = {
+        "name": "get_store_schedule_tool",
+        "args": {"shop_id": "F07782", "mode": "in_store_logistics_combined"},
+    }
+    normalized = _normalize_schedule_tool_call_with_inventory(
+        call,
+        [
+            {
+                "name": "get_store_inventory_tool",
+                "output": (
+                    '{"status":"success","data":{"todayShopArray":[],'
+                    '"tnaShopArray":[{"shopId":"F07782"}]}}'
+                ),
+            }
+        ],
+    )
+
+    assert normalized["args"] == {"shop_id": "F07782", "mode": "tna_only"}
+
+
+def test_schedule_call_keeps_today_shop_combined_mode_from_prior_inventory_result() -> None:
+    call = {
+        "name": "get_store_schedule_tool",
+        "args": {"shop_id": "F00071", "mode": "in_store_logistics_combined"},
+    }
+    normalized = _normalize_schedule_tool_call_with_inventory(
+        call,
+        [
+            {
+                "name": "get_store_inventory_tool",
+                "output": (
+                    '{"status":"success","data":{"todayShopArray":[{"shopId":"F00071"}],'
+                    '"tnaShopArray":[{"shopId":"F00071"}]}}'
+                ),
+            }
+        ],
+    )
+
+    assert normalized is call
