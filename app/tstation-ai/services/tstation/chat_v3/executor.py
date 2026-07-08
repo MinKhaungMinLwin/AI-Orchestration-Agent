@@ -38,11 +38,13 @@ class ToolLoopExecutor:
         display_names: dict[str, str],
         *,
         stream_tokens: bool = True,
+        trace_config: dict | None = None,
     ):
         self._messages = list(messages)
         self._tools = {t.name: t for t in tools}
         self._display_names = display_names
         self._stream_tokens = stream_tokens
+        self._trace_config = trace_config
         self.final_text: str = ""
         self.tool_calls: list[dict] = []
 
@@ -54,7 +56,7 @@ class ToolLoopExecutor:
         for _ in range(MAX_TOOL_ROUNDS + 1):
             accumulated = None
             round_text = ""
-            async for chunk in llm.astream(self._messages):
+            async for chunk in llm.astream(self._messages, config=self._trace_config):
                 accumulated = chunk if accumulated is None else accumulated + chunk
                 text = sse.chunk_text(chunk.content)
                 if text:
@@ -75,7 +77,7 @@ class ToolLoopExecutor:
 
         # Tool budget exhausted — force a final text answer without tools.
         final_text = ""
-        async for chunk in get_chat_llm().astream(self._messages):
+        async for chunk in get_chat_llm().astream(self._messages, config=self._trace_config):
             text = sse.chunk_text(chunk.content)
             if text:
                 final_text += text
@@ -94,7 +96,7 @@ class ToolLoopExecutor:
             output_text = f"Unknown tool: {name}"
         else:
             try:
-                output = await tool.ainvoke(args)
+                output = await tool.ainvoke(args, config=self._trace_config)
                 output_text = _tool_output_text(output)
             except Exception as exc:
                 logger.exception("[CHAT_V3] tool %s failed", name)

@@ -326,7 +326,7 @@ def _normalize_location_payload(payload: BaseModel, tool_output: str) -> None:
                 meta.shopName = shop_name
 
 
-async def build_rich_data_event(answer: str, tool_calls: list[dict]) -> dict | None:
+async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_config: dict | None = None) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
     source = _pick_source(tool_calls)
     if source is None:
@@ -334,16 +334,15 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict]) -> dict | N
     template_name, template_model, call = source
     try:
         llm = get_router_llm().with_structured_output(template_model, method="function_calling")
-        payload = await llm.ainvoke(
-            [
-                ("system", TEMPLATE_BUILDER_PROMPT),
-                (
-                    "user",
-                    f"## 도구: {call['name']}\n## 도구 결과\n{str(call['output'])[:_MAX_TOOL_OUTPUT_CHARS]}\n\n"
-                    f"## 챗봇 답변\n{answer[:2000]}",
-                ),
-            ]
-        )
+        messages = [
+            ("system", TEMPLATE_BUILDER_PROMPT),
+            (
+                "user",
+                f"## 도구: {call['name']}\n## 도구 결과\n{str(call['output'])[:_MAX_TOOL_OUTPUT_CHARS]}\n\n"
+                f"## 챗봇 답변\n{answer[:2000]}",
+            ),
+        ]
+        payload = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
         if template_name == "location":
