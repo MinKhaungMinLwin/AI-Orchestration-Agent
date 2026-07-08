@@ -20,6 +20,7 @@ from services.tstation.agents.templates.schemas import (
     LocationTemplate,
     OrderCompleteTemplate,
     PreOrderTemplate,
+    ProductTag,
     ProductTemplate,
     QnaCompleteTemplate,
 )
@@ -51,6 +52,14 @@ _PRODUCT_TOOLS = {
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
     "get_newest_products_tool",
+}
+
+_PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
+_PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}
+_GOODS_PFM_LABELS: dict[str, str] = {
+    "COMFORT": "정숙/승차감",
+    "SPORT": "고속/제동성",
+    "RUNFLAT": "런플랫",
 }
 
 _SERVICE_LABELS = {
@@ -350,6 +359,18 @@ def _parse_tool_output(output: object) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _get_str(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _truthy_flag(value: object) -> bool:
+    return str(value or "").strip().upper() in {"Y", "O", "TRUE", "1"}
+
+
 def _latest_tool_output(tool_calls: list[dict], tool_name: str) -> dict[str, Any]:
     for call in reversed(tool_calls):
         if call.get("name") == tool_name:
@@ -414,6 +435,77 @@ def _store_rows_from_output(output: str) -> list[dict[str, Any]]:
     if isinstance(stores, list):
         return [row for row in stores if isinstance(row, dict)]
     return []
+
+
+def _rows_from_any(value: object) -> list[dict[str, Any]]:
+    return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def _product_rows_from_output(output: str) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return []
+    if isinstance(parsed, list):
+        return _rows_from_any(parsed)
+    if not isinstance(parsed, dict):
+        return []
+
+    for key in ("products", "items", "results"):
+        rows = _rows_from_any(parsed.get(key))
+        if rows:
+            return rows
+    data = parsed.get("data")
+    if isinstance(data, list):
+        return _rows_from_any(data)
+    if isinstance(data, dict):
+        for key in ("products", "items", "results"):
+            rows = _rows_from_any(data.get(key))
+            if rows:
+                return rows
+    return []
+
+
+def _product_tags_from_row(row: dict[str, Any]) -> list[ProductTag]:
+    tags: list[ProductTag] = []
+    price_grade = _get_str(row, "prc_grd_nm")
+    if price_grade in _PRC_GRD_ALLOWED:
+        tags.append(ProductTag(text=_PRC_GRD_DISPLAY.get(price_grade, price_grade), primary=True))
+
+    performance = _GOODS_PFM_LABELS.get(_get_str(row, "goods_pfm_nm").upper())
+    if performance:
+        tags.append(ProductTag(text=performance, primary=False))
+
+    if _truthy_flag(row.get("sound_absorber_yn")) or "흡음" in _get_str(row, "goods_dtl_pfm_nm"):
+        tags.append(ProductTag(text="흡음재", primary=False))
+    if _truthy_flag(row.get("three_pmsf_yn")):
+        tags.append(ProductTag(text="3PMS", primary=False))
+    return tags
+
+
+def _normalize_product_payload(payload: BaseModel, tool_output: str) -> None:
+    raw_products = _product_rows_from_output(tool_output)
+    products = getattr(payload, "products", None)
+    metadata = getattr(payload, "metadata", None)
+    if not raw_products or not isinstance(products, list):
+        return
+
+    rows_by_goods = {
+        goods_no: row
+        for row in raw_products
+        if (goods_no := _get_str(row, "goods_no", "goodsNo", "goods_id", "goodsId"))
+    }
+    for index, product in enumerate(products):
+        meta = metadata[index] if isinstance(metadata, list) and index < len(metadata) else None
+        goods_id = getattr(meta, "goodsId", "") if meta is not None else ""
+        row = rows_by_goods.get(str(goods_id or "").strip())
+        if row is None and index < len(raw_products):
+            row = raw_products[index]
+        if row is None:
+            continue
+
+        product.tags = _product_tags_from_row(row)
+        product.oeBadgeYn = _get_str(row, "oe_badge_yn", "oeBadgeYn", "oeBadgeYN")
 
 
 def _join_address(*parts: object) -> str:
@@ -599,6 +691,8 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_confi
         payload = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
+        if template_name == "product":
+            _normalize_product_payload(payload, str(call["output"]))
         if template_name == "location":
             _normalize_location_payload(payload, str(call["output"]))
         elif template_name == "datepick":

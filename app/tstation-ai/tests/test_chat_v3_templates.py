@@ -48,7 +48,7 @@ _TEST_ENV_DEFAULTS = {
 for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
-from services.tstation.agents.templates.schemas import DatepickTemplate, LocationTemplate  # noqa: E402
+from services.tstation.agents.templates.schemas import DatepickTemplate, LocationTemplate, ProductTemplate  # noqa: E402
 from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from schemas.tstation.slots import ConversationSlots  # noqa: E402
 from services.tstation.chat_v3 import service  # noqa: E402
@@ -120,6 +120,41 @@ class _FakeDatepickRouterLLM:
         return _FakeDatepickStructuredLLM()
 
 
+class _FakeProductStructuredLLM:
+    async def ainvoke(self, messages):
+        return ProductTemplate(
+            assistantResponse="추천 상품입니다.",
+            products=[
+                {
+                    "imageUrl": "",
+                    "title": "벤투스 S2 AS 245/45R19",
+                    "tires": "",
+                    "titleProductName": "벤투스 S2 AS",
+                    "titleTires": "245/45R19",
+                    "brandName": "HANKOOK",
+                    "oeBadgeYn": "",
+                    "price": 180000,
+                    "originalPrice": 200000,
+                    "discountRate": 10,
+                    "discountAmount": 20000,
+                    "rate": 4.5,
+                    "totalQuantity": 7,
+                    "tags": [
+                        {"text": "프리미엄+", "primary": True},
+                        {"text": "사계절", "primary": False},
+                        {"text": "조용함", "primary": False},
+                    ],
+                }
+            ],
+            metadata=[{"goodsId": "G0001"}],
+        )
+
+
+class _FakeProductRouterLLM:
+    def with_structured_output(self, model, method):
+        return _FakeProductStructuredLLM()
+
+
 def test_location_template_normalizes_store_name_and_address_from_tool_output(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
     tool_output = {
@@ -176,6 +211,49 @@ def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
     assert event["template"] == "datepick"
     assert event["data"]["dates"][0]["date"] == "2026년 07월 10일"
     assert event["data"]["dates"][1]["date"] == "이미 포맷됨"
+
+
+def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    tool_output = {
+        "status": "success",
+        "items": [
+            {
+                "goods_no": "G0001",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+                "brand_nm": "HANKOOK",
+                "prc_grd_nm": "프리미엄+",
+                "goods_pfm_nm": "COMFORT",
+                "goods_dtl_pfm_nm": "흡음재 적용",
+                "sound_absorber_yn": "Y",
+                "three_pmsf_yn": "Y",
+                "oe_badge_yn": "Y",
+                "extra_fvr_sale_prc": 180000,
+                "sale_prc": 200000,
+                "rating_avg": 4.5,
+                "total_qty": 7,
+            }
+        ],
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "추천 상품입니다.",
+            [{"name": "search_product_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    product = event["data"]["products"][0]
+    assert product["tags"] == [
+        {"text": "프리미엄", "primary": True},
+        {"text": "정숙/승차감", "primary": False},
+        {"text": "흡음재", "primary": False},
+        {"text": "3PMS", "primary": False},
+    ]
+    assert product["oeBadgeYn"] == "Y"
 
 
 def test_location_answer_uses_fixed_store_info_labels():
