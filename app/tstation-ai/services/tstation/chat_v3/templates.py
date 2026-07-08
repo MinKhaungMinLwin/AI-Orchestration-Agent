@@ -253,7 +253,9 @@ def compact_answer_spacing(answer: str) -> str:
     return text.strip()
 
 
-def quantity_quick_replies(answer: str) -> list[dict]:
+def quantity_quick_replies(answer: str, ord_qty: int | None = None) -> list[dict]:
+    if ord_qty is not None:
+        return []
     text = str(answer or "")
     asks_quantity = (
         "몇 개" in text

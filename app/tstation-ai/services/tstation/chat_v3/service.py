@@ -116,7 +116,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     result["answer"] = answer
     yield sse.message(answer)
     chips: list[dict] = []
-    quantity_chips = templates.quantity_quick_replies(answer)
+    quantity_chips = templates.quantity_quick_replies(answer, slots.ord_qty)
     rich_event = qna_event or (None if quantity_chips else await templates.build_rich_data_event(answer, executor.tool_calls))
     if quantity_chips:
         chips = quantity_chips
