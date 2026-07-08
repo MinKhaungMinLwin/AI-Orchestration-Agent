@@ -19,6 +19,7 @@ from services.tstation.chat_v3.executor import ToolLoopExecutor
 from services.tstation.chat_v3.prompts.persona import ERROR_RESPONSE, SYSTEM_PROMPT, TRANSACTION_WRITE_GUIDANCE
 from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
+from services.tstation.chat_v3.router.schemas import Domain, RouteDecision
 from services.tstation.chat_v3.slots.derive import apply_fe_slots, derive_slots_from_tool_calls
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
@@ -41,6 +42,21 @@ def _tool_display_names() -> dict[str, str]:
 
 def _tokens_enabled() -> bool:
     return bool(getattr(settings, "AI_CHAT_V3_STREAM_TOKENS", True))
+
+
+def _allow_selection_cards(decision: RouteDecision | None) -> bool:
+    """Whether product-search cards may show this turn (issue 3).
+
+    Honors the router's needs_selection_card, but force-enables when DISCOVERY is a
+    SECONDARY domain: the router only adds it to run a product search so the user can
+    pick a product to proceed (e.g. ordering an unresolved product — "벤투스 주문해줘").
+    That card is a selection step, so it must never be hidden by a stray info flag.
+    """
+    if decision is None:
+        return True
+    if Domain.DISCOVERY in decision.extra_domains:
+        return True
+    return decision.needs_selection_card
 
 
 def _trace_config(
@@ -187,6 +203,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 tags=["template"],
             ),
             slots=slots,
+            allow_selection_cards=_allow_selection_cards(decision),
         )
     )
     result["answer"] = answer
