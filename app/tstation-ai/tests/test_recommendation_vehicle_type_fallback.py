@@ -104,6 +104,17 @@ def test_price_filter_empty_does_not_relax_vehicle_type(monkeypatch):
     assert result["reason"] == "no_products_in_price_range"
     assert len(be.calls) == 1
     assert be.calls[0]["vehicle_type"] == VehicleType.SUV
+    assert be.calls[0]["limit"] == 10
+
+
+def test_price_filter_overrides_default_recommendation_limit(monkeypatch):
+    be = _patch(monkeypatch, [_Resp([ITEM])])
+
+    result = _call(rcmd_type="value", min_price=200_000, max_price=300_000)
+
+    assert result["status"] == "success"
+    assert be.calls[0]["limit"] == 10
+    assert result["data"]["effective_limit"] == 10
 
 
 def test_winter_fallback_keeps_vehicle_type_filter(monkeypatch):
@@ -229,7 +240,7 @@ def test_search_product_budget_passes_max_price_to_be_and_ignores_min_price(monk
     )
 
     assert result["status"] == "success"
-    assert be.calls[0]["limit"] == 5
+    assert be.calls[0]["limit"] == 10
     assert be.calls[0]["min_price"] is None
     assert be.calls[0]["max_price"] == 299_999
     assert be.calls[0]["sort_by"] == "price_desc"

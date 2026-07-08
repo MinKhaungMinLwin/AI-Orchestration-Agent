@@ -837,7 +837,8 @@ def search_product_tool(
     )
     has_price_filter = bool(effective_min_price or effective_max_price)
     has_newest_sort = sort_by == "newest_desc"
-    fetch_limit = limit
+    effective_limit = 10 if has_price_filter else limit
+    fetch_limit = effective_limit
     if has_newest_sort:
         fetch_limit = max(fetch_limit, 100)
     normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
@@ -888,7 +889,7 @@ def search_product_tool(
             data["items"] = _enrich_items_with_descriptions(data["items"])
             data["items"] = _sort_items(data["items"], effective_sort_by)
             if has_price_filter or has_newest_sort:
-                data["items"] = data["items"][:limit]
+                data["items"] = data["items"][:effective_limit]
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][search_product_tool] Failed")
@@ -1462,12 +1463,14 @@ def get_products_recommendations_tool(
                 tire_size,
             )
 
+    has_price_filter = bool(min_price or max_price)
     requested_limit = limit
     effective_limit = min(max(int(limit or 3), 1), _RECOMMENDATION_LIMIT_CAP)
+    if has_price_filter:
+        effective_limit = _RECOMMENDATION_LIMIT_CAP
     limit_capped = requested_limit > effective_limit
 
     # Price filtering is now SQL-side on BE — no client-side post-filter.
-    has_price_filter = bool(min_price or max_price)
     has_newest_sort = sort_by == "newest_desc"
     fetch_limit = effective_limit
     requested_rcmd_type = rcmd_type.value if isinstance(rcmd_type, RcmdType) else str(rcmd_type)
