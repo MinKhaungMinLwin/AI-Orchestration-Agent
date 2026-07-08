@@ -1,7 +1,7 @@
 import os
 
 from schemas.tstation.slots import ConversationSlots
-from services.tstation.agents.templates.schemas import ProductItem, ProductMeta, ProductTemplate
+from services.tstation.agents.templates.schemas import DatepickTemplate, ProductItem, ProductMeta, ProductTemplate, ScheduleItem
 from schemas.tstation.chat import TStationChatRequest
 
 
@@ -51,7 +51,11 @@ os.environ["REDIS_QUEUE_URL"] = "redis://localhost:6379/1"
 os.environ["REDIS_URL"] = "redis://localhost:6379/2"
 
 from services.tstation.chat_v3.slots.derive import fe_slot_patch  # noqa: E402
-from services.tstation.chat_v3.templates import _normalize_product_selection_payload  # noqa: E402
+from services.tstation.chat_v3.templates import (  # noqa: E402
+    _normalize_datepick_payload,
+    _normalize_product_selection_payload,
+    harvest_order_slots,
+)
 
 
 def test_order_product_template_carries_select_product_slots() -> None:
@@ -97,3 +101,67 @@ def test_fe_slot_patch_accepts_product_card_ui_action_slots() -> None:
     )
 
     assert fe_slot_patch(request) == {"goods_no": "G000000310126", "tire_size": "245/45R19"}
+
+
+def test_order_datepick_template_carries_existing_order_slots() -> None:
+    payload = DatepickTemplate(
+        assistantResponse="Select a schedule.",
+        dates=[ScheduleItem(date="20260709", available=True, availableTimes=[9, 10, 16], index=0)],
+    )
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        ord_qty=4,
+        tire_model="Ventus S2 AS",
+        pending_product_name="Ventus S2 AS",
+        tire_size="245/45R19",
+        shop_id="S0001",
+        shop_name="T-Station Bundang",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    _normalize_datepick_payload(payload, slots)
+
+    metadata_slots = payload.metadata["slots"]
+    assert metadata_slots["goods_no"] == "G000000310126"
+    assert metadata_slots["ord_qty"] == 4
+    assert metadata_slots["shop_id"] == "S0001"
+    assert metadata_slots["pending_intent"] == "order"
+    assert payload.metadata["ui_action"]["slots"]["goods_no"] == "G000000310126"
+
+
+def test_harvest_order_slots_resolves_goods_no_from_product_name_and_size() -> None:
+    slots = ConversationSlots(
+        pending_product_name="Hankook Ventus S2 AS",
+        tire_size="225/45R17",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    tool_calls = [
+        {
+            "name": "search_product_tool",
+            "args": {"keyword": "Ventus S2 AS", "size": "225/45R17"},
+            "output": {
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000309783",
+                            "goods_nm": "Ventus S2 AS",
+                            "tire_size_1": "225/45R17",
+                        },
+                        {
+                            "goods_no": "G000000310126",
+                            "goods_nm": "Ventus V12 evo2",
+                            "tire_size_1": "225/45R17",
+                        },
+                    ]
+                }
+            },
+        }
+    ]
+
+    updated = harvest_order_slots(slots, tool_calls)
+
+    assert updated.goods_no == "G000000309783"
+    assert updated.pending_product_name == "Ventus S2 AS"
