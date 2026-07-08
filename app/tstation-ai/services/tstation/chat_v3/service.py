@@ -12,7 +12,7 @@ import time
 from fastapi.responses import StreamingResponse
 
 from config.env import settings
-from config.tracing import build_trace_config, set_trace_name, tracer
+from config.tracing import _tracing_enabled, build_trace_config, safe_trace_update, set_trace_name, tracer, truncate_for_trace
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
 from services.tstation.chat_v3 import composer, context, memory, monitoring, qc, sse, templates
@@ -72,12 +72,14 @@ def _trace_config(
     run_name: str,
     prompt_name: str,
     tags: list[str],
+    parent_span_id: str | None = None,
 ) -> dict:
     return build_trace_config(
         run_name=run_name,
         session_id=request.session_id,
         user_id=request.user_id,
         trace_id=request.tracing_id,
+        parent_span_id=parent_span_id,
         tags=["chat_v3", *tags],
         extra_metadata={"runtime": "chat_v3"},
         prompt_name=prompt_name,
@@ -93,9 +95,12 @@ def _flush_trace() -> None:
 
 def _update_trace_monitoring(
     *,
+    trace_observation=None,
     route_domains: list[str],
     tool_calls: list[dict],
     final_template: str,
+    answer: str | None = None,
+    user_text: str | None = None,
     fallback_used: bool = False,
     qc_corrected: bool = False,
     runtime_error: bool = False,
@@ -110,8 +115,17 @@ def _update_trace_monitoring(
         runtime_error=runtime_error,
         latency_ms=latency_ms,
     )
+    trace_update = dict(monitoring_payload)
+    if user_text is not None:
+        trace_update["input"] = truncate_for_trace(user_text)
+        trace_update["name"] = user_text[:60] if user_text else "chat_v3"
+    if answer is not None:
+        trace_update["output"] = truncate_for_trace(answer)
+    if trace_observation is not None:
+        safe_trace_update(trace_observation, trace=True, **trace_update)
+        return
     try:
-        tracer.update_current_trace(**monitoring_payload)
+        tracer.update_current_trace(**trace_update)
     except Exception:
         logger.debug("[CHAT_V3] Langfuse customer monitoring update failed", exc_info=True)
 
@@ -122,6 +136,28 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     set_tstation_origin_host(request.origin_host)
     user_text = context.last_user_text(request)
     set_trace_name(user_text[:60] if user_text else "chat_v3")
+    parent_span = None
+    parent_span_id = None
+    if _tracing_enabled:
+        try:
+            parent_span = tracer.start_span(
+                name="chat_v3",
+                trace_context={"trace_id": request.tracing_id},
+                input=truncate_for_trace(user_text),
+                metadata={"runtime": "chat_v3"},
+            )
+            parent_span_id = parent_span.id
+            safe_trace_update(
+                parent_span,
+                trace=True,
+                name=user_text[:60] if user_text else "chat_v3",
+                session_id=request.session_id,
+                user_id=request.user_id,
+                input=truncate_for_trace(user_text),
+                metadata={"runtime": "chat_v3"},
+            )
+        except Exception:
+            logger.debug("[CHAT_V3] parent Langfuse span failed", exc_info=True)
     # Deterministic guard inside discovery tools against recommending for a
     # registered car the user did not name — V2 seeds this the same way.
     _audit_set_user_message(user_text)
@@ -134,6 +170,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             run_name="chat_v3_router",
             prompt_name="chat_v3_router",
             tags=["router"],
+            parent_span_id=parent_span_id,
         ),
     )
     t_route = time.perf_counter()
@@ -161,9 +198,14 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             route_domains=[(decision.domain.value if decision else "LEADING")],
             tool_calls=[],
             final_template="quickReply",
+            answer=guard_text,
+            user_text=user_text,
             fallback_used=False,
             latency_ms=int((time.perf_counter() - t0) * 1000),
+            trace_observation=parent_span,
         )
+        if parent_span is not None:
+            parent_span.end()
         _flush_trace()
         return
 
@@ -197,6 +239,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             run_name="chat_v3_tool_loop",
             prompt_name="chat_v3_chat",
             tags=["tool_loop"],
+            parent_span_id=parent_span_id,
         ),
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")
@@ -227,6 +270,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             run_name="chat_v3_qc",
             prompt_name="chat_v3_qc",
             tags=["qc"],
+            parent_span_id=parent_span_id,
         ),
     )
     qc_corrected = corrected != answer
@@ -252,6 +296,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 run_name="chat_v3_template_builder",
                 prompt_name="chat_v3_template_builder",
                 tags=["template"],
+                parent_span_id=parent_span_id,
             ),
             slots=slots,
             previous_slots=slots_before_harvest,
@@ -288,6 +333,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                     run_name="chat_v3_quick_replies",
                     prompt_name="chat_v3_quick_replies",
                     tags=["quick_reply"],
+                    parent_span_id=parent_span_id,
                 ),
                 flow_hint=templates.booking_flow_hint(slots),
             )
@@ -326,10 +372,15 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         route_domains=domains,
         tool_calls=executor.tool_calls,
         final_template=final_template,
+        answer=answer,
+        user_text=user_text,
         fallback_used=fallback_used,
         qc_corrected=qc_corrected,
         latency_ms=int((time.perf_counter() - t0) * 1000),
+        trace_observation=parent_span,
     )
+    if parent_span is not None:
+        parent_span.end()
     _flush_trace()
 
 
