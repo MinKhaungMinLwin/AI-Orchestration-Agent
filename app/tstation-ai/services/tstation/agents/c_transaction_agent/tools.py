@@ -2444,11 +2444,13 @@ def quick_order_tool(
         )
         response = set_order_form_ai(client=get_client(), body=body)
         if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to create quick order"
+            body_text = response.content.decode(errors="ignore") or "Failed to create quick order"
+            logger.warning(
+                "[TOOL][quick_order_tool] BE order failed: status=%s goods_info=%s shop_id=%s "
+                "rsv_date=%s rsv_hour=%s body=%s",
+                response.status_code, goods_info_arr_str, shop_id, rsv_date, rsv_hour, body_text[:500],
             )
+            return _error_response(response.status_code, f"HTTP {response.status_code}", body_text)
         # logger.debug("[TOOL][quick_order_tool] Response: %s", response.parsed)
         return _success_response(response.status_code, _to_dict(response.parsed))
     except Exception as e:
