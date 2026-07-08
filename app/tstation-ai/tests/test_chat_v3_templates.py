@@ -227,7 +227,6 @@ def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
                 "goods_pfm_nm": "COMFORT",
                 "goods_dtl_pfm_nm": "흡음재 적용",
                 "sound_absorber_yn": "Y",
-                "three_pmsf_yn": "Y",
                 "oe_badge_yn": "Y",
                 "extra_fvr_sale_prc": 180000,
                 "sale_prc": 200000,
@@ -251,7 +250,6 @@ def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
         {"text": "프리미엄", "primary": True},
         {"text": "정숙/승차감", "primary": False},
         {"text": "흡음재", "primary": False},
-        {"text": "3PMS", "primary": False},
     ]
     assert product["oeBadgeYn"] == "Y"
 

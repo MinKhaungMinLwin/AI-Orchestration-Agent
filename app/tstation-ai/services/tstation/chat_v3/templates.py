@@ -478,8 +478,6 @@ def _product_tags_from_row(row: dict[str, Any]) -> list[ProductTag]:
 
     if _truthy_flag(row.get("sound_absorber_yn")) or "흡음" in _get_str(row, "goods_dtl_pfm_nm"):
         tags.append(ProductTag(text="흡음재", primary=False))
-    if _truthy_flag(row.get("three_pmsf_yn")):
-        tags.append(ProductTag(text="3PMS", primary=False))
     return tags
 
 
