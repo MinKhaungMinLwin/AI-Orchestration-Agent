@@ -4,12 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a multi-agent FastAPI architecture.
+T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a Chat V3 LLM-first FastAPI runtime.
+
+## Current Agent Runtime
+
+The active agent/runtime entrypoint is `app/tstation-ai/services/tstation/chat_v3/` (`/chat_v3` in shorthand).
+Before changing routing, tool execution, templates, QC, or SSE behavior, read
+`docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
+
+`services/tstation/chat.py` and `services/tstation/agents/` are legacy V2 compatibility and shared tool/schema
+surfaces. Do not treat them as the root runtime unless you are explicitly working on legacy V2 compatibility or a
+shared tool/schema used by V3.
 
 ### Services
 | Service | Port | Description |
 |---------|------|-------------|
-| tstation-ai | 9000 | Main AI service (FastAPI) with LangChain agents, RAG (Qdrant), Celery/Redis |
+| tstation-ai | 9000 | Main AI service (FastAPI) with Chat V3 runtime, shared tools, RAG (Qdrant), Celery/Redis |
 | tstation-be | 8000 | Backend service connecting to Oracle database |
 | tstation-ui-demo | 7777 | Streamlit-based demo UI |
 
@@ -71,20 +81,33 @@ ENV=dev just start      # Remote deployment shorthand
 
 ## Architecture
 
-### Agent Structure (`app/tstation-ai/services/tstation/agents/`)
+### Chat V3 Structure (`app/tstation-ai/services/tstation/chat_v3/`)
 
-Each domain agent inherits `BaseAgent` (see `base_agent.py`). `router.py` instantiates all agents as module-level singletons and exposes `AgentDomain.get_agent()` for dispatch.
+V3 owns routing, tool-loop execution, response composition, template creation, QC, and SSE emission. The migration
+and runtime guide is `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
+
+| Area | Path | Description |
+|------|------|-------------|
+| Service | `chat_v3/service.py` | Single V3 orchestration entrypoint |
+| Router | `chat_v3/router/` | LLM-first safety, guard, domain, intent, slot, tool decision |
+| Executor | `chat_v3/executor.py` | Tool loop over reused domain tools |
+| Templates | `chat_v3/templates.py` | Tool output to FE template payloads |
+| Composer/QC | `chat_v3/composer.py`, `chat_v3/qc.py` | Assistant response and verification |
+
+### Shared Legacy Agent Surfaces (`app/tstation-ai/services/tstation/agents/`)
+
+The V2 agent folders are not the current root runtime. V3 reuses their tools and FE schema contracts where needed.
 
 | Prefix | Agent | Domain | Description |
 |--------|-------|--------|-------------|
-| a_ | leading_agent | LEADING | Primary orchestrator, greeting, complaint handling |
-| b_ | discovery_agent | DISCOVERY | Product recommendations, compatibility, vehicle lookup |
-| c_ | transaction_agent | TRANSACTION | Orders, pricing, stock, store search |
-| e_ | support_agent | SUPPORT | Warranty, returns, FAQ, 1:1 escalation |
-| f_ | ui_template_agent | (deprecated) | UI formatting; being removed in current refactor |
-| g_ | qc_agent | (cross-cutting) | Fact-checking chain; not a BaseAgent subclass |
+| a_ | leading_agent | LEADING | Legacy V2 leading agent |
+| b_ | discovery_agent | DISCOVERY | Product recommendation, compatibility, vehicle lookup tools reused by V3 |
+| c_ | transaction_agent | TRANSACTION | Order, pricing, stock, store search tools reused by V3 |
+| e_ | support_agent | SUPPORT | Warranty, return, FAQ, 1:1 escalation tools reused by V3 |
+| f_ | ui_template_agent | (legacy) | Legacy V2 UI formatting; V3 uses `chat_v3/templates.py` |
+| g_ | qc_agent | (shared/legacy) | Fact-checking implementation reused or mirrored by V3 QC |
 
-**Active refactor:** `f_ui_template_agent` is being eliminated. Domain agents now produce the final FE payload directly via `OUTPUT_TEMPLATE` / `RESPONSE_FORMAT` on `BaseAgent`. See `docs/remove-ui-template-agent/` for the full plan.
+For current V3 migration status, TODOs, and operational flags, use `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
 
 ### BaseAgent Key Attributes
 
@@ -99,17 +122,15 @@ class MyAgent(BaseAgent):
 - Set `OUTPUT_TEMPLATE` when the model should emit a fenced JSON block in its text; `BaseAgent.stream()` parses and validates it automatically.
 - `LeadingAgent` uses `OUTPUT_TEMPLATE = QuickReplyDataEvent` (defined in `agents/templates/schemas.py`).
 
-### LLM Instances (`router.py`)
+### LLM Instances
 
-| Variable | Model config | Used by |
-|----------|-------------|---------|
-| `REASONING_LLM` | `AI_MODEL_REASONING`, streaming | Leading, Discovery, Transaction, Support agents |
-| `LLM` | `AI_MODEL`, streaming | UI Template agent (fast rendering) |
-| `QC_LLM` | `AI_QC_MODEL`, temperature=0 | QC fact-check chain |
+V3 routing and composition live under `chat_v3/` and use the model tiers configured in `.env` (`AI_MODEL`,
+`AI_MODEL_MINI`, `AI_QC_MODEL`, and provider settings). Legacy `agents/router.py` may still define V2 singletons,
+but it is not the V3 root router.
 
 ### Streaming Events
 
-All events from `BaseAgent.stream()`:
+V3 emits the FE-compatible SSE contract from `chat_v3/sse.py` and related composer/template code:
 
 | Event type | Key fields | Description |
 |------------|-----------|-------------|
@@ -124,9 +145,10 @@ All events from `BaseAgent.stream()`:
 
 `TemplatePayload` → `DataEvent` → per-template classes (e.g., `QuickReplyTemplate`, `QuickReplyDataEvent`). These Pydantic models are the single source of truth for the FE contract. New templates must be defined here.
 
-### QC Agent (`g_qc_agent/`)
+### QC
 
-Not a `BaseAgent` subclass. Implements a simple LangChain chain (`ChatPromptTemplate | LLM | StrOutputParser`). Invoked via `invoke_qc()` / `stream_qc()` to fact-check domain agent responses against raw tool output. Returns `"PASS"` or a corrected response string.
+Current QC behavior starts in `chat_v3/qc.py`. Legacy `g_qc_agent/` remains available as a shared/compatibility
+implementation, but new V3 QC behavior should be added in the V3 owner layer.
 
 ### External Integrations
 | Service | Purpose |
@@ -148,12 +170,13 @@ Not a `BaseAgent` subclass. Implements a simple LangChain chain (`ChatPromptTemp
 
 ## Key Paths
 ```
-app/tstation-ai/services/tstation/agents/   # All agents
-app/tstation-ai/services/tstation/agents/base_agent.py  # BaseAgent + TOOL_DISPLAY_NAMES
-app/tstation-ai/services/tstation/agents/router.py      # LLM singletons + AgentDomain router
-app/tstation-ai/services/tstation/agents/templates/     # FE schema models
+app/tstation-ai/services/tstation/chat_v3/  # Current agent/runtime entrypoint
+app/tstation-ai/services/tstation/chat_v3/service.py  # V3 orchestration entrypoint
+app/tstation-ai/services/tstation/chat_v3/router/     # V3 LLM-first router
+app/tstation-ai/services/tstation/agents/   # Shared tools/schema + legacy V2 agents
+app/tstation-ai/services/tstation/agents/templates/     # FE schema models shared by V2/V3
 app/tstation-be-openapi.json                # OpenAPI spec for API client generation
-docs/remove-ui-template-agent/             # Active refactor plan docs
+docs/chat-v3/MIGRATE_V2_TO_V3_EN.md        # V3 migration/runtime guide
 ```
 
 ## Environment Variables

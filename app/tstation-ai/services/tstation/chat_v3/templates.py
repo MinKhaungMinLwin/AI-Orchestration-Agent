@@ -8,6 +8,7 @@ None and the turn falls back to the plain quickReply event.
 
 import json
 import logging
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -26,6 +27,17 @@ from services.tstation.chat_v3.prompts.templates import TEMPLATE_BUILDER_PROMPT
 logger = logging.getLogger(__name__)
 
 _MAX_TOOL_OUTPUT_CHARS = 12000
+
+_SERVICE_LABELS = {
+    "113": "타이어",
+    "119": "타이어 보관서비스",
+    "120": "수입타이어 취급",
+    "121": "경정비",
+    "122": "경정비",
+    "124": "휠얼라이먼트",
+    "125": "휠얼라이먼트",
+    "126": "무상점검",
+}
 
 # Which template a tool's output can feed — data availability, not routing.
 _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
@@ -74,6 +86,142 @@ def _pick_source(tool_calls: list[dict]) -> tuple[str, type[BaseModel], dict] | 
     return None
 
 
+def _store_rows_from_output(output: str) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    data = parsed.get("data")
+    if isinstance(data, dict) and isinstance(data.get("stores"), list):
+        return [row for row in data["stores"] if isinstance(row, dict)]
+    stores = parsed.get("stores")
+    if isinstance(stores, list):
+        return [row for row in stores if isinstance(row, dict)]
+    return []
+
+
+def _join_address(*parts: object) -> str:
+    return " ".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
+def _format_hour(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if ":" in text:
+        return text
+    if text.isdigit() and len(text) <= 2:
+        return f"{int(text):02d}:00"
+    return text
+
+
+def _format_time_range(start: object, end: object) -> str:
+    start_text = _format_hour(start)
+    end_text = _format_hour(end)
+    if start_text and end_text:
+        return f"{start_text}~{end_text}"
+    return start_text or end_text or "-"
+
+
+def _closed_days(row: dict[str, Any]) -> str:
+    end_day = str(row.get("shop_biz_end_wday") or "").strip()
+    if end_day == "일요일":
+        return "없음"
+    if end_day == "토요일":
+        return "일요일"
+    if end_day == "금요일":
+        return "토요일, 일요일"
+    return "-"
+
+
+def _feature_labels(row: dict[str, Any]) -> list[str]:
+    labels = []
+    if row.get("is_all_my_t"):
+        labels.append("all my T")
+    if row.get("is_installable"):
+        labels.append("온라인 장착 가능")
+    if row.get("is_imported_car"):
+        labels.append("수입차 특화점")
+    if row.get("is_ev_specialty"):
+        labels.append("전기차 특화점")
+    if row.get("is_ev_charge_available"):
+        labels.append("전기차 충전 가능")
+    return labels
+
+
+def _service_labels(row: dict[str, Any]) -> list[str]:
+    raw_codes = row.get("svc_codes") or []
+    if isinstance(raw_codes, str):
+        raw_codes = [raw_codes]
+    labels = []
+    seen = set()
+    for code in raw_codes if isinstance(raw_codes, list) else []:
+        label = _SERVICE_LABELS.get(str(code))
+        if label and label not in seen:
+            labels.append(label)
+            seen.add(label)
+    return labels
+
+
+def _store_info_lines(row: dict[str, Any]) -> list[str]:
+    return [
+        f"주소: {_join_address(row.get('addr_base'), row.get('addr_dtl')) or '-'}",
+        f"연락처: {str(row.get('tel_no') or '').strip() or '-'}",
+        f"평일: {_format_time_range(row.get('shop_biz_strt_time'), row.get('shop_biz_end_time'))}",
+        f"토요일: {_format_time_range(row.get('shop_sat_strt_time'), row.get('shop_sat_end_time'))}",
+        f"휴무일: {_closed_days(row)}",
+        f"특징: {', '.join(_feature_labels(row)) or '-'}",
+        f"서비스: {', '.join(_service_labels(row)) or '-'}",
+    ]
+
+
+def _intro_from_answer(answer: str) -> str:
+    intro = (answer or "").split("\n\n", 1)[0].strip()
+    return intro if intro and not intro.startswith("1.") else "확인된 매장 정보입니다."
+
+
+def format_location_answer(answer: str, tool_calls: list[dict]) -> str:
+    source = _pick_source(tool_calls)
+    if source is None or source[0] != "location":
+        return answer
+    raw_stores = _store_rows_from_output(str(source[2].get("output") or ""))
+    if not raw_stores:
+        return answer
+
+    sections = [_intro_from_answer(answer)]
+    for index, row in enumerate(raw_stores[:5], start=1):
+        shop_name = str(row.get("shop_nm") or "").strip() or f"매장 {index}"
+        lines = "\n   ".join(_store_info_lines(row))
+        sections.append(f"{index}. **{shop_name}**\n   {lines}")
+    return "\n\n".join(sections)
+
+
+def _normalize_location_payload(payload: BaseModel, tool_output: str) -> None:
+    raw_stores = _store_rows_from_output(tool_output)
+    stores = getattr(payload, "stores", None)
+    metadata = getattr(payload, "metadata", None)
+    if not raw_stores or not isinstance(stores, list):
+        return
+
+    for index, (item, raw) in enumerate(zip(stores, raw_stores)):
+        shop_name = str(raw.get("shop_nm") or "").strip()
+        if shop_name:
+            item.nameAddress = shop_name
+        detail_address = _join_address(raw.get("addr_base"), raw.get("addr_dtl"))
+        if detail_address:
+            item.detailAddress = detail_address
+        item.description = "\n".join(_store_info_lines(raw))
+        if isinstance(metadata, list) and index < len(metadata):
+            meta = metadata[index]
+            shop_id = str(raw.get("shop_id") or "").strip()
+            if shop_id:
+                meta.shopId = shop_id
+            if shop_name:
+                meta.shopName = shop_name
+
+
 async def build_rich_data_event(answer: str, tool_calls: list[dict]) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
     source = _pick_source(tool_calls)
@@ -94,6 +242,8 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict]) -> dict | N
         )
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
+        if template_name == "location":
+            _normalize_location_payload(payload, str(call["output"]))
         return {
             "type": "data",
             "template": template_name,

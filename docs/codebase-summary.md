@@ -2,7 +2,9 @@
 
 ## Overview
 
-T-Station AI is a conversational commerce chatbot for Hankook Tire Korea. Multi-agent architecture built with FastAPI + LangGraph, streaming SSE responses to frontend.
+T-Station AI is a conversational commerce chatbot for Hankook Tire Korea. The current agent runtime is Chat V3,
+an LLM-first FastAPI flow under `app/tstation-ai/services/tstation/chat_v3/`, streaming SSE responses to frontend.
+Before runtime work, read `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
 
 ## Service Ports
 
@@ -31,22 +33,24 @@ tstation-ai/
 │   │   ├── schemas/              # Pydantic models
 │   │   └── services/
 │   │       └── tstation/
-│   │           ├── agents/      # AI Agents
-│   │           │   ├── base_agent.py          # Base class (streaming + events)
-│   │           │   ├── router.py              # LLM instances + agent singletons
-│   │           │   ├── a_leading_agent/       # Greeting / unclear intent
-│   │           │   ├── b_discovery_agent/     # Product search, recommendations
-│   │           │   ├── c_transaction_agent/   # Price, store, booking, orders
-│   │           │   ├── e_support_agent/       # FAQ, warranty, escalation (RAG)
-│   │           │   ├── f_ui_template_agent/   # UI card rendering
-│   │           │   ├── g_qc_agent/            # QC fact-check (DISABLED)
+│   │           ├── chat_v3/     # Current agent/runtime entrypoint
+│   │           │   ├── service.py             # V3 orchestration entrypoint
+│   │           │   ├── router/                # LLM-first route/guard/domain/tool decision
+│   │           │   ├── executor.py            # Tool loop over shared tools
+│   │           │   ├── templates.py           # Tool output → FE template payloads
+│   │           │   ├── composer.py            # assistantResponse + quick replies
+│   │           │   └── qc.py                  # V3 verification
+│   │           ├── agents/      # Shared tools/schema + legacy V2 agents
+│   │           │   ├── b_discovery_agent/     # Product search/recommendation tools
+│   │           │   ├── c_transaction_agent/   # Price, store, booking, order tools
+│   │           │   ├── e_support_agent/       # FAQ, warranty, escalation tools
 │   │           │   └── templates/             # Pydantic schemas for FE templates
 │   │           ├── common/
 │   │           │   ├── pii_guardrail.py       # PII check before processing
 │   │           │   └── tstation_be_client.py  # BE token injection
 │   │           ├── chat_history_service.py    # Redis history/slots/tool_context
-│   │           ├── chat.py                    # Main coordinator + stream pipeline
-│   │           └── template_mapper.py         # tool → UI template mapping
+│   │           ├── chat.py                    # API branch + legacy V2 compatibility
+│   │           └── template_mapper.py         # Legacy V2 tool → UI template mapping
 │   ├── tstation-be-openapi.json               # OpenAPI spec for BE
 │   ├── tstation-ingestion/       # FAQ ingestion into Qdrant
 │   └── tstation-ui-demo/         # Streamlit demo UI
@@ -56,33 +60,23 @@ tstation-ai/
 └── pyproject.toml
 ```
 
-## AI Agents
+## Chat V3 Runtime
 
-### BaseAgent (base_agent.py)
+The current runtime starts in `services/tstation/chat_v3/service.py`, with routing in `chat_v3/router/`, tool
+execution in `chat_v3/executor.py`, and response/template/QC handling in `chat_v3/composer.py`,
+`chat_v3/templates.py`, and `chat_v3/qc.py`.
 
-All agents inherit from `BaseAgent`:
+V3 reuses selected tools and schemas from `services/tstation/agents/`, but that folder is not the root runtime.
 
-```python
-class BaseAgent(ABC):
-    TOOL_TO_AF_MAP: dict[str, str] = {}      # Tool → AF display name
-    TOOL_TO_TEMPLATE_MAP: dict[str, str] = {} # Tool → UI template type
-    RESPONSE_FORMAT: type[BaseModel] | None = None
-    OUTPUT_TEMPLATE: Any = None               # Structured output template
+### Shared Legacy Agent Surfaces
 
-    def stream(self, messages: list[dict], config=None):
-        # Yields: status, agent_flow, token, message, tool_start, tool, data events
-```
-
-### Agent Classes
-
-| Agent | Purpose | Model |
-|-------|---------|-------|
-| a_leading_agent | Greeting, unclear intent, small talk | GPT-5.4-reasoning |
-| b_discovery_agent | Product search, recommendations, compatibility, price | GPT-5.4-reasoning |
-| c_transaction_agent | Price, store, booking, orders, cart, order tracking | GPT-5.4-reasoning |
-| e_support_agent | FAQ (RAG), warranty, escalation | GPT-5.4-reasoning |
-| f_ui_template_agent | Renders UI cards (product, location, datepick, preorder) | GPT-5.4 |
-| g_qc_agent | Fact-check draft vs tool data — **DISABLED** | GPT-4o-mini |
+| Folder | Current use |
+|--------|-------------|
+| b_discovery_agent | Product search, recommendations, compatibility, price tools reused by V3 |
+| c_transaction_agent | Price, store, booking, orders, cart, order tracking tools reused by V3 |
+| e_support_agent | FAQ, RAG, warranty, escalation tools reused by V3 |
+| templates | FE template Pydantic schemas shared by V2/V3 |
+| a_/f_/g_ agents | Legacy V2 compatibility or shared implementations |
 
 ### Agent Flow Events
 
@@ -98,42 +92,38 @@ class BaseAgent(ABC):
 {"type": "DONE"}
 ```
 
-### Multi-Agent Coordinator (chat.py)
+### Chat V3 Flow
 
-`StreamingMultiAgentCoordinator` orchestrates all agents:
-
-1. `classify_multi_intent()` → classify user message into domain(s)
-2. Inject `CONVERSATION CONTEXT` (user_behavior, next_action, flow) into last user message
-3. Route to agent(s) sequentially
-4. `decide_next_action()` after each agent: STOP or CONTINUE
-5. (Optional) `f_ui_template_agent` for UI card rendering
-6. Local `_sanitize_response()` — remove backend jargon
-7. QC Agent: **DISABLED** (controlled by `# QC AGENT DISABLED` in chat.py)
-8. Yield final SSE stream to FE
+1. API layer calls `TStationChatServiceV2.chat()` as the branch gate.
+2. With `AI_CHAT_V3_PURE_LLM_ENABLED=true`, it delegates to `TStationChatServiceV3.chat()`.
+3. `chat_v3/router` produces the guard/domain/intent/slot/tool decision.
+4. `chat_v3/executor.py` runs the required shared tools.
+5. `chat_v3/templates.py`, `composer.py`, and `qc.py` build the final SSE-compatible response.
+6. `chat_v3/sse.py` emits FE-compatible events.
 
 ### State Management (Redis)
 
 | Key type | Content | Managed by |
 |----------|---------|-----------|
 | Chat history | Full conversation messages | `chat_history_service.py` |
-| Slots | goods_no, tire_size, shop_id, quantity, intent | `chat.py` slot extractor |
+| Slots | goods_no, tire_size, shop_id, quantity, intent | `chat_v3` routing/context plus shared Redis state |
 | Tool context | Last tool outputs (filter_for_context) | `g_qc_agent/source_filter.py` |
 | Template data | UI card data attached to assistant messages | `chat_history_service.py` |
 
 ### UI Templates (FE Contract)
 
-Agents output structured `data` events:
+V3 outputs structured `data` events:
 
 | Template | Agent | Trigger |
 |----------|-------|---------|
-| `product` | b_discovery | Product search/recommendations |
-| `location` | c_transaction | Store list |
-| `datepick` | c_transaction | Booking schedule |
-| `preorder` | c_transaction | Pre-order preview |
-| `orderComplete` | c_transaction | Order confirmed |
-| `voucher` | c_transaction | Coupon list |
-| `listCar` | b_discovery | Car model selection |
-| `youtube` | b_discovery | Video search results |
+| `product` | `chat_v3/templates.py` | Product search/recommendations |
+| `location` | `chat_v3/templates.py` | Store list |
+| `datepick` | `chat_v3/templates.py` | Booking schedule |
+| `preorder` | `chat_v3/templates.py` | Pre-order preview |
+| `orderComplete` | `chat_v3/templates.py` | Order confirmed |
+| `voucher` | `chat_v3/templates.py` | Coupon list |
+| `listCar` | `chat_v3/templates.py` | Car model selection |
+| `youtube` | `chat_v3/templates.py` | Video search results |
 | `quickReply` | any | Suggested replies |
 
 ## LLM Configuration

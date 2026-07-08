@@ -1,11 +1,21 @@
 # T-Station AI
 
-T-Station AI는 티스테이션 챗봇의 Agent 서비스입니다. 사용자의 발화를 분류하고, 상품 추천/검색, 가격/재고/주문, FAQ/상담 연결 등의 도메인 Agent를 호출한 뒤 프론트엔드가 렌더링할 수 있는 SSE 이벤트와 템플릿 데이터를 반환합니다.
+T-Station AI는 티스테이션 챗봇의 Agent 서비스입니다. 사용자의 발화를 분류하고, 상품 추천/검색, 가격/재고/주문, FAQ/상담 연결 등의 도구를 호출한 뒤 프론트엔드가 렌더링할 수 있는 SSE 이벤트와 템플릿 데이터를 반환합니다.
+
+## Agent Runtime 진입점
+
+현재 agent/runtime 진입점은 `app/tstation-ai/services/tstation/chat_v3/` (`/chat_v3`)입니다.
+Agent 라우팅, tool loop, template, QC, SSE 동작을 수정하기 전에는
+`docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`를 먼저 확인합니다.
+
+`services/tstation/chat.py`와 `services/tstation/agents/`는 레거시 V2 호환 및 V3가 재사용하는 tool/schema 계층입니다.
+새 런타임 동작은 `chat_v3/`에서 시작하고, 공유 도구나 FE schema 변경이 필요할 때만 `agents/*/tools.py` 또는
+`agents/templates/schemas.py`를 수정합니다.
 
 ## 주요 역할
 
 - 채팅 API 제공: `/api/tstation/messages/chat`
-- 멀티 Agent 라우팅: leading, discovery, transaction, support
+- Chat V3 LLM-first 라우팅: leading, discovery, transaction, support 도메인 결정
 - 백엔드 API 호출 도구 실행
 - 상품, 매장, 쿠폰, 차량, 예약 등 리치 UI 템플릿 데이터 생성
 - Langfuse tracing, Redis/Celery 작업 큐, Qdrant 기반 RAG 연동
@@ -24,9 +34,10 @@ tstation-ai/
 │   │   ├── schemas/                   # 요청/응답 스키마
 │   │   ├── services/
 │   │   │   └── tstation/
-│   │   │       ├── chat.py            # 채팅 오케스트레이션
-│   │   │       ├── template_mapper.py # tool 결과를 FE 템플릿으로 매핑
-│   │   │       ├── agents/            # 도메인 Agent
+│   │   │       ├── chat.py            # API branch + 레거시 V2 호환 계층
+│   │   │       ├── chat_v3/           # 현재 agent/runtime 진입점
+│   │   │       ├── template_mapper.py # 레거시 V2 tool 결과 → FE 템플릿 매핑
+│   │   │       ├── agents/            # V3가 재사용하는 tool/schema + 레거시 V2 Agent
 │   │   │       ├── policies/          # deterministic 정책/가드
 │   │   │       └── rag/               # RAG 검색
 │   │   └── tests/                     # AI 서비스 테스트
@@ -40,16 +51,20 @@ tstation-ai/
 └── .env.example                       # 환경 변수 예시
 ```
 
-## Agent 구성
+## V3 구성
 
-Agent는 `app/tstation-ai/services/tstation/agents/` 아래에 있으며, 폴더 prefix 순서가 로딩/라우팅 우선순위와 맞닿아 있습니다.
+V3는 `app/tstation-ai/services/tstation/chat_v3/` 아래에서 router → executor → composer/template/QC 흐름으로 동작합니다.
+자세한 마이그레이션 기준과 운영 플래그는 `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`를 기준으로 합니다.
+
+`app/tstation-ai/services/tstation/agents/` 아래 prefix 폴더는 현재 V3의 root runtime이 아니라 공유 tool/schema 및
+레거시 V2 호환 계층입니다.
 
 | Prefix | Agent | 역할 |
 | --- | --- | --- |
-| `a_` | leading_agent | 인사, 모호한 의도, 일반 안내 |
-| `b_` | discovery_agent | 상품 검색, 추천, 차량 호환, 유튜브 검색 |
-| `c_` | transaction_agent | 가격, 재고, 매장, 주문, 쿠폰, 예약 |
-| `e_` | support_agent | FAQ, 보증, 반품, 1:1 문의 연결 |
+| `a_` | leading_agent | 레거시 V2 leading agent |
+| `b_` | discovery_agent | V3가 재사용하는 상품 검색, 추천, 차량 호환, 유튜브 도구 |
+| `c_` | transaction_agent | V3가 재사용하는 가격, 재고, 매장, 주문, 쿠폰, 예약 도구 |
+| `e_` | support_agent | V3가 재사용하는 FAQ, 보증, 반품, 1:1 문의 도구 |
 
 ## 준비
 

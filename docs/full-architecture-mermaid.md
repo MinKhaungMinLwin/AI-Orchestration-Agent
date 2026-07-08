@@ -5,6 +5,9 @@ This document compiles two important architecture diagrams:
 1. Overall System Design (services, data, integrations).
 2. AI orchestration + end-to-end chat flow.
 
+Current agent/runtime entrypoint: `app/tstation-ai/services/tstation/chat_v3/` (`/chat_v3`). Before changing
+runtime behavior, read `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
+
 ## 1) Architecture Diagram (System Design)
 
 ```mermaid
@@ -18,25 +21,24 @@ flowchart TB
 
     subgraph AI["tstation-ai FastAPI :9000"]
       EP[Chat Endpoint<br/>POST /tstation/chat]
-      CS[TStationChatService<br/>StreamingMultiAgentCoordinator]
+      CS[TStationChatServiceV3<br/>chat_v3/service.py]
       HS[ChatHistoryService<br/>Redis: history / slots / tool_ctx]
       EP --> CS
       CS --> HS
     end
 
-    subgraph Agents["Multi-Agent Layer"]
-      CO[StreamingMultiAgentCoordinator<br/>classify_multi_intent → route → decide_next_action]
-      L[a_leading_agent<br/>no tools — pure LLM]
-      D[b_discovery_agent<br/>product search / compat / price]
-      T[c_transaction_agent<br/>store / booking / orders]
-      S[e_support_agent<br/>FAQ RAG / escalation]
-      UT[f_ui_template_agent<br/>UI card rendering]
-      QC["g_qc_agent<br/>fact-check ⚠️ DISABLED"]
-      CO -->|LEADING| L
-      CO -->|DISCOVERY| D
-      CO -->|TRANSACTION| T
-      CO -->|SUPPORT| S
-      CO -->|tool data & no direct data event| UT
+    subgraph V3["Chat V3 Runtime"]
+      ROUTER[chat_v3/router<br/>guard / domain / intent / slots / tool plan]
+      EXEC[chat_v3/executor.py<br/>tool loop]
+      COMP[chat_v3/composer.py<br/>assistantResponse / quick replies]
+      TPL[chat_v3/templates.py<br/>FE template payloads]
+      QC[chat_v3/qc.py<br/>verification]
+      TOOLS[agents/*/tools.py<br/>shared tool surface]
+      ROUTER --> EXEC
+      EXEC --> TOOLS
+      EXEC --> TPL
+      TPL --> COMP
+      QC --> COMP
     end
 
     subgraph External
@@ -55,19 +57,14 @@ flowchart TB
     UI -->|POST /api/tstation/chat SSE| EP
     EP -->|SSE: token/tool/data/message/DONE| UI
 
-    CS --> CO
-    L --> GW
-    D --> GW
-    T --> GW
-    S --> GW
-    UT --> GW
-    QC -.->|disabled| GW
+    CS --> ROUTER
+    ROUTER --> GW
+    COMP --> GW
+    QC --> GW
 
     HS --> REDIS
-    S --> QDRANT
-    D --> BE
-    T --> BE
-    S --> BE
+    TOOLS --> QDRANT
+    TOOLS --> BE
     BE --> ORACLE
     AI -.->|tracing| LANG
     ING --> QDRANT
@@ -81,70 +78,34 @@ sequenceDiagram
     participant U as User/UI
     participant API as POST /tstation/chat
     participant R as Redis
-    participant CS as TStationChatService
-    participant CO as StreamingMultiAgentCoordinator
-    participant L as a_leading_agent
-    participant D as b_discovery_agent
-    participant T as c_transaction_agent
-    participant S as e_support_agent
-    participant UT as f_ui_template_agent
+    participant CS as TStationChatServiceV3
+    participant RT as chat_v3/router
+    participant EX as chat_v3/executor
+    participant TL as agents/*/tools.py
+    participant CP as chat_v3/templates/composer/qc
     participant B as tstation-be APIs
     participant QDRANT as Qdrant RAG
 
     U->>API: Chat request (message, session_id, access_token, stream=true)
     API->>R: save user message to history
-    API->>CS: TStationChatService.chat(request)
+    API->>CS: TStationChatServiceV2.chat(request) branch gate → V3
 
     Note over CS: set_tstation_be_token → PII guardrail check
     CS->>R: load history + template_data + slots + tool_context
-    CS->>R: merge/save slots (goods_no, tire_size, shop_id, qty)
+    CS->>RT: route_request(messages + context)
+    RT-->>CS: guard/domain/intent/slots/tool plan
 
-    CS->>CO: classify_multi_intent(messages)
-    CO-->>CS: domain list e.g. [DISCOVERY] + routing context
-    Note over CS: inject CONVERSATION CONTEXT into last user message<br/>(user_behavior, next_action, flow)
+    CS->>EX: run tool loop(route decision)
+    EX->>TL: call selected shared tools
+    TL->>B: product / price / store / order / FAQ APIs
+    TL->>QDRANT: FAQ RAG search when needed
+    B-->>TL: backend data
+    QDRANT-->>TL: RAG results
+    TL-->>EX: tool outputs
+    EX-->>CS: tool events + results
 
-    CS->>CO: stream(messages, domains, slot_context, tool_context)
-
-    alt domain = LEADING
-        CO->>L: stream(enriched_messages)
-        Note over L: No tools — pure LLM response
-        L-->>CO: token + message events
-    end
-
-    alt domain = DISCOVERY
-        CO->>D: stream(enriched_messages)
-        D->>B: search_product / check_compatibility / get_recommendations<br/>get_final_price / get_events / get_deals / compare_discount / search_youtube
-        B-->>D: product + price data
-        D-->>CO: tool events + token + message events
-    end
-
-    Note over CO: decide_next_action() — STOP or CONTINUE
-
-    alt CONTINUE → TRANSACTION
-        CO->>T: stream(enriched_messages + context + accumulated_tool_data)
-        T->>B: get_final_price / get_store_list / get_store_schedule<br/>quick_order / save_to_cart / get_order_status
-        B-->>T: commerce data + order results
-        T-->>CO: tool events + token + message events
-    end
-
-    alt domain = SUPPORT
-        CO->>S: stream(enriched_messages)
-        S->>B: get_faq / escalate
-        S->>QDRANT: search_faq_rag_tool
-        B-->>S: support data
-        S-->>CO: tool events + token + message events
-        Note over CO: Support → always STOP
-    end
-
-    alt agent called tools AND no direct data event emitted
-        CO->>UT: stream(messages + accumulated_tool_data)
-        UT-->>CO: data events (UI templates for FE)
-    end
-
-    CO-->>CS: all events streamed
-
-    Note over CS: QC DISABLED — skip fact-check
-    CS->>CS: _sanitize_response() — remove backend jargon
+    CS->>CP: build assistantResponse, templates, quick replies, QC
+    CP-->>CS: message/data events
 
     CS->>R: save tool_context_items for next turn
     CS-->>U: SSE: agent_flow / sub-agent / tool / token / data / message events

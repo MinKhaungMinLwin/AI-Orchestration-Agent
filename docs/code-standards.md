@@ -48,46 +48,54 @@ app/
 │   ├── schemas/              # Pydantic models
 │   └── services/
 │       └── tstation/
-│           ├── agents/      # AI Agents
-│           │   ├── base_agent.py          # Base class
-│           │   ├── router.py              # LLM instances + agent singletons
-│           │   ├── a_leading_agent/
+│           ├── chat_v3/     # Current agent/runtime entrypoint
+│           │   ├── service.py             # V3 orchestration entrypoint
+│           │   ├── router/                # LLM-first routing/guard/tool decision
+│           │   ├── executor.py            # Tool loop
+│           │   ├── templates.py           # Tool output → FE templates
+│           │   ├── composer.py            # assistantResponse + quick replies
+│           │   └── qc.py                  # Verification
+│           ├── agents/      # Shared tools/schema + legacy V2 agents
 │           │   ├── b_discovery_agent/
 │           │   ├── c_transaction_agent/
 │           │   ├── e_support_agent/
-│           │   ├── f_ui_template_agent/
-│           │   ├── g_qc_agent/
 │           │   └── templates/             # FE template Pydantic schemas
 │           ├── common/
 │           ├── chat_history_service.py
-│           ├── chat.py
-│           └── template_mapper.py
+│           ├── chat.py                    # API branch + legacy V2 compatibility
+│           └── template_mapper.py         # Legacy V2 template mapper
 ├── tstation-be-openapi.json  # OpenAPI spec (generated BE client)
 └── tstation-ui-demo/         # Streamlit demo UI
 ```
 
 ---
 
-## Agent Architecture
+## Chat V3 Runtime
 
-### Directory Naming
-Use prefix ordering (a_, b_, c_, ...) to indicate domain:
+Current runtime work starts in `services/tstation/chat_v3/`. Read `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md` before
+changing routing, tool execution, templates, QC, or SSE behavior.
+
+### Shared Legacy Agent Directory
+
+The `agents/` directory is not the current root runtime. It provides shared tools/schema and legacy V2 compatibility.
+Use prefix ordering (a_, b_, c_, ...) only when working in that legacy/shared surface:
 
 ```
 agents/
-├── base_agent.py            # Base class with streaming + TOOL_TO_AF_MAP
-├── a_leading_agent/        # Greeting / unclear intent
-├── b_discovery_agent/      # Product search, recommendations, compatibility
-├── c_transaction_agent/    # Price, store, booking, orders
-├── e_support_agent/        # FAQ, warranty, escalation
-├── f_ui_template_agent/    # UI card rendering
-├── g_qc_agent/             # QC fact-check (optional, currently disabled)
-└── router.py               # Domain router + LLM singletons
+├── base_agent.py            # Legacy BaseAgent + shared display names
+├── a_leading_agent/         # Legacy V2 leading agent
+├── b_discovery_agent/       # Shared product search/recommendation tools
+├── c_transaction_agent/     # Shared price/store/booking/order tools
+├── e_support_agent/         # Shared FAQ/warranty/escalation tools
+├── f_ui_template_agent/     # Legacy V2 UI card rendering
+├── g_qc_agent/              # Legacy/shared QC implementation
+└── templates/               # FE template Pydantic schemas shared by V2/V3
 ```
 
-### BaseAgent Implementation
+### Legacy BaseAgent Implementation
 
-All agents must inherit from `BaseAgent`:
+Legacy V2 agents inherit from `BaseAgent`. New V3 routing/composition behavior belongs in `chat_v3/` unless the
+shared tool/schema contract itself is changing:
 
 ```python
 from services.tstation.agents.base_agent import BaseAgent

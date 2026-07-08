@@ -163,19 +163,23 @@ if settings.QDRANT_COLLECTION_FAQ not in collection_names:
     pass
 ```
 
-### Step 2: Support Agent Already Uses RAG
+### Step 2: Support Tools Already Use RAG
 
-The Support Agent in `services/tstation/agents/e_support_agent/agent.py` is ready to use.
+The current agent/runtime entrypoint is `services/tstation/chat_v3/`; see
+`docs/chat-v3/MIGRATE_V2_TO_V3_EN.md` before changing runtime behavior.
 
-It's called from the multi-agent router when domain classification returns "SUPPORT".
+Support RAG behavior is exposed through the shared support tool surface under
+`services/tstation/agents/e_support_agent/`. V3 calls the shared tools from its router/executor flow when the route
+decision requires SUPPORT behavior.
 
 **Currently Used In:**
-- Multi-agent orchestration (chat.py)
+- Chat V3 router/executor flow
+- Legacy V2 orchestration compatibility (`chat.py`)
 - Handles WARRANTY, RETURNS, FAQ, SUPPORT domain queries
 
 ### Step 3: Direct Integration (Optional)
 
-If you want to use Support Agent directly without multi-agent router:
+If you want to use the legacy Support Agent directly outside Chat V3:
 
 ```python
 from langchain_litellm import ChatLiteLLM

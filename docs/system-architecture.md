@@ -2,7 +2,12 @@
 
 ## Overview
 
-T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a multi-agent architecture with FastAPI. The system handles customer inquiries about tires, providing product recommendations, compatibility checks, store information, reservation, ordering, and support.
+T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using the Chat V3 LLM-first runtime with
+FastAPI. The system handles customer inquiries about tires, providing product recommendations, compatibility checks,
+store information, reservation, ordering, and support.
+
+The active agent/runtime entrypoint is `app/tstation-ai/services/tstation/chat_v3/` (`/chat_v3`). Before changing
+runtime behavior, read `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
 
 ## Service Ports
 
@@ -33,19 +38,18 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 │                              ▼                                │
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │              Service Layer                              │  │
-│  │   TStationChatService (StreamingMultiAgentCoordinator) │  │
+│  │   TStationChatServiceV3 (chat_v3/service.py)           │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                              │                                │
 │                              ▼                                │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │              Agent Layer (Multi-Agent)                  │  │
+│  │              Chat V3 Runtime                            │  │
 │  │                                                         │  │
-│  │  a_leading_agent    — Greeting, unclear intent          │  │
-│  │  b_discovery_agent  — Product search, recommendations   │  │
-│  │  c_transaction_agent— Price, store, booking, orders     │  │
-│  │  e_support_agent    — FAQ, warranty, escalation (RAG)   │  │
-│  │  f_ui_template_agent— UI template rendering             │  │
-│  │  g_qc_agent         — Fact-check (currently DISABLED)   │  │
+│  │  router/           — Guard, domain, intent, tool plan   │  │
+│  │  executor.py       — Tool loop over shared tools         │  │
+│  │  templates.py      — Tool output → FE templates          │  │
+│  │  composer.py       — assistantResponse + quick replies   │  │
+│  │  qc.py             — Verification                        │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                              │                                │
 │                              ▼                                │
@@ -71,74 +75,59 @@ T-Station AI is a conversational commerce chatbot for Hankook Tire Korea using a
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## Agent Architecture
+## Chat V3 Architecture
 
-### BaseAgent (base_agent.py)
+### Runtime Components
 
-All agents inherit from the `BaseAgent` class which provides:
-
-- **Streaming Support**: Yields structured events during execution
-- **TOOL_TO_AF_MAP**: Dictionary mapping tool names to Agent Functions (AF)
-- **OUTPUT_TEMPLATE**: Optional structured output template (e.g. `ProductDataEvent`)
-- **Stream Event Types**:
-  - `status`: Lifecycle markers — "생각 중...", "답변 중..."
-  - `agent_flow`: Agent name or AF when active
-  - `token`: AI response tokens
-  - `message`: Agent messages with agent name (held for history sync)
-  - `tool_start`: Before tool runs, with display_name for UI indicator
-  - `tool`: Tool execution results with name, input, output
-  - `data`: Final UI template payload (structured response)
+| Component | Path | Responsibility |
+|-----------|------|----------------|
+| Service | `services/tstation/chat_v3/service.py` | Current orchestration entrypoint |
+| Router | `services/tstation/chat_v3/router/` | LLM-first safety, guard, domain, intent, slot, tool decision |
+| Executor | `services/tstation/chat_v3/executor.py` | Executes shared tools |
+| Templates | `services/tstation/chat_v3/templates.py` | Builds FE template payloads |
+| Composer/QC | `services/tstation/chat_v3/composer.py`, `services/tstation/chat_v3/qc.py` | Final response and verification |
+| SSE | `services/tstation/chat_v3/sse.py` | FE-compatible stream events |
 
 ### Domain Classification
 
-Routes queries to appropriate agents via `StreamingMultiAgentCoordinator`:
+Routes queries through `chat_v3/router` into one or more domains:
 
 | Domain | Agent | Description |
 |--------|-------|-------------|
-| LEADING | a_leading_agent | Greeting, unclear intent, small talk |
-| DISCOVERY | b_discovery_agent | Product search, recommendations, compatibility |
-| TRANSACTION | c_transaction_agent | Price, stock, stores, booking, orders, cart |
-| SUPPORT | e_support_agent | Warranty, returns, FAQ, human escalation |
+| LEADING | V3 guard/composer or shared leading behavior | Greeting, unclear intent, small talk |
+| DISCOVERY | Shared discovery tools | Product search, recommendations, compatibility |
+| TRANSACTION | Shared transaction tools | Price, stock, stores, booking, orders, cart |
+| SUPPORT | Shared support tools | Warranty, returns, FAQ, human escalation |
 
-### Agent Details
+### Shared Legacy Agent Surfaces
 
-| Agent | Model | Tools |
-|-------|-------|-------|
-| a_leading_agent | GPT-5.4-reasoning | None (pure LLM) |
-| b_discovery_agent | GPT-5.4-reasoning | search_product, get_recommendations, check_compatibility, get_final_price, get_events, get_deals, compare_discount, search_youtube |
-| c_transaction_agent | GPT-5.4-reasoning | get_final_price, get_store_list, get_store_detail, get_store_schedule, quick_order, save_to_cart, get_order_status, get_orders_of_user |
-| e_support_agent | GPT-5.4-reasoning | get_faq, search_faq_rag, escalate |
-| f_ui_template_agent | GPT-5.4 | UI template tools (list_product, list_location, available_dates, preorder, etc.) |
-| g_qc_agent | GPT-4o-mini | No tools — LLM chain (currently DISABLED) |
+`services/tstation/agents/` is not the current root runtime. V3 reuses `agents/*/tools.py` and
+`agents/templates/schemas.py` as shared tool/schema surfaces. Legacy V2 agent classes remain there for compatibility.
 
 ### LLM Models
 
 | Variable | Model | Usage |
 |----------|-------|-------|
-| AI_MODEL | gpt-5.4 | UI Template Agent, router classification |
-| AI_MODEL_REASONING | gpt-5.4-reasoning | All main sub-agents |
-| AI_QC_MODEL | gpt-4o-mini | QC Agent (disabled) |
+| AI_MODEL | gpt-5.4 | Main response/composition tier |
+| AI_MODEL_MINI | provider default | V3 router and lightweight structured decisions |
+| AI_MODEL_REASONING | gpt-5.4-reasoning | Reasoning tier where configured |
+| AI_QC_MODEL | gpt-4o-mini | QC tier |
 
-### Multi-Agent Coordinator Flow
+### Chat V3 Flow
 
 ```
 User message
-    → classify_multi_intent() [GPT-5.4]
-    → inject CONVERSATION CONTEXT
-    → route to agent(s)
-    → after each agent: decide_next_action() STOP or CONTINUE
-    → (optional) f_ui_template_agent for UI card rendering
-    → local _sanitize_response()
-    → yield final SSE stream to FE
+    → TStationChatServiceV2.chat() branch gate
+    → TStationChatServiceV3.chat()
+    → chat_v3/router route decision
+    → chat_v3/executor shared tool loop
+    → chat_v3/templates / composer / qc
+    → chat_v3/sse final SSE stream to FE
 ```
 
-### QC Agent (g_qc_agent) — Currently DISABLED
+### QC
 
-The QC agent exists but is disabled in `chat.py`. When enabled, it:
-- Runs after all agents complete
-- Only for responses with factual claims (price, goods_no, store names, tire sizes)
-- Compares draft response vs tool source data
-- Returns PASS or corrected response
+Current QC behavior starts in `chat_v3/qc.py`. Legacy `g_qc_agent/` remains a compatibility/shared implementation.
 
 ## State Management (Redis)
 

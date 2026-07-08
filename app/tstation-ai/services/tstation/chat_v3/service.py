@@ -106,6 +106,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if corrected != answer:
         yield sse.sse({"type": "qc_correction", "assistantResponse": corrected})
         answer = corrected
+    answer = templates.format_location_answer(answer, executor.tool_calls)
 
     result["answer"] = answer
     yield sse.message(answer)
