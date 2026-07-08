@@ -214,6 +214,37 @@ def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
     assert event["data"]["dates"][1]["date"] == "이미 포맷됨"
 
 
+def test_datepick_template_marks_schedule_action_for_order_flow(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "예약 가능한 날짜를 확인해 주세요.",
+            [{"name": "get_store_schedule_tool", "args": {"shop_id": "F00721"}, "output": json.dumps({"data": {"stores": []}}, ensure_ascii=False)}],
+            slots=ConversationSlots(
+                goods_no="G000000309783",
+                ord_qty=2,
+                shop_id="F00721",
+                shop_name="T-Station Hannam Branch",
+                pending_intent="order",
+                goal_type="place_order",
+            ),
+            decision=RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"]),
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    metadata = event["data"]["metadata"]
+    assert metadata["cta_action"] == "select_schedule"
+    assert metadata["expected_contract_intent"] == "quick_order_reservation"
+    assert metadata["slots"]["shop_id"] == "F00721"
+    assert metadata["slots"]["shop_name"] == "T-Station Hannam Branch"
+    assert metadata["ui_action"]["action_type"] == "select_schedule"
+    assert metadata["ui_action"]["fills_slot"] == "requested_cal_day,rsv_hour"
+    assert metadata["ui_action"]["slots"]["shop_id"] == "F00721"
+
+
 def test_location_answer_uses_fixed_store_info_labels():
     tool_output = {
         "status": "success",

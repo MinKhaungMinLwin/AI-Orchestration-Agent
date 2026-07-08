@@ -581,9 +581,66 @@ def _is_booking_location_context(slots: ConversationSlots | None, decision: Rout
     return "TRANSACTION" in domains and bool(slots.goods_no and slots.ord_qty)
 
 
-def _normalize_datepick_payload(payload: BaseModel) -> None:
+def _metadata_value(metadata: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = metadata.get(key)
+        if value not in (None, "", []):
+            return value
+    return None
+
+
+def _datepick_slot_values(payload: BaseModel, slots: ConversationSlots | None) -> dict[str, Any]:
+    metadata = getattr(payload, "metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    values = slots.model_dump(mode="json", exclude_none=True) if slots else {}
+    aliases = {
+        "shop_id": ("shop_id", "shopId"),
+        "shop_name": ("shop_name", "shopName", "storeName"),
+        "store_name": ("store_name", "storeName", "shopName"),
+        "requested_cal_day": ("requested_cal_day", "requestedCalDay"),
+        "rsv_hour": ("rsv_hour", "rsvHour"),
+    }
+    return {
+        field: values.get(field) or _metadata_value(metadata, *keys)
+        for field, keys in aliases.items()
+        if values.get(field) not in (None, "", []) or _metadata_value(metadata, *keys) not in (None, "", [])
+    }
+
+
+def _normalize_datepick_payload(
+    payload: BaseModel,
+    slots: ConversationSlots | None = None,
+    decision: RouteDecision | None = None,
+) -> None:
     for item in getattr(payload, "dates", None) or []:
         item.date = _format_korean_date(getattr(item, "date", ""))
+    metadata = getattr(payload, "metadata", None)
+    if not isinstance(metadata, dict):
+        payload.metadata = {}
+        metadata = payload.metadata
+
+    slot_values = _datepick_slot_values(payload, slots)
+    contract_intent = "quick_order_reservation" if _is_booking_location_context(slots, decision) else "store_schedule"
+    metadata["domain"] = metadata.get("domain") or "TRANSACTION"
+    metadata["cta_action"] = metadata.get("cta_action") or "select_schedule"
+    metadata["source_intent"] = metadata.get("source_intent") or contract_intent
+    metadata["expected_contract_intent"] = metadata.get("expected_contract_intent") or contract_intent
+    metadata["expected_behavior"] = metadata.get("expected_behavior") or "slot_fill"
+    metadata["currentStep"] = metadata.get("currentStep") or "select_schedule"
+    metadata["current_step"] = metadata.get("current_step") or "select_schedule"
+    metadata["slots"] = {key: value for key, value in slot_values.items() if value not in (None, "", [])}
+    metadata["ui_action"] = {
+        "action_type": "select_schedule",
+        "cta_action": "select_schedule",
+        "expected_behavior": metadata["expected_behavior"],
+        "source_intent": metadata["source_intent"],
+        "expected_contract_intent": metadata["expected_contract_intent"],
+        "entity_type": "schedule",
+        "entity_id": str(slot_values.get("shop_id") or "").strip() or None,
+        "entity_label": str(slot_values.get("shop_name") or slot_values.get("store_name") or "").strip() or None,
+        "fills_slot": "requested_cal_day,rsv_hour",
+        "slots": metadata["slots"],
+    }
 
 
 async def build_rich_data_event(
@@ -623,7 +680,7 @@ async def build_rich_data_event(
             _normalize_location_payload(payload, str(call["output"]))
             payload.isBookingFlow = _is_booking_location_context(slots, decision)
         elif template_name == "datepick":
-            _normalize_datepick_payload(payload)
+            _normalize_datepick_payload(payload, slots, decision)
         return {
             "type": "data",
             "template": template_name,
