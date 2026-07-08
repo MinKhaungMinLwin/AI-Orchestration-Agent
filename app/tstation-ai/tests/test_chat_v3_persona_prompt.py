@@ -2,10 +2,10 @@ import runpy
 from pathlib import Path
 
 
-SYSTEM_PROMPT = runpy.run_path(Path("services/tstation/chat_v3/prompts/persona.py"))["SYSTEM_PROMPT"]
-TRANSACTION_WRITE_GUIDANCE = runpy.run_path(Path("services/tstation/chat_v3/prompts/persona.py"))[
-    "TRANSACTION_WRITE_GUIDANCE"
-]
+_PERSONA = runpy.run_path(Path("services/tstation/chat_v3/prompts/persona.py"))
+SYSTEM_PROMPT = _PERSONA["SYSTEM_PROMPT"]
+TRANSACTION_WRITE_GUIDANCE = _PERSONA["TRANSACTION_WRITE_GUIDANCE"]
+STORE_SEARCH_FLOW_GUIDANCE = _PERSONA["STORE_SEARCH_FLOW_GUIDANCE"]
 
 
 def test_system_prompt_limits_store_recommendations_to_tool_verifiable_conditions():
@@ -20,3 +20,13 @@ def test_transaction_prompt_resolves_goods_no_without_asking_customer_for_intern
     assert "상품번호나 상품 링크를 알려 달라고 하지 마세요" in TRANSACTION_WRITE_GUIDANCE
     assert "search_product_tool" in TRANSACTION_WRITE_GUIDANCE
     assert "goods_no는 내부 식별자" in TRANSACTION_WRITE_GUIDANCE
+
+
+def test_store_flow_resolves_shown_branch_selection_from_memory():
+    # Issue 6: naming a branch already shown ("한남점" ↔ "티스테이션 한남점") must resolve
+    # against PREVIOUS TOOL RESULTS, not trigger a failing store_nm branch-name search.
+    assert "PREVIOUS TOOL RESULTS" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "한남점" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "새로 매장을 검색하지 말고" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "shop_id" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "지점명" in STORE_SEARCH_FLOW_GUIDANCE and "store_nm" in STORE_SEARCH_FLOW_GUIDANCE
