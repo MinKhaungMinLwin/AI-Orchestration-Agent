@@ -569,6 +569,79 @@ def test_preorder_fallback_builds_ready_order_card_from_slots():
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
 
 
+def test_get_final_price_tool_builds_preorder_without_llm(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("get_final_price_tool preOrder should be built without LLM")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    price_output = {
+        "status": "success",
+        "data": {
+            "cheapest_final_prc": 150000,
+            "wage_prc": 4100,
+            "sale_prc": 200000,
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "아래 내용으로 구매 진행해도 될까요?",
+            [
+                {
+                    "name": "get_final_price_tool",
+                    "args": {"goods_no": "G000000309783"},
+                    "output": json.dumps(price_output),
+                }
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["metadata"]["source"] == "chat_v3_final_price_preorder"
+    assert event["data"]["metadata"]["goodsId"] == "G000000309783"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 308200
+    assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
+
+
+def test_get_final_price_tool_does_not_build_preorder_without_schedule():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    price_output = {"status": "success", "data": {"cheapest_final_prc": 150000, "wage_prc": 4100}}
+
+    event = templates.build_final_price_preorder_event(
+        "아래 내용으로 구매 진행해도 될까요?",
+        slots,
+        {
+            "name": "get_final_price_tool",
+            "args": {"goods_no": "G000000309783"},
+            "output": json.dumps(price_output),
+        },
+    )
+
+    assert event is None
+
+
 async def _collect_turn_events(request: TStationChatRequest) -> list[str]:
     events = []
     async for event in service._run_turn(request, {}):  # noqa: SLF001

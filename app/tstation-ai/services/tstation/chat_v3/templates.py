@@ -113,6 +113,7 @@ _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "get_user_vehicles_tool": ("listCar", ListCarTemplate),
     "get_my_cars_tool": ("listCar", ListCarTemplate),
     "get_cheapest_price_tool": ("cheapestProduct", CheapestProductTemplate),
+    "get_final_price_tool": ("preOrder", PreOrderTemplate),
     "get_store_schedule_tool": ("datepick", DatepickTemplate),
     "get_multi_store_schedule_tool": ("datepick", DatepickTemplate),
     "transaction_store_preview_tool": ("location", LocationTemplate),
@@ -365,6 +366,28 @@ def build_preorder_fallback(answer: str, slots: ConversationSlots, decision: Rou
         answer,
         slots.model_dump(mode="json", exclude_none=True),
         source="chat_v3_slot_fallback_preorder",
+    )
+
+
+def build_final_price_preorder_event(answer: str, slots: ConversationSlots | None, call: dict) -> dict | None:
+    if slots is None or not _ready_order_slots(slots):
+        return None
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+    args_goods_no = str(args.get("goods_no") or "").strip()
+    if args_goods_no and args_goods_no != str(slots.goods_no or "").strip():
+        return None
+    payment_amount = _extract_payment_amount(_tool_payload(call.get("output")), slots.ord_qty)
+    if payment_amount is None:
+        payment_amount = _as_int(slots.payment_amount)
+    if payment_amount is None:
+        return None
+
+    snapshot = slots.model_dump(mode="json", exclude_none=True)
+    snapshot["payment_amount"] = payment_amount
+    return build_preorder_data_event(
+        answer,
+        snapshot,
+        source="chat_v3_final_price_preorder",
     )
 
 
@@ -1306,6 +1329,8 @@ async def build_rich_data_event(
         return None
     template_name, template_model, call = source
     if template_name == "preOrder":
+        if call.get("name") == "get_final_price_tool":
+            return build_final_price_preorder_event(answer, slots, call)
         # K1: the model emitted the order via present_order_preview_tool. Build the card
         # in code from that snapshot (never via the generic LLM template builder — it
         # cannot set isReadyToOrder / metadata.goodsId reliably). None → K2 slot fallback.
