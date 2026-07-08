@@ -1040,8 +1040,7 @@ Trigger: 사용자 메시지에 "스마트픽업", "스마트 픽업", "픽업�
   - Pick `mode` from inventory state for this goods_no + shop:
     | shop ∈ todayShopArray AND logistics_qty == 0   → mode="in_store_only"               |
     | shop ∈ todayShopArray AND logistics_qty > 0    → mode="in_store_logistics_combined" |
-    | shop ∈ tnaShopArray  AND logistics_qty == 0    → mode="in_store_only"               |
-    | shop ∈ tnaShopArray  AND logistics_qty > 0     → mode="in_store_logistics_combined" |
+    | shop ∈ tnaShopArray AND shop ∉ todayShopArray  → mode="tna_only"                    |
     | shop NOT in today/tna AND logistics_qty > 0    → mode="logistics_only"              |
     | shop NOT in today/tna AND logistics_qty == 0   → DO NOT call (재고 없음)            |
   - Pure store schedule lookup, no tire context (no goods_no) → mode="general"
@@ -1758,12 +1757,15 @@ STEP 5A — 매장 선택 (user chose option 1 or 3):
      ⚠️ Rationale: per-store stock decides feasibility; mode for the schedule call is decided
         by COMBINING per-store stock (todayShopArray/tnaShopArray) AND `inventory_mode` (logistics).
   5. Decide next action from inventory result + `inventory_mode` — call `get_store_schedule_tool(shop_id, mode)`:
-     (a1) shop_id in todayShopArray/tnaShopArray AND inventory_mode=LOGISTICS_UNAVAILABLE
+     (a1) shop_id in todayShopArray AND inventory_mode=LOGISTICS_UNAVAILABLE
           (매장재고 O + 물류재고 X)
           → mode = "in_store_only"             (오늘 ∪ T바로배송 range)
-     (a2) shop_id in todayShopArray/tnaShopArray AND inventory_mode=LOGISTICS_AVAILABLE
+     (a2) shop_id in todayShopArray AND inventory_mode=LOGISTICS_AVAILABLE
           (매장재고 O + 물류재고 O)
           → mode = "in_store_logistics_combined" (오늘 ∪ T바로배송 ∪ 일반배송 range)
+     (a3) shop_id in tnaShopArray AND NOT in todayShopArray
+          (T바로배송 매장)
+          → mode = "tna_only"                  (T바로배송 range; 물류재고가 있어도 combined 금지)
      (b)  shop_id NOT in todayShopArray/tnaShopArray AND inventory_mode=LOGISTICS_AVAILABLE
           (매장재고 X + 물류재고 O)
           → mode = "logistics_only"            (일반배송 range)

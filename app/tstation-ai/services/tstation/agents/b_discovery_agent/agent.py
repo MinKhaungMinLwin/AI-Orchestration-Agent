@@ -49,7 +49,7 @@ System may inject [확인된 고객 정보 - 이 정보는 다시 묻지 마세�
     1. IGNORE the confirmed tire_size completely. Do NOT pass it to `get_products_recommendations_tool`.
     2. If the user used negative-ownership phrasing with a car model name ("내차말고 G90/내 차 아닌 모델Y"),
        do NOT call `get_my_cars_tool` — go directly to **CAR MODEL DISPLAY** flow.
-       If the user used negative-ownership phrasing with a vehicle number only ("내차말고 29조3344"),
+       If the user used negative-ownership phrasing with a vehicle number only ("내차말고 09조8765"),
        ask for 차량번호 + 소유주명 and wait for owner name. Do NOT answer from stale vehicle context.
     3. If the user used possessive phrasing ("내 [차종]"), call `get_my_cars_tool` first. If the model matches
        a registered car → Possessive auto-match. If 0대 매칭 → delegate to **CAR MODEL DISPLAY** flow.
@@ -1636,7 +1636,7 @@ If the user names a car model (e.g., "G90", "그랜저 IG", "모델Y") that is N
 to `get_products_recommendations_tool`. Re-derive size for the new vehicle:
 - Negative-ownership phrasing ("내차말고/내차말구/내차말로/내 차 말고/내차 아닌/다른 차종/저장차 아닌/등록차 아닌") → skip
   `get_my_cars_tool` and go directly to **CAR MODEL DISPLAY** flow (차량 타입 추론 → vehicle_type 추천 + 사이즈 좁히기 안내) only when a car model name is present.
-  If the same negative-ownership message contains only a vehicle number (예: "내차말고 29조3344"), ask for 차량번호 + 소유주명 and wait.
+  If the same negative-ownership message contains only a vehicle number (예: "내차말고 09조8765"), ask for 차량번호 + 소유주명 and wait.
 - Possessive phrasing ("내 [차종]") → `get_my_cars_tool` 호출. Possessive auto-match 룰의 0대 매칭 분기는
   **CAR MODEL DISPLAY** flow 로 위임된다.
 - 차종명 단독 ("G90 타이어 추천") → 슬롯 무시. Flow A FIRST 분기의 "차종명만, 소유격 없음" 룰과 동일 — 바로 CAR MODEL DISPLAY 로 가지 말고 먼저 `get_my_cars_tool(mbr_no)` 로 등록 차량 중 일치 여부 확인 후, 매칭 0대일 때만 **CAR MODEL DISPLAY** flow로 fallback.
@@ -1701,7 +1701,7 @@ Choose exactly one branch before calling tools:
      → **2+대 매칭** (드물게 같은 모델 여러 대) → 매칭된 차량만 listCar 로 노출하고 선택 대기.
    - ⚠️ NEGATIVE OWNERSHIP — "내차말고/내차말구/내차말로/내 차 말고/내차 아닌/저장차 아닌/등록차 아닌/다른 차종" 등 부정어와 함께 차종명이 등장하면 (예: "내차말고 G90", "내차말로 GV70", "다른 차 그랜저 IG", "저장차 아닌 모델Y"):
      `get_my_cars_tool` 호출 **금지** — 사용자가 명시적으로 등록차를 배제했다. 즉시 **CAR MODEL DISPLAY 룰** 로 진입해 차량 타입 추론 → vehicle_type 추천 + 사이즈 좁히기 안내 한 번에 처리. 시스템이 stale 슬롯을 자동으로 비웠으므로 `[확인된 고객 정보 - 타이어 사이즈]` 가 남아있어도 **무시**하고 새 차종 기준으로 다시 안내한다.
-   - ⚠️ NEGATIVE OWNERSHIP + 차량번호 단독 (예: "내차말고 29조3344")은 CAR MODEL DISPLAY가 아니다. 차량번호만으로는 비등록 차량 규격을 확정할 수 없으므로 `차량번호 + 소유주명` 입력을 요청하고 STOP. 다음 턴에 소유주명만 오면 시스템이 차량번호와 결합해 `get_user_vehicles_tool` 경로로 연결한다.
+   - ⚠️ NEGATIVE OWNERSHIP + 차량번호 단독 (예: "내차말고 09조8765")은 CAR MODEL DISPLAY가 아니다. 차량번호만으로는 비등록 차량 규격을 확정할 수 없으므로 `차량번호 + 소유주명` 입력을 요청하고 STOP. 다음 턴에 소유주명만 오면 시스템이 차량번호와 결합해 `get_user_vehicles_tool` 경로로 연결한다.
    - If multiple cars are returned AND the user did not specify a car model name, let the system render listCar and wait for selection.
    - If one or more cars are returned, do not invent a tire size. Use returned tire_size_fr only after the user-selected/identified car is clear.
 

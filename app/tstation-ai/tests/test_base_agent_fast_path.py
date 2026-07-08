@@ -527,7 +527,7 @@ def test_registered_vehicle_recommendation_resolves_possessive_korean_model_alia
         "data": {
             "items": [
                 {
-                    "car_no": "29조3344",
+                    "car_no": "09조8765",
                     "car_lnc_cd": "W036270",
                     "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
                     "car_model_det": "제타(6세대) (2011 - 2016)",
@@ -554,7 +554,7 @@ def test_registered_vehicle_recommendation_args_keep_mileage_priority_over_famil
         "data": {
             "items": [
                 {
-                    "car_no": "29조3344",
+                    "car_no": "09조8765",
                     "car_lnc_cd": "W036270",
                     "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
                     "car_model_det": "제타(6세대) (2011 - 2016)",
@@ -612,7 +612,7 @@ def test_possessive_model_mismatch_defers_listcar_fast_path():
         "data": {
             "items": [
                 {
-                    "car_no": "29조3344",
+                    "car_no": "09조8765",
                     "car_lnc_cd": "W036270",
                     "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
                     "car_model_det": "제타(6세대) (2011 - 2016)",
@@ -637,7 +637,7 @@ def test_possessive_model_match_keeps_registered_vehicle_flow():
         "data": {
             "items": [
                 {
-                    "car_no": "29조3344",
+                    "car_no": "09조8765",
                     "car_lnc_cd": "W036270",
                     "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
                     "car_model_det": "제타(6세대) (2011 - 2016)",
@@ -669,7 +669,7 @@ def test_vehicle_resolved_recommendation_contract_keeps_listcar_fast_path(user_t
         "data": {
             "items": [
                 {
-                    "car_no": "29조3344",
+                    "car_no": "09조8765",
                     "car_lnc_cd": "W036270",
                     "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
                     "car_model_det": "제타(6세대) (2011 - 2016)",
@@ -714,7 +714,7 @@ def test_vehicle_based_recommendation_refinement_with_multiple_cars_keeps_listca
                     "tire_size_fr": "2355519",
                 },
                 {
-                    "car_no": "29조3344",
+                    "car_no": "09조8765",
                     "car_lnc_cd": "W036270",
                     "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
                     "car_model_det": "제타(6세대) (2011 - 2016)",
@@ -794,7 +794,7 @@ def test_try_code_template_keeps_listcar_for_contract_even_with_plain_text_respo
                             "tire_size_fr": "2355519",
                         },
                         {
-                            "car_no": "29조3344",
+                            "car_no": "09조8765",
                             "car_lnc_cd": "W036270",
                             "car_maker": "VOLKSWAGEN",
                             "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
@@ -873,7 +873,7 @@ def test_explicit_vehicle_list_request_detected() -> None:
 def test_owner_lookup_args_when_plate_not_in_registered_cars() -> None:
     tool_result = {
         "status": "success",
-        "data": {"items": [{"car_no": "29조3344", "tire_size_fr": "2254517"}]},
+        "data": {"items": [{"car_no": "09조8765", "tire_size_fr": "2254517"}]},
     }
 
     args = _vehicle_owner_lookup_args_after_registered_mismatch(

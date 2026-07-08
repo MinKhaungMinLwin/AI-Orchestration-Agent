@@ -11003,11 +11003,11 @@ def test_vehicle_auto_select_matches_exact_plate_from_listcar() -> None:
         "내 차 번호 205소 4214 알지? 맞는 타이어 보여줘.",
         {
             "listCar": [
-                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+                {"licensePlate": "09조8765", "info": "폭스바겐 제타"},
                 {"licensePlate": "205소4214", "info": "제네시스 GV70 2.5T"},
             ],
             "metadata": [
-                {"carNo": "29조3344", "carLncCd": "W036270", "tireSize": "205/55R16"},
+                {"carNo": "09조8765", "carLncCd": "W036270", "tireSize": "205/55R16"},
                 {"carNo": "205소4214", "carLncCd": "W049847", "tireSize": "235/55R19"},
             ],
         },
@@ -11022,11 +11022,11 @@ def test_vehicle_auto_select_does_not_hijack_unregistered_plate() -> None:
         "내 차 번호 999가9999 알지? 맞는 타이어 보여줘.",
         {
             "listCar": [
-                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+                {"licensePlate": "09조8765", "info": "폭스바겐 제타"},
                 {"licensePlate": "205소4214", "info": "제네시스 GV70 2.5T"},
             ],
             "metadata": [
-                {"carNo": "29조3344", "carLncCd": "W036270", "tireSize": "205/55R16"},
+                {"carNo": "09조8765", "carLncCd": "W036270", "tireSize": "205/55R16"},
                 {"carNo": "205소4214", "carLncCd": "W049847", "tireSize": "235/55R19"},
             ],
         },
@@ -13681,11 +13681,11 @@ def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:
         {
             "listCar": [
                 {"licensePlate": "205소4214", "info": "제네시스 GV70 2.5T"},
-                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+                {"licensePlate": "09조8765", "info": "폭스바겐 제타"},
             ],
             "metadata": [
                 {"carNo": "205소4214", "carLncCd": "W049847", "tireSize": "235/55R19"},
-                {"carNo": "29조3344", "carLncCd": "W036270", "tireSize": "205/55R16"},
+                {"carNo": "09조8765", "carLncCd": "W036270", "tireSize": "205/55R16"},
             ],
         },
     )
@@ -18346,11 +18346,11 @@ def test_history_tire_size_resolution_supports_ordinal_pick_for_same_size_vehicl
         "data": {
             "listCar": [
                 {"licensePlate": "11가1111", "info": "쏘나타"},
-                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+                {"licensePlate": "09조8765", "info": "폭스바겐 제타"},
             ],
             "metadata": [
                 {"carNo": "11가1111", "tireSize": "205/55R16", "tireSizeRe": "205/55R16"},
-                {"carNo": "29조3344", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"},
+                {"carNo": "09조8765", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"},
             ],
         },
     }
@@ -18366,11 +18366,11 @@ def test_history_vehicle_selection_resolves_model_name_pick() -> None:
         "data": {
             "listCar": [
                 {"licensePlate": "205소4214", "info": "제네시스 GV70 2.5T"},
-                {"licensePlate": "29조3344", "info": "폭스바겐 제타"},
+                {"licensePlate": "09조8765", "info": "폭스바겐 제타"},
             ],
             "metadata": [
                 {"carNo": "205소4214", "tireSize": "235/55R19", "tireSizeRe": "235/55R19"},
-                {"carNo": "29조3344", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"},
+                {"carNo": "09조8765", "tireSize": "225/45R17", "tireSizeRe": "225/45R17"},
             ],
         },
     }
@@ -18438,8 +18438,8 @@ def test_select_vehicle_ui_action_hydrates_label_when_metadata_lacks_reg_seq() -
     template = {
         "template": "listCar",
         "data": {
-            "listCar": [{"licensePlate": "29조3344", "info": "Volkswagen Jetta"}],
-            "metadata": [{"carNo": "29조3344", "carLncCd": "W036270", "tireSize": "225/45R17"}],
+            "listCar": [{"licensePlate": "09조8765", "info": "Volkswagen Jetta"}],
+            "metadata": [{"carNo": "09조8765", "carLncCd": "W036270", "tireSize": "225/45R17"}],
         },
     }
 
@@ -18448,9 +18448,9 @@ def test_select_vehicle_ui_action_hydrates_label_when_metadata_lacks_reg_seq() -
             "cta_action": "select_vehicle",
             "source_intent": "vehicle_resolved_recommendation",
             "expected_contract_intent": "vehicle_resolved_recommendation",
-            "entity_id": "29조3344",
+            "entity_id": "09조8765",
             "slots": {
-                "car_no": "29조3344",
+                "car_no": "09조8765",
                 "car_lnc_cd": "W036270",
                 "mbr_car_reg_seq": "2000003015",
                 "tire_size": "225/45R17",
@@ -18461,7 +18461,7 @@ def test_select_vehicle_ui_action_hydrates_label_when_metadata_lacks_reg_seq() -
 
     assert resolved is not None
     slot_values = _vehicle_selection_slot_values(resolved)
-    assert slot_values["car_no"] == "29조3344"
+    assert slot_values["car_no"] == "09조8765"
     assert slot_values["car_model"] == "Volkswagen Jetta"
 
 def test_chip_vehicle_selection_rejects_candidate_not_present_in_recent_listcar() -> None:
@@ -19965,14 +19965,14 @@ def test_preorder_event_uses_selected_vehicle_name_from_pending_context() -> Non
             "availability_context": {
                 "pending_order_context": {
                     "car_model": "Sorento",
-                    "car_no": "29조3344",
+                    "car_no": "09조8765",
                 }
             },
         },
     )
 
     assert preorder_event is not None
-    assert preorder_event["data"]["orderInfo"]["carInfo"] == "Sorento (29조3344)"
+    assert preorder_event["data"]["orderInfo"]["carInfo"] == "Sorento (09조8765)"
 
 
 def test_preorder_event_prefers_canonical_product_name_over_freeform_model_text() -> None:
@@ -26493,8 +26493,8 @@ def test_suv_passenger_tire_question_does_not_render_listcar() -> None:
         "source_domain": "discovery",
         "data": {
             "assistantResponse": "고객님, 등록된 차량 1대입니다. 차량을 선택해 주세요.",
-            "listCar": [{"licensePlate": "29조3344", "info": "폭스바겐 제타"}],
-            "metadata": [{"carNo": "29조3344", "carLncCd": "W036270"}],
+            "listCar": [{"licensePlate": "09조8765", "info": "폭스바겐 제타"}],
+            "metadata": [{"carNo": "09조8765", "carLncCd": "W036270"}],
         },
     }
 
@@ -28560,7 +28560,7 @@ def test_non_self_car_negation_handles_common_typos(text: str) -> None:
 
 
 def test_non_self_vehicle_plate_only_prompts_for_owner_lookup() -> None:
-    event = _non_self_vehicle_plate_owner_lookup_prompt_event("내차말고 29조3344")
+    event = _non_self_vehicle_plate_owner_lookup_prompt_event("내차말고 09조8765")
 
     assert event is not None
     assert event["template"] == "quickReply"
@@ -29381,37 +29381,37 @@ def test_english_order_cta_confirms_ready_preorder() -> None:
     assert frame.missing_slots == ()
 
 def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name() -> None:
-    assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344") == "29조3344"
-    assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344 홍길동") is None
-    assert _should_reuse_pending_vehicle_lookup_car_no(None, "홍길동", "29조3344") is True
+    assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 09조8765") == "09조8765"
+    assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 09조8765 홍길동") is None
+    assert _should_reuse_pending_vehicle_lookup_car_no(None, "홍길동", "09조8765") is True
 
 
 def test_vehicle_plate_only_owner_clarification_event_asks_for_plate_and_owner_name() -> None:
-    plate = chat_module._vehicle_plate_only_value("29조 3344")
+    plate = chat_module._vehicle_plate_only_value("09조 8765")
     event = chat_module._build_vehicle_plate_owner_clarification_event(plate or "")
 
-    assert plate == "29조3344"
+    assert plate == "09조8765"
     assert event["template"] == "quickReply"
     assert event["assistant_response_source"] == "code_vehicle_plate_owner_clarification"
     assistant = event["data"]["assistantResponse"]
     labels = _labels(event["data"]["quickReplies"])
-    assert "차량번호 **29조3344**" in assistant
+    assert "차량번호 **09조8765**" in assistant
     assert "차량번호와 이름을 같이 알려주시면" in assistant
     assert "해당 차량 기준으로 타이어 검색" in assistant
-    assert "29조3344 홍길동" in assistant
+    assert "09조8765 홍길동" in assistant
     assert "정민경 고객님" not in assistant
     assert "어떤 종류의 타이어" not in assistant
     assert labels == ["타이어 사이즈로 찾기", "내 등록 차량 보기", "처음으로"]
 
 
 def test_vehicle_plate_only_guard_does_not_apply_in_vehicle_selection_context() -> None:
-    latest_listcar = {"template": "listCar", "data": {"cars": [{"licensePlate": "29조3344"}]}}
+    latest_listcar = {"template": "listCar", "data": {"cars": [{"licensePlate": "09조8765"}]}}
     latest_quickreply = {
         "template": "quickReply",
         "data": {"assistantResponse": "추천받으실 차량을 선택해 주세요."},
     }
 
-    assert chat_module._vehicle_plate_only_value("29조3344") == "29조3344"
+    assert chat_module._vehicle_plate_only_value("09조8765") == "09조8765"
     assert chat_module._has_vehicle_selection_context(
         latest_listcar_tmpl=latest_listcar,
         latest_quickreply_tmpl=None,
@@ -29425,11 +29425,11 @@ def test_vehicle_plate_only_guard_does_not_apply_in_vehicle_selection_context() 
 
 
 def test_vehicle_owner_lookup_normalizes_both_orders_without_treating_non_self_prefix_as_name() -> None:
-    assert _normalize_vehicle_owner_lookup_text("29조3344 홍길동") == "29조3344 홍길동"
-    assert _normalize_vehicle_owner_lookup_text("홍길동 29조3344") == "29조3344 홍길동"
-    assert _normalize_vehicle_owner_lookup_text("내차말고 29조3344") is None
-    assert _normalize_vehicle_owner_lookup_text("내차말고 29조3344 홍길동") == "29조3344 홍길동"
-    assert _normalize_vehicle_owner_lookup_text("내차말고 홍길동 29조3344") == "29조3344 홍길동"
+    assert _normalize_vehicle_owner_lookup_text("09조8765 홍길동") == "09조8765 홍길동"
+    assert _normalize_vehicle_owner_lookup_text("홍길동 09조8765") == "09조8765 홍길동"
+    assert _normalize_vehicle_owner_lookup_text("내차말고 09조8765") is None
+    assert _normalize_vehicle_owner_lookup_text("내차말고 09조8765 홍길동") == "09조8765 홍길동"
+    assert _normalize_vehicle_owner_lookup_text("내차말고 홍길동 09조8765") == "09조8765 홍길동"
 
 
 # --------------------------------------------------------------------------- #
@@ -30732,7 +30732,7 @@ def test_purchase_flow_state_pending_context_preserves_vehicle_label() -> None:
             "tire_size": "225/45R17",
             "ord_qty": 4,
             "car_model": "Sorento",
-            "car_no": "29조3344",
+            "car_no": "09조8765",
             "pending_intent": "order",
             "goal_type": "place_order",
         },
@@ -30747,7 +30747,7 @@ def test_purchase_flow_state_pending_context_preserves_vehicle_label() -> None:
 
     context = result.state.to_pending_order_context()
     assert context["car_model"] == "Sorento"
-    assert context["car_no"] == "29조3344"
+    assert context["car_no"] == "09조8765"
     assert context["shop_id"] == "F00721"
 
 
@@ -38912,7 +38912,7 @@ def test_quick_order_action_payload_normalizes_legacy_preorder_metadata() -> Non
         "metadata": {
             "goodsId": "G000000317682",
             "shopId": "F00721",
-            "carNo": "29조3344",
+            "carNo": "09조8765",
             "carLncCd": "W036270",
         },
     }
@@ -38935,7 +38935,7 @@ def test_quick_order_action_payload_normalizes_legacy_preorder_metadata() -> Non
     assert normalized["ord_qty"] == 2
     assert normalized["requested_cal_day"] == "20260623"
     assert normalized["rsv_hour"] == "17"
-    assert normalized["car_no"] == "29조3344"
+    assert normalized["car_no"] == "09조8765"
     assert normalized["car_lnc_cd"] == "W036270"
 
 
@@ -39172,7 +39172,7 @@ def test_direct_preorder_event_builds_ready_card_from_selected_schedule_slots() 
         requested_cal_day="20260623",
         rsv_hour="17",
         payment_amount=314400,
-        car_no="29조3344",
+        car_no="09조8765",
         car_model="쏘렌토",
         car_lnc_cd="W036270",
         pending_intent="order",
@@ -39187,7 +39187,7 @@ def test_direct_preorder_event_builds_ready_card_from_selected_schedule_slots() 
     assert event["data"]["isReadyToOrder"] is True
     assert event["data"]["isReadyToAddToCart"] is False
     assert event["data"]["orderInfo"] == {
-        "carInfo": "쏘렌토 (29조3344)",
+        "carInfo": "쏘렌토 (09조8765)",
         "product": "다이나프로 HPX 235/55R19",
         "quantity": 2,
         "storeName": "티스테이션 판교점",

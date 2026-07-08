@@ -176,6 +176,19 @@ def _status_reason(
     return "tool_success_with_template"
 
 
+def _error_reason(status_reason: str) -> str:
+    if status_reason in {
+        "tool_error",
+        "runtime_error",
+        "tool_no_results",
+        "fallback_response",
+        "quick_reply_fallback",
+        "qc_corrected",
+    }:
+        return status_reason
+    return "none"
+
+
 def _classify_status(
     *,
     tool_calls: list[dict[str, Any]],
@@ -256,6 +269,7 @@ def build_customer_monitoring(
         "final_template": final_template,
         "final_status": final_status,
         "status_reason": status_reason,
+        "error_reason": _error_reason(status_reason),
         "tool_errors": tool_errors,
         "no_result_tools": no_result_tools,
         "fallback_used": fallback_used,

@@ -20,6 +20,7 @@ from services.tstation.policies.flow_state import (
 from services.tstation.policies.intent_frame import PolicyDomain
 from services.tstation.policies.router_intent_schema import OUT_OF_SCOPE_INTENT, UNCLEAR_INTENT, UNSUPPORTED_INTENT
 from services.tstation.policies.tool_arg_schema import (
+    canonicalize_schedule_mode_for_inventory,
     canonicalize_tool_args_patch,
     should_use_known_slots_for_tool_args,
 )
@@ -537,7 +538,11 @@ def _contract_required_selected_store_schedule_tool_input(
         schedule_mode = schedule_mode or "general"
     if not shop_id or not schedule_mode:
         return {}
-    return {"shop_id": shop_id, "mode": schedule_mode}
+    return canonicalize_schedule_mode_for_inventory(
+        preferred_tool="get_store_schedule_tool",
+        tool_args={"shop_id": shop_id, "mode": schedule_mode},
+        known_slots=known_slots,
+    )
 
 
 def _is_contract_required_stock_inventory_selected_store(

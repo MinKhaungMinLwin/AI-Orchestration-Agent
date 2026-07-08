@@ -74,7 +74,7 @@ def test_n2_suv_passenger_compatibility_stays_advice() -> None:
 
 
 def test_n3_negative_ownership_plate_only_prompts_for_owner() -> None:
-    event = _non_self_vehicle_plate_owner_lookup_prompt_event("내차말고 29조3344")
+    event = _non_self_vehicle_plate_owner_lookup_prompt_event("내차말고 09조8765")
 
     assert event is not None
     assert event["template"] == "quickReply"
