@@ -5,7 +5,6 @@ Turn pipeline (all decisions LLM-made, zero regex):
                                  → pass:  tool loop → QC → quick replies
 """
 
-import contextlib
 import json
 import logging
 import time
@@ -95,18 +94,13 @@ def _flush_trace() -> None:
         logger.debug("[CHAT_V3] Langfuse flush failed", exc_info=True)
 
 
-def _close_trace_context(parent_context, parent_span) -> None:
-    if parent_span is not None:
-        with contextlib.suppress(Exception):
-            parent_span.end()
-    if parent_context is not None:
-        with contextlib.suppress(Exception):
-            parent_context.__exit__(None, None, None)
-
-
 def _update_trace_monitoring(
     *,
     trace_observation=None,
+    trace_id: str | None = None,
+    parent_span_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
     route_domains: list[str],
     tool_calls: list[dict],
     final_template: str,
@@ -134,6 +128,38 @@ def _update_trace_monitoring(
         trace_update["output"] = truncate_for_trace(answer)
     if trace_observation is not None:
         safe_trace_update(trace_observation, trace=True, **trace_update)
+    if trace_id:
+        trace_context = {"trace_id": trace_id}
+        if parent_span_id:
+            trace_context["parent_span_id"] = parent_span_id
+        try:
+            event = tracer.create_event(
+                trace_context=trace_context,
+                name="customer_monitoring",
+                input=truncate_for_trace(user_text) if user_text is not None else None,
+                output={
+                    "final_status": monitoring_payload["metadata"].get("final_status"),
+                    "primary_domain": monitoring_payload["metadata"].get("primary_domain"),
+                    "primary_af": monitoring_payload["metadata"].get("primary_af"),
+                    "primary_tool": monitoring_payload["metadata"].get("primary_tool"),
+                    "final_template": final_template,
+                },
+                metadata={
+                    **monitoring_payload["metadata"],
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "trace_id": trace_id,
+                    "tags": monitoring_payload["tags"],
+                    "assistant_response": truncate_for_trace(answer) if answer is not None else None,
+                },
+            )
+            event.score_trace(
+                name="customer_final_status",
+                value=monitoring_payload["metadata"].get("final_status") or "unknown",
+                data_type="CATEGORICAL",
+            )
+        except Exception:
+            logger.debug("[CHAT_V3] Langfuse customer monitoring event failed", exc_info=True)
     try:
         tracer.update_current_trace(**trace_update)
     except Exception:
@@ -146,19 +172,16 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     set_tstation_origin_host(request.origin_host)
     user_text = context.last_user_text(request)
     set_trace_name(user_text[:60] if user_text else "chat_v3")
-    parent_context = None
     parent_span = None
     parent_span_id = None
     if _tracing_enabled:
         try:
-            parent_context = tracer.start_as_current_span(
+            parent_span = tracer.start_span(
                 name="chat_v3",
                 trace_context={"trace_id": request.tracing_id},
                 input=truncate_for_trace(user_text),
                 metadata={"runtime": "chat_v3"},
-                end_on_exit=False,
             )
-            parent_span = parent_context.__enter__()
             parent_span_id = parent_span.id
             safe_trace_update(
                 parent_span,
@@ -211,13 +234,18 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             route_domains=[(decision.domain.value if decision else "LEADING")],
             tool_calls=[],
             final_template="quickReply",
+            trace_id=request.tracing_id,
+            parent_span_id=parent_span_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
             answer=guard_text,
             user_text=user_text,
             fallback_used=False,
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
         )
-        _close_trace_context(parent_context, parent_span)
+        if parent_span is not None:
+            parent_span.end()
         _flush_trace()
         return
 
@@ -391,6 +419,10 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         route_domains=domains,
         tool_calls=executor.tool_calls,
         final_template=final_template,
+        trace_id=request.tracing_id,
+        parent_span_id=parent_span_id,
+        session_id=request.session_id,
+        user_id=request.user_id,
         answer=answer,
         user_text=user_text,
         fallback_used=fallback_used,
@@ -398,7 +430,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         latency_ms=int((time.perf_counter() - t0) * 1000),
         trace_observation=parent_span,
     )
-    _close_trace_context(parent_context, parent_span)
+    if parent_span is not None:
+        parent_span.end()
     _flush_trace()
 
 
