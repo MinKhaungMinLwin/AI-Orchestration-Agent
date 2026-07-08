@@ -533,7 +533,57 @@ def canonicalize_tool_args_patch(
             patch[arg_name] = value
         elif rule.default is not _UNSET:
             patch[arg_name] = rule.default
+    patch = canonicalize_schedule_mode_for_inventory(preferred_tool=tool_name, tool_args=patch, known_slots=slots)
     return {key: value for key, value in patch.items() if _present(value)}
+
+
+def _shop_ids_from_rows(rows: Any) -> set[str]:
+    if not isinstance(rows, list):
+        return set()
+    result: set[str] = set()
+    for row in rows:
+        if isinstance(row, Mapping):
+            shop_id = str(row.get("shop_id") or row.get("shopId") or row.get("store_id") or "").strip()
+        else:
+            shop_id = str(row or "").strip()
+        if shop_id:
+            result.add(shop_id)
+    return result
+
+
+def _inventory_shop_ids(known_slots: Mapping[str, Any], key: str) -> set[str]:
+    snake_key = "today_shop_ids" if key == "todayShopArray" else "tna_shop_ids"
+    values = _shop_ids_from_rows(known_slots.get(key)) | _shop_ids_from_rows(known_slots.get(snake_key))
+    for container_key in ("inventory", "store_inventory", "preview_inventory"):
+        container = known_slots.get(container_key)
+        if isinstance(container, Mapping):
+            values |= _shop_ids_from_rows(container.get(key))
+            values |= _shop_ids_from_rows(container.get(snake_key))
+    return values
+
+
+def canonicalize_schedule_mode_for_inventory(
+    *,
+    preferred_tool: str | None,
+    tool_args: Mapping[str, Any] | None,
+    known_slots: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Correct single-store schedule mode when inventory tier evidence is present."""
+
+    patch = {str(key): value for key, value in dict(tool_args or {}).items() if _present(value)}
+    if str(preferred_tool or "").strip() != "get_store_schedule_tool":
+        return patch
+    shop_id = str(patch.get("shop_id") or "").strip()
+    if not shop_id:
+        return patch
+    slots = known_slots or {}
+    today_ids = _inventory_shop_ids(slots, "todayShopArray")
+    tna_ids = _inventory_shop_ids(slots, "tnaShopArray")
+    if shop_id in today_ids:
+        return patch
+    if shop_id in tna_ids:
+        patch["mode"] = "tna_only"
+    return patch
 
 
 def should_use_known_slots_for_tool_args(

@@ -19,6 +19,7 @@ from services.tstation.policies.store_service_gate import (
     has_store_service_availability_signal,
     normalize_store_service_request,
 )
+from services.tstation.policies.tool_arg_schema import canonicalize_schedule_mode_for_inventory
 
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
@@ -2006,10 +2007,14 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             return ToolPlan(
                 allowed_tools=("get_store_schedule_tool",),
                 preferred_tool="get_store_schedule_tool",
-                tool_args_patch={
-                    "shop_id": str(frame.known_slots["shop_id"]),
-                    "mode": selected_store_schedule_mode,
-                },
+                tool_args_patch=canonicalize_schedule_mode_for_inventory(
+                    preferred_tool="get_store_schedule_tool",
+                    tool_args={
+                        "shop_id": str(frame.known_slots["shop_id"]),
+                        "mode": selected_store_schedule_mode,
+                    },
+                    known_slots=frame.known_slots,
+                ),
                 forbidden_tools=(
                     "transaction_store_preview_tool",
                     "get_store_inventory_tool",
