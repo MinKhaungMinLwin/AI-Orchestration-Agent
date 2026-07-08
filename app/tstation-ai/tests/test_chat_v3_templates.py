@@ -215,6 +215,32 @@ class _FakeShortProductRouterLLM:
         return _wrap_relevant(_FakeShortProductStructuredLLM())
 
 
+def test_plain_store_search_does_not_emit_location_template(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
+    tool_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "C01410",
+                    "shop_nm": "티스테이션 안양호계점",
+                    "addr_base": "경기도 안양시 동안구",
+                    "addr_dtl": "귀인로 76 (호계동)",
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "경기권 보관서비스 매장입니다.",
+            [{"name": "get_store_list_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is None
+
+
 def test_location_template_normalizes_store_name_and_address_from_tool_output(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
     tool_output = {
@@ -235,6 +261,7 @@ def test_location_template_normalizes_store_name_and_address_from_tool_output(mo
         templates.build_rich_data_event(
             "경기권 보관서비스 매장입니다.",
             [{"name": "get_store_list_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+            slots=ConversationSlots(goods_no="G000000309783", ord_qty=2, pending_intent="order"),
         )
     )
 

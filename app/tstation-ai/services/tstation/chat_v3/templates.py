@@ -1338,6 +1338,9 @@ async def build_rich_data_event(
             answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
         )
     if template_name == "location":
+        if not _is_booking_location_context(slots):
+            logger.info("[CHAT_V3] location template skipped — plain store search context")
+            return None
         return build_location_data_event(answer, call, slots)
     if template_name == "datepick" and call.get("name") == "get_store_schedule_tool":
         event = _get_store_schedule_datepick_event(answer, call, slots)
