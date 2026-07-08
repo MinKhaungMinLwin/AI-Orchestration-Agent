@@ -15,6 +15,26 @@ logger = logging.getLogger(__name__)
 
 _DOMAINS = {"LEADING", "DISCOVERY", "TRANSACTION", "SUPPORT"}
 
+# CALL actions are dead-ends: the bot cannot place calls and has no reliable
+# store/support phone numbers. Only call-intent labels are blocked — chips
+# about managing a phone number ("전화번호 변경" 등) stay allowed.
+_BLOCKED_CALL_PHRASES = (
+    "전화 문의",
+    "전화문의",
+    "전화 연결",
+    "전화연결",
+    "전화하기",
+    "전화 걸기",
+    "전화걸기",
+    "통화 연결",
+    "통화하기",
+)
+
+
+def _is_blocked_label(label: str) -> bool:
+    normalized = label.strip()
+    return any(phrase in normalized for phrase in _BLOCKED_CALL_PHRASES)
+
 
 class QuickReplyChip(BaseModel):
     label: str = Field(description="버튼 라벨 (한국어, 12자 이내)")
@@ -37,7 +57,7 @@ async def suggest_quick_replies(user_text: str, answer: str, trace_config: dict 
         return [
             {"label": chip.label, "domain": chip.domain}
             for chip in suggestion.quick_replies
-            if chip.label and chip.domain in _DOMAINS
+            if chip.label and chip.domain in _DOMAINS and not _is_blocked_label(chip.label)
         ]
     except Exception:
         logger.exception("[CHAT_V3] quick reply suggestion failed")
