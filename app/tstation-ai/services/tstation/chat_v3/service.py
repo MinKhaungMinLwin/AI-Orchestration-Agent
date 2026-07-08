@@ -18,6 +18,7 @@ from services.tstation.chat_v3.executor import ToolLoopExecutor
 from services.tstation.chat_v3.prompts.persona import ERROR_RESPONSE, SYSTEM_PROMPT, TRANSACTION_WRITE_GUIDANCE
 from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
+from services.tstation.chat_v3.slots.derive import apply_fe_slots, derive_slots_from_tool_calls
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
@@ -77,6 +78,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
 
     slots = await load_slots(request.session_id)
     slots = apply_patch(slots, decision.slots_patch if decision else None)
+    slots = apply_fe_slots(slots, request)  # card-click payload: goods_no/shop_id/…
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
 
@@ -144,6 +146,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     for event in sse.done():
         yield event
 
+    slots = derive_slots_from_tool_calls(slots, executor.tool_calls)
     await save_slots(request.session_id, slots, user_id=request.user_id)
     await memory.persist_turn_context(
         request.session_id,
