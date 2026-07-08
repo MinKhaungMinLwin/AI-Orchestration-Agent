@@ -49,7 +49,9 @@ for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
 from services.tstation.agents.templates.schemas import DatepickTemplate, LocationTemplate  # noqa: E402
+from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from schemas.tstation.slots import ConversationSlots  # noqa: E402
+from services.tstation.chat_v3 import service  # noqa: E402
 from services.tstation.chat_v3 import templates  # noqa: E402
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
 
@@ -82,6 +84,22 @@ class _FakeStructuredLLM:
 class _FakeRouterLLM:
     def with_structured_output(self, model, method):
         return _FakeStructuredLLM()
+
+
+class _FakeToolLoopExecutor:
+    def __init__(self, *args, **kwargs):
+        self.final_text = "Ready to confirm this order."
+        self.tool_calls = [
+            {
+                "name": "get_cheapest_price_tool",
+                "args": {},
+                "output": json.dumps({"status": "success", "data": {"cheapest_final_prc": 77050}}),
+            }
+        ]
+
+    async def stream(self):
+        if False:
+            yield None
 
 
 class _FakeDatepickStructuredLLM:
@@ -271,6 +289,75 @@ def test_preorder_fallback_builds_ready_order_card_from_slots():
     assert event["data"]["metadata"]["goodsId"] == "G000000309783"
     assert event["data"]["orderInfo"]["storeName"] == "티스테이션 한남점"
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
+
+
+async def _collect_turn_events(request: TStationChatRequest) -> list[str]:
+    events = []
+    async for event in service._run_turn(request, {}):  # noqa: SLF001
+        events.append(event)
+    return events
+
+
+def _parse_sse_event(event: str) -> dict:
+    payload = event.removeprefix("data: ").strip()
+    return json.loads(payload) if payload.startswith("{") else {}
+
+
+def test_ready_preorder_takes_priority_over_generic_price_template(monkeypatch):
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(
+            domain=Domain.TRANSACTION,
+            intents=["place_order"],
+            slots_patch={"rsv_hour": "14"},
+        )
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots(
+            goods_no="G000000309783",
+            tire_model="Ventus S2 AS",
+            tire_size="245/45R19",
+            ord_qty=2,
+            shop_id="F00721",
+            shop_name="T-Station Hannam",
+            requested_cal_day="20260708",
+            rsv_hour="14",
+            payment_amount=154100,
+            pending_intent="order",
+            goal_type="place_order",
+        )
+
+    async def fake_verify_answer(answer, *args, **kwargs):
+        return answer
+
+    async def fake_build_rich_data_event(*args, **kwargs):
+        raise AssertionError("generic rich template should not run when preOrder is ready")
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", _FakeToolLoopExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service.templates, "build_rich_data_event", fake_build_rich_data_event)
+    monkeypatch.setattr(service, "save_slots", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "order"}],
+        user_id="test-user",
+        session_id="test-ready-preorder-priority",
+    )
+
+    events = asyncio.run(_collect_turn_events(request))
+    data_events = [_parse_sse_event(event) for event in events if event.startswith("data: {")]
+    templates_seen = [event.get("template") for event in data_events if event.get("type") == "data"]
+
+    assert "preOrder" in templates_seen
+    assert "cheapestProduct" not in templates_seen
 
 
 def test_preorder_fallback_skips_irrelevant_followup_even_with_ready_slots():
