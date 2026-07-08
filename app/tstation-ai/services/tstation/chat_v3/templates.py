@@ -673,6 +673,10 @@ def _format_korean_date(value: object) -> str:
     text = str(value or "").strip()
     if len(text) == 8 and text.isdigit():
         return f"{text[:4]}년 {text[4:6]}월 {text[6:8]}일"
+    if len(text) == 10 and text[4] == "-" and text[7] == "-":
+        year, month, day = text.split("-", 2)
+        if len(year) == 4 and len(month) == 2 and len(day) == 2 and year.isdigit() and month.isdigit() and day.isdigit():
+            return f"{year}년 {month}월 {day}일"
     return text
 
 
