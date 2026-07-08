@@ -638,6 +638,68 @@ def _normalize_product_payload(payload: BaseModel, tool_output: str) -> None:
         product.smrtPayYn = _get_str(row, "smrt_pay_yn", "smrtPayYn")
 
 
+def _product_selection_contract_intent(slots: ConversationSlots | None) -> str:
+    if slots is not None and (slots.pending_intent == "stock" or slots.goal_type == "store_with_stock"):
+        return "stock_store_search"
+    return "quick_order_reservation"
+
+
+def _normalize_product_selection_payload(payload: BaseModel, slots: ConversationSlots | None = None) -> None:
+    if not _is_booking_location_context(slots):
+        return
+    products = getattr(payload, "products", None)
+    metadata = getattr(payload, "metadata", None)
+    if not isinstance(products, list) or not isinstance(metadata, list):
+        return
+    if len(products) != len(metadata):
+        return
+
+    payload.isBookingFlow = True
+    expected_intent = _product_selection_contract_intent(slots)
+    for product, meta in zip(products, metadata):
+        if not isinstance(meta, ProductMeta):
+            continue
+        goods_no = str(meta.goodsId or meta.goodsNo or meta.goods_no or "").strip()
+        product_name = str(getattr(product, "titleProductName", None) or getattr(product, "title", None) or "").strip()
+        tire_size = str(getattr(product, "titleTires", None) or getattr(product, "tires", None) or "").strip()
+        slots_payload = {"goods_no": goods_no}
+        if product_name:
+            slots_payload.update({
+                "product_name": product_name,
+                "tire_model": product_name,
+                "pending_product_name": product_name,
+            })
+        if tire_size:
+            slots_payload["tire_size"] = tire_size
+
+        meta.goodsNo = goods_no
+        meta.goods_no = goods_no
+        meta.productName = product_name or None
+        meta.product_name = product_name or None
+        meta.tireSize = tire_size or None
+        meta.tire_size = tire_size or None
+        meta.domain = meta.domain or "TRANSACTION"
+        meta.cta_action = "select_product"
+        meta.fills_slot = "product"
+        meta.entity_id = meta.entity_id or goods_no
+        meta.source_intent = meta.source_intent or expected_intent
+        meta.expected_contract_intent = meta.expected_contract_intent or expected_intent
+        meta.expected_behavior = meta.expected_behavior or "slot_fill"
+        meta.slots = slots_payload
+        meta.ui_action = {
+            "action_type": "select_product",
+            "cta_action": "select_product",
+            "fills_slot": "product",
+            "expected_behavior": meta.expected_behavior,
+            "source_intent": meta.source_intent,
+            "expected_contract_intent": meta.expected_contract_intent,
+            "entity_type": "product",
+            "entity_id": goods_no,
+            "entity_label": product_name or None,
+            "slots": slots_payload,
+        }
+
+
 def _join_address(*parts: object) -> str:
     return " ".join(str(part).strip() for part in parts if str(part or "").strip())
 
@@ -902,6 +964,7 @@ async def build_rich_data_event(
             payload.assistantResponse = answer
         if template_name == "product":
             _normalize_product_payload(payload, str(call["output"]))
+            _normalize_product_selection_payload(payload, slots)
         if template_name == "location":
             _normalize_location_payload(payload, str(call["output"]))
             payload.isBookingFlow = _is_booking_location_context(slots)
