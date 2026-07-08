@@ -15,7 +15,7 @@ from config.env import settings
 from config.tracing import build_trace_config, set_trace_name, tracer
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
-from services.tstation.chat_v3 import composer, context, memory, qc, sse, templates
+from services.tstation.chat_v3 import composer, context, memory, monitoring, qc, sse, templates
 from services.tstation.chat_v3.executor import ToolLoopExecutor
 from services.tstation.chat_v3.prompts.persona import (
     ERROR_RESPONSE,
@@ -91,6 +91,31 @@ def _flush_trace() -> None:
         logger.debug("[CHAT_V3] Langfuse flush failed", exc_info=True)
 
 
+def _update_trace_monitoring(
+    *,
+    route_domains: list[str],
+    tool_calls: list[dict],
+    final_template: str,
+    fallback_used: bool = False,
+    qc_corrected: bool = False,
+    runtime_error: bool = False,
+    latency_ms: int | None = None,
+) -> None:
+    monitoring_payload = monitoring.build_customer_monitoring(
+        route_domains=route_domains,
+        tool_calls=tool_calls,
+        final_template=final_template,
+        fallback_used=fallback_used,
+        qc_corrected=qc_corrected,
+        runtime_error=runtime_error,
+        latency_ms=latency_ms,
+    )
+    try:
+        tracer.update_current_trace(**monitoring_payload)
+    except Exception:
+        logger.debug("[CHAT_V3] Langfuse customer monitoring update failed", exc_info=True)
+
+
 async def _run_turn(request: TStationChatRequest, result: dict):
     t0 = time.perf_counter()
     set_tstation_be_token(request.access_token)
@@ -132,6 +157,13 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         )
         for event in sse.done():
             yield event
+        _update_trace_monitoring(
+            route_domains=[(decision.domain.value if decision else "LEADING")],
+            tool_calls=[],
+            final_template="quickReply",
+            fallback_used=False,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+        )
         _flush_trace()
         return
 
@@ -197,6 +229,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             tags=["qc"],
         ),
     )
+    qc_corrected = corrected != answer
     if corrected != answer:
         yield sse.sse({"type": "qc_correction", "assistantResponse": corrected})
         answer = corrected
@@ -230,14 +263,18 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         answer = templates.ensure_quantity_options(answer, slots, decision)
         token_events = []
     result["answer"] = answer
+    final_template = "quickReply"
+    fallback_used = bool(quantity_chips)
     if (rich_event or preorder_event or {}).get("template") != "preOrder":
         for event in token_events:
             yield event
         yield sse.message(answer)
     if rich_event:
+        final_template = str(rich_event.get("template") or "")
         predicted_domains = [domain]
         yield sse.sse({**rich_event, "source_domain": domain})
     elif preorder_event:
+        final_template = str(preorder_event.get("template") or "preOrder")
         predicted_domains = ["TRANSACTION"]
         yield sse.sse({**preorder_event, "source_domain": domain})
     else:
@@ -285,6 +322,14 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         (t_tools - t_route) * 1000,
         (time.perf_counter() - t0) * 1000,
     )
+    _update_trace_monitoring(
+        route_domains=domains,
+        tool_calls=executor.tool_calls,
+        final_template=final_template,
+        fallback_used=fallback_used,
+        qc_corrected=qc_corrected,
+        latency_ms=int((time.perf_counter() - t0) * 1000),
+    )
     _flush_trace()
 
 
@@ -305,6 +350,13 @@ async def _run_turn_safe(request: TStationChatRequest, result: dict):
         )
         for event in sse.done():
             yield event
+        _update_trace_monitoring(
+            route_domains=["UNKNOWN"],
+            tool_calls=[],
+            final_template="quickReply",
+            fallback_used=False,
+            runtime_error=True,
+        )
         _flush_trace()
 
 
