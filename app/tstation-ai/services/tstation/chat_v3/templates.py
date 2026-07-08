@@ -20,6 +20,7 @@ from services.tstation.agents.templates.schemas import (
     OrderCompleteTemplate,
     PreOrderTemplate,
     ProductTemplate,
+    QnaCompleteTemplate,
 )
 from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.templates import TEMPLATE_BUILDER_PROMPT
@@ -91,6 +92,61 @@ def _pick_source(tool_calls: list[dict]) -> tuple[str, type[BaseModel], dict] | 
         if entry and not output.startswith("Tool error") and _has_rows(output):
             return entry[0], entry[1], call
     return None
+
+
+def _parse_tool_output(output: object) -> dict[str, Any]:
+    if isinstance(output, dict):
+        return output
+    try:
+        parsed = json.loads(str(output or ""))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _latest_tool_output(tool_calls: list[dict], tool_name: str) -> dict[str, Any]:
+    for call in reversed(tool_calls):
+        if call.get("name") == tool_name:
+            return _parse_tool_output(call.get("output"))
+    return {}
+
+
+def _answer_without_urls(answer: str) -> str:
+    lines = []
+    for line in str(answer or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if "http://" in line or "https://" in line:
+            continue
+        cleaned = line.strip()
+        if cleaned:
+            lines.append(cleaned)
+    return compact_answer_spacing("\n".join(lines))
+
+
+def build_qna_complete_event(answer: str, tool_calls: list[dict]) -> dict | None:
+    """Build qnaComplete directly from transfer_to_qna_tool output."""
+    raw = _latest_tool_output(tool_calls, "transfer_to_qna_tool")
+    if not raw or raw.get("status") != "success":
+        return None
+    redict_link = raw.get("redictLink") or raw.get("redict_link")
+    if not isinstance(redict_link, dict) or not redict_link.get("pc") or not redict_link.get("mobile"):
+        return None
+
+    title = str(raw.get("inq_tit_nm") or "1:1 문의").strip()
+    summary = str(raw.get("ai_summary") or title).strip()
+    assistant_response = _answer_without_urls(answer) or summary
+    payload = QnaCompleteTemplate(
+        assistantResponse=assistant_response,
+        redictLink=redict_link,
+        cnslType=str(raw.get("cnsl_clss_seq") or "1:1"),
+        title=title,
+        summary=summary,
+    )
+    return {
+        "type": "data",
+        "template": "qnaComplete",
+        "data": payload.model_dump(mode="json", exclude_none=True),
+        "source_tool": "transfer_to_qna_tool",
+    }
 
 
 def _store_rows_from_output(output: str) -> list[dict[str, Any]]:

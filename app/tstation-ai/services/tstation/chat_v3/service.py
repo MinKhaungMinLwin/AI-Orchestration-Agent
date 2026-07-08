@@ -109,12 +109,15 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         answer = corrected
     answer = templates.format_location_answer(answer, executor.tool_calls)
     answer = templates.compact_answer_spacing(answer)
+    qna_event = templates.build_qna_complete_event(answer, executor.tool_calls)
+    if qna_event:
+        answer = qna_event["data"]["assistantResponse"]
 
     result["answer"] = answer
     yield sse.message(answer)
     chips: list[dict] = []
     quantity_chips = templates.quantity_quick_replies(answer)
-    rich_event = None if quantity_chips else await templates.build_rich_data_event(answer, executor.tool_calls)
+    rich_event = qna_event or (None if quantity_chips else await templates.build_rich_data_event(answer, executor.tool_calls))
     if quantity_chips:
         chips = quantity_chips
         predicted_domains = ["TRANSACTION"]

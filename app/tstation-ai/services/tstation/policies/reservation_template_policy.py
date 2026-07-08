@@ -9,10 +9,12 @@ import json
 import re
 from typing import Any
 
+from services.tstation.agents.templates.schemas import _REQUIRED_QTY_CHIPS
 from services.tstation.policies.resolved_context import canonical_context_from_tool_boundary
 
 _RESERVATION_TIME_CHIP_RE = re.compile(r"^\s*(?:[01]?\d|2[0-3])\s*시\s*예약\s*$")
 _RESERVATION_OTHER_TIME_LABELS = {"다른 시간 선택", "다른 시간대 선택"}
+_QTY_CHIP_LABELS = frozenset(_REQUIRED_QTY_CHIPS)
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
 _WEEKDAY_REQUEST_RE = re.compile(
     r"(?:이번\s*주|다음\s*주|다다음\s*주)?\s*(월|화|수|목|금|토|일)\s*(?:요일|욜)"
@@ -540,6 +542,66 @@ def coerce_order_preview_quickreply_to_datepick(
         if event is not None:
             return event
     return None
+
+
+def strip_stale_quantity_quickreply(
+    event: dict,
+    structured_sources: list[tuple[str, dict]],
+    slot_state: Any | None,
+) -> dict | None:
+    """Correct quantity chips left over on turns where qty is already resolved.
+
+    Per c_transaction_agent's own STEP 2 rule, a quantity quickReply is only ever
+    valid while `ord_qty` is unresolved — once qty is known, the flow never
+    re-attaches quantity buttons again. If a turn still carries qty-shaped chips
+    after that point (e.g. an order-preview/schedule turn asking for date/time),
+    they are stale regardless of what the turn's assistantResponse text says.
+    Prefer rebuilding the correct schedule/datepick card from this turn's tool
+    data when available, otherwise just drop the stale chips.
+    """
+    if event.get("template") != "quickReply":
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, dict):
+        return None
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list) or not chips:
+        return None
+    labels = [str(chip.get("label", "")).strip() for chip in chips if isinstance(chip, dict)]
+    if not labels or not all(label in _QTY_CHIP_LABELS for label in labels):
+        return None
+    if getattr(slot_state, "ord_qty", None) is None:
+        return None
+
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    for tool_name, parsed in reversed(structured_sources):
+        if not isinstance(parsed, dict):
+            continue
+        if tool_name == "transaction_store_preview_tool":
+            preview_payload = extract_preview_payload(parsed)
+            if isinstance(preview_payload, dict):
+                rebuilt = build_datepick_from_preview_payload(
+                    preview_payload,
+                    assistant_text=assistant_text,
+                    source_domain=event.get("source_domain"),
+                    assistant_response_source="code_mapper_stale_qty_chip",
+                    require_single_store=False,
+                )
+                if rebuilt is not None:
+                    return rebuilt
+        elif tool_name == "get_store_schedule_tool":
+            rebuilt = build_datepick_from_schedule_payload(
+                parsed,
+                assistant_text=assistant_text,
+                source_domain=event.get("source_domain"),
+                assistant_response_source="code_mapper_stale_qty_chip",
+            )
+            if rebuilt is not None:
+                return rebuilt
+
+    new_data = dict(event_data)
+    new_data["quickReplies"] = []
+    return {**event, "data": new_data}
 
 
 def coerce_schedule_confirmation_quickreply_to_datepick(
