@@ -125,3 +125,46 @@ def test_invalid_vehicle_type_returns_422(monkeypatch):
     assert result["http_status"] == 422
     assert result["reason"] == "INVALID_VEHICLE_TYPE"
     assert len(be.calls) == 0  # rejected before any BE call
+
+
+def test_three_pmsf_description_is_added_for_certified_product():
+    result = t._append_three_pmsf_description({
+        "goods_nm": "웨더플렉스 GT",
+        "three_pmsf_yn": "Y",
+        "pc_prod_remark_desc": "프리미엄 올웨더 타이어입니다.",
+    })
+
+    assert "3PMSF 인증" in result["pc_prod_remark_desc"]
+    assert result["three_pmsf_description"].startswith("3PMSF 인증")
+
+
+def test_three_pmsf_description_is_not_duplicated():
+    result = t._append_three_pmsf_description({
+        "goods_nm": "웨더플렉스 GT",
+        "three_pmsf_yn": "Y",
+        "pc_prod_remark_desc": "3PMSF 인증으로 눈길 성능 기준을 충족합니다.",
+    })
+
+    assert result["pc_prod_remark_desc"].count("3PMSF") == 1
+    assert result["three_pmsf_description"].startswith("3PMSF 인증")
+
+
+def test_search_product_budget_passes_max_price_to_be_and_ignores_min_price(monkeypatch):
+    be = _FakeBE([_Resp([{"goods_no": "G1", "goods_nm": "Budget tire", "extra_fvr_sale_prc": 299_000}])])
+    monkeypatch.setattr(t, "search_product", be)
+    monkeypatch.setattr(t, "get_client", lambda: None)
+    monkeypatch.setattr(t, "_enrich_items_with_descriptions", lambda items: items)
+
+    result = t.search_product_tool.func(
+        keyword=None,
+        limit=5,
+        min_price=200_000,
+        max_price=299_999,
+        sort_by="price_asc",
+    )
+
+    assert result["status"] == "success"
+    assert be.calls[0]["limit"] == 5
+    assert be.calls[0]["min_price"] is None
+    assert be.calls[0]["max_price"] == 299_999
+    assert be.calls[0]["sort_by"] == "price_desc"

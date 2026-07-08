@@ -68,6 +68,23 @@ current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = co
 )
 
 _RECOMMENDATION_LIMIT_CAP = 10
+_THREE_PMSF_DESCRIPTION = "3PMSF 인증으로 눈길 성능 기준을 충족해 올웨더 주행 신뢰도를 높인 타이어입니다."
+
+
+def _truthy_flag(value: Any) -> bool:
+    return str(value or "").strip().upper() in {"Y", "O", "TRUE", "1"}
+
+
+def _append_three_pmsf_description(data: dict[str, Any]) -> dict[str, Any]:
+    if not _truthy_flag(data.get("three_pmsf_yn")):
+        return data
+    enriched = dict(data)
+    searchable_text = " ".join(str(enriched.get(key) or "") for key in ("slogan", "pc_prod_remark_desc", "pc_prod_tech_desc"))
+    if "3PMS" not in searchable_text.upper() and "삼봉" not in searchable_text:
+        current = str(enriched.get("pc_prod_remark_desc") or "").strip()
+        enriched["pc_prod_remark_desc"] = f"{current} {_THREE_PMSF_DESCRIPTION}".strip()
+    enriched["three_pmsf_description"] = _THREE_PMSF_DESCRIPTION
+    return enriched
 
 
 def _attach_vehicle_type_to_vehicle_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -263,7 +280,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_highspd", "t_highspd_cd", "t_high_hand_avg",
     "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
-    "goods_dtl_pfm_nm", "sound_absorber_yn",
+    "goods_dtl_pfm_nm", "sound_absorber_yn", "three_pmsf_yn", "three_pmsf_description",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
     "t_oe_maker_1", "oe_badge_yn",
@@ -382,6 +399,21 @@ def _filter_by_price(
     return result
 
 
+def _normalize_search_price_args(
+    min_price: int | None,
+    max_price: int | None,
+    sort_by: str | None,
+) -> tuple[int | None, int | None, str | None]:
+    """Align search-product price behavior with BE budget search.
+
+    When max_price is present, BE treats it as a budget ceiling: min_price is
+    ignored, the range starts at 0, and results are returned price-desc.
+    """
+    if max_price is not None:
+        return None, max_price, "price_desc"
+    return min_price, max_price, sort_by
+
+
 def _price_filter_basis(item: dict) -> int:
     """Visible price basis for min_price/max_price filters."""
     for key in ("cheapest_final_prc", "extra_fvr_sale_prc"):
@@ -495,14 +527,18 @@ def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
         for key in (
             "prc_grd_nm",
             "goods_pfm_nm",
+            "three_pmsf_yn",
             "brand_nm",
             "oe_badge_yn",
             "t_oe_maker_1",
             "smrt_pay_yn",
+            "pc_prod_remark_desc",
+            "pc_prod_tech_desc",
+            "slogan",
         ):
             if desc.get(key) not in (None, ""):
                 flattened[key] = desc[key]
-        return flattened
+        return _append_three_pmsf_description(flattened)
     except Exception:
         logger.warning("[_fetch_description] Failed for goods_no=%s", goods_no)
         return {}
@@ -641,6 +677,7 @@ def search_product_tool(
     limit: int = 10,
     size: str | None = None,
     brand_cd: str | None = None,
+    three_pmsf_yn: str | None = None,
     sort_by: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
@@ -652,6 +689,7 @@ def search_product_tool(
     - User searches for a specific tire by name/keyword
     - Resolving goods_no for price/stock/order handoff (Flow C/D)
     - User mentions ONLY a brand name with size → keyword=None, use brand_cd + size
+    - User asks for 3PMSF / 3PMS / 삼봉마크 certified tires → pass three_pmsf_yn="Y"
 
     Important: keyword는 **한글로 전달**한다. BE는 한글 GOODS_NM에 LIKE 매칭하고
     alias.json으로 한글→영문을 자동 확장한다 (영문→한글 역확장은 없음).
@@ -682,6 +720,8 @@ def search_product_tool(
             - BS: Bridgestone 브리지스톤
             - CT: Continental 콘티넨탈
             - GY: Goodyear 굿이어
+        three_pmsf_yn (str | None): 3PMSF/3PMS/삼봉마크 인증 타이어만 검색하려면 "Y".
+            "눈길 인증", "스노우플레이크", "Three-Peak Mountain Snowflake" 요청도 "Y"로 전달한다.
         sort_by (str | None): 정렬 의도. 사용자가 정렬을 명시하면 전달한다. Optional.
             - "price_asc": 가장 저렴한 순 (가장 저렴한, 제일 싼, 최저가, 싼 것부터)
             - "price_desc": 비싼 순 (비싼 것부터, 고가, 프리미엄 순)
@@ -694,8 +734,9 @@ def search_product_tool(
             예: 300_000 ("30만원 이하")
 
     Notes:
-        - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
-        - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
+        - 가격 필터는 BE /api/compatibility/product/search 에 전달한다.
+        - max_price 가 있으면 BE와 동일하게 min_price 를 무시하고 0~max_price 가격 내림차순으로 조회한다.
+        - BE 응답 후에도 표시 가격 기준으로 한 번 더 방어 필터링한다.
         - 가격 정보 없는 상품은 필터 적용 시 제외됨.
 
     Examples:
@@ -708,6 +749,8 @@ def search_product_tool(
         - {"keyword": "벤투스", "size": "225/45R17", "sort_by": "rating_desc"}  # 평점 높은 순
         - {"brand_cd": "HK", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 한국타이어
         - {"keyword": "벤투스 S2", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
+        - {"three_pmsf_yn": "Y", "limit": 10}  # 삼봉마크/3PMSF 인증 타이어 검색
+        - {"size": "235/55R19", "three_pmsf_yn": "Y"}  # 특정 규격의 삼봉마크 인증 타이어 검색
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...}
@@ -717,7 +760,7 @@ def search_product_tool(
     Item field hints (사용자 질문 → 참조 필드):
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
-        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn, three_pmsf_yn
         - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
         - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
         - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심보험)
@@ -728,12 +771,15 @@ def search_product_tool(
             "keyword": keyword,
             "size": size,
             "brand_cd": brand_cd,
+            "three_pmsf_yn": three_pmsf_yn,
             "sort_by": sort_by,
             "min_price": min_price,
             "max_price": max_price,
         }
         if not size and policy_patch.get("size"):
             size = str(policy_patch["size"])
+        if not three_pmsf_yn and policy_patch.get("three_pmsf_yn"):
+            three_pmsf_yn = str(policy_patch["three_pmsf_yn"])
         logger.info(
             "[TOOL][search_product_tool] Applied discovery policy patch=%s before=%s after=%s",
             policy_patch,
@@ -742,6 +788,7 @@ def search_product_tool(
                 "keyword": keyword,
                 "size": size,
                 "brand_cd": brand_cd,
+                "three_pmsf_yn": three_pmsf_yn,
                 "sort_by": sort_by,
                 "min_price": min_price,
                 "max_price": max_price,
@@ -753,16 +800,29 @@ def search_product_tool(
             "[TOOL][search_product_tool] Stripped brand-only keyword: %r → None (brand_cd=%s)",
             keyword, brand_cd,
         )
-    has_price_filter = bool(min_price or max_price)
+    effective_min_price, effective_max_price, effective_sort_by = _normalize_search_price_args(
+        min_price,
+        max_price,
+        sort_by,
+    )
+    has_price_filter = bool(effective_min_price or effective_max_price)
     has_newest_sort = sort_by == "newest_desc"
-    fetch_limit = limit * 4 if has_price_filter else limit
+    fetch_limit = limit
     if has_newest_sort:
         fetch_limit = max(fetch_limit, 100)
     normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
     brand_arg = normalized_brand_cd if normalized_brand_cd else UNSET
+    three_pmsf_arg = str(three_pmsf_yn).strip().upper() if three_pmsf_yn else UNSET
     logger.debug(
-        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
-        normalized_keyword, limit, size, normalized_brand_cd, sort_by, min_price, max_price,
+        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, three_pmsf_yn=%s, sort_by=%s, min_price=%s, max_price=%s",
+        normalized_keyword,
+        limit,
+        size,
+        normalized_brand_cd,
+        three_pmsf_arg,
+        effective_sort_by,
+        effective_min_price,
+        effective_max_price,
     )
 
     try:
@@ -772,6 +832,10 @@ def search_product_tool(
             limit=fetch_limit,
             size=size,
             brand_cd=brand_arg,
+            three_pmsf_yn=three_pmsf_arg,
+            min_price=effective_min_price,
+            max_price=effective_max_price,
+            sort_by=effective_sort_by,
         )
         if response.parsed is None:
             return _error_response(
@@ -783,11 +847,16 @@ def search_product_tool(
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             if has_price_filter:
-                data["items"] = _filter_by_price(data["items"], min_price, max_price)
+                data["items"] = _filter_by_price(data["items"], effective_min_price, effective_max_price)
                 if not data["items"]:
-                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
+                    return {
+                        "status": "no_results",
+                        "reason": "no_products_in_price_range",
+                        "min_price": effective_min_price,
+                        "max_price": effective_max_price,
+                    }
             data["items"] = _enrich_items_with_descriptions(data["items"])
-            data["items"] = _sort_items(data["items"], sort_by)
+            data["items"] = _sort_items(data["items"], effective_sort_by)
             if has_price_filter or has_newest_sort:
                 data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)
@@ -1109,7 +1178,7 @@ def get_product_description_tool(goods_no: str):
                 response.content.decode(errors="ignore") or "Failed to get product description"
             )
         # logger.debug("[TOOL][get_product_description_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _append_three_pmsf_description(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_product_description_tool] Failed")
         return _error_response(None, str(e), "Failed to get product description")

@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.templates.schemas import (
@@ -20,6 +20,9 @@ from services.tstation.agents.templates.schemas import (
     LocationTemplate,
     OrderCompleteTemplate,
     PreOrderTemplate,
+    ProductItem,
+    ProductMeta,
+    ProductTag,
     ProductTemplate,
     QnaCompleteTemplate,
 )
@@ -51,6 +54,14 @@ _PRODUCT_TOOLS = {
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
     "get_newest_products_tool",
+}
+
+_PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
+_PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}
+_GOODS_PFM_LABELS: dict[str, str] = {
+    "COMFORT": "정숙/승차감",
+    "SPORT": "고속/제동성",
+    "RUNFLAT": "런플랫",
 }
 
 _SERVICE_LABELS = {
@@ -340,6 +351,34 @@ def _pick_source(tool_calls: list[dict]) -> tuple[str, type[BaseModel], dict] | 
     return None
 
 
+_RELEVANCE_WRAPPERS: dict[str, type[BaseModel]] = {}
+
+
+def _relevance_wrapper(template_model: type[BaseModel]) -> type[BaseModel]:
+    """Wrap a template model with an `applicable` flag the LLM can set to false.
+
+    In a multi-round tool loop, `_pick_source` can only see WHICH tool ran
+    most recently — not whether the final answer is still about it. E.g. a
+    product tool run to confirm a quantity, followed by a final answer that
+    pivots to asking the user for a store location, leaves a stale product
+    call as the "most recent" one. Folding `applicable` into the SAME
+    structured-output call (instead of a separate check) lets the model
+    judge relevance against the actual final answer text at no extra cost.
+    """
+    wrapper = _RELEVANCE_WRAPPERS.get(template_model.__name__)
+    if wrapper is None:
+        wrapper = create_model(
+            f"{template_model.__name__}Decision",
+            applicable=(
+                bool,
+                Field(description="답변이 실제로 이 도구 결과를 보여주는 중이면 true, 다른 주제로 넘어갔으면 false"),
+            ),
+            payload=(template_model | None, Field(default=None, description="applicable=true일 때만 채우세요")),
+        )
+        _RELEVANCE_WRAPPERS[template_model.__name__] = wrapper
+    return wrapper
+
+
 def _parse_tool_output(output: object) -> dict[str, Any]:
     if isinstance(output, dict):
         return output
@@ -348,6 +387,30 @@ def _parse_tool_output(output: object) -> dict[str, Any]:
     except (TypeError, ValueError):
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _get_str(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _truthy_flag(value: object) -> bool:
+    return str(value or "").strip().upper() in {"Y", "O", "TRUE", "1"}
+
+
+def _get_num(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(str(value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 def _latest_tool_output(tool_calls: list[dict], tool_name: str) -> dict[str, Any]:
@@ -414,6 +477,173 @@ def _store_rows_from_output(output: str) -> list[dict[str, Any]]:
     if isinstance(stores, list):
         return [row for row in stores if isinstance(row, dict)]
     return []
+
+
+def _rows_from_any(value: object) -> list[dict[str, Any]]:
+    return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
+
+
+def _product_rows_from_output(output: str) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return []
+    if isinstance(parsed, list):
+        return _rows_from_any(parsed)
+    if not isinstance(parsed, dict):
+        return []
+
+    for key in ("products", "items", "results"):
+        rows = _rows_from_any(parsed.get(key))
+        if rows:
+            return rows
+    data = parsed.get("data")
+    if isinstance(data, list):
+        return _rows_from_any(data)
+    if isinstance(data, dict):
+        for key in ("products", "items", "results"):
+            rows = _rows_from_any(data.get(key))
+            if rows:
+                return rows
+    return []
+
+
+def _product_tags_from_row(row: dict[str, Any]) -> list[ProductTag]:
+    tags: list[ProductTag] = []
+    price_grade = _get_str(row, "prc_grd_nm")
+    if price_grade in _PRC_GRD_ALLOWED:
+        tags.append(ProductTag(text=_PRC_GRD_DISPLAY.get(price_grade, price_grade), primary=True))
+
+    performance = _GOODS_PFM_LABELS.get(_get_str(row, "goods_pfm_nm").upper())
+    if performance:
+        tags.append(ProductTag(text=performance, primary=False))
+
+    if _truthy_flag(row.get("sound_absorber_yn")) or "흡음" in _get_str(row, "goods_dtl_pfm_nm"):
+        tags.append(ProductTag(text="흡음재", primary=False))
+    return tags
+
+
+def _product_price(row: dict[str, Any]) -> int | None:
+    price = _get_num(row, "cheapest_final_prc", "extra_fvr_sale_prc", "final_unit_price", "final_prc", "price")
+    return int(price) if price else None
+
+
+def _product_original_price(row: dict[str, Any], price: int | None) -> int | None:
+    original = _get_num(row, "sale_prc", "originalPrice", "original_price")
+    if original:
+        return int(original)
+    return price
+
+
+def _product_discount_amount(row: dict[str, Any], price: int | None, original_price: int | None) -> int | None:
+    discount = _get_num(row, "discountAmount", "discount_amount")
+    if discount:
+        return int(discount)
+    if price and original_price and original_price > price:
+        return original_price - price
+    return None
+
+
+def _product_discount_rate(row: dict[str, Any], discount_amount: int | None, original_price: int | None) -> float | None:
+    rate = _get_num(row, "extra_fvr_sale_per", "discountRate", "discount_rate")
+    if rate:
+        return rate
+    if discount_amount and original_price:
+        return round(discount_amount / original_price * 100, 1)
+    return None
+
+
+def _product_item_from_row(row: dict[str, Any]) -> ProductItem:
+    goods_name = _get_str(row, "goods_nm", "goodsNm", "title", "name")
+    tire_size = _get_str(row, "tire_size_1", "tire_size_2", "tire_size", "size")
+    price = _product_price(row)
+    original_price = _product_original_price(row, price)
+    discount_amount = _product_discount_amount(row, price, original_price)
+    discount_rate = _product_discount_rate(row, discount_amount, original_price)
+    brand = _get_str(row, "brand_nm", "brandName", "brand_name")
+    return ProductItem(
+        imageUrl=_get_str(row, "image_url", "imageUrl"),
+        title=f"{goods_name} {tire_size}".strip() or tire_size or _get_str(row, "goods_no"),
+        tires=tire_size,
+        titleProductName=goods_name,
+        titleTires=tire_size,
+        brandName=brand.replace(" ", "").upper() if brand else "",
+        oeBadgeYn=_get_str(row, "oe_badge_yn", "oeBadgeYn", "oeBadgeYN"),
+        oeMaker=_get_str(row, "t_oe_maker_1", "oeMaker"),
+        smrtPayYn=_get_str(row, "smrt_pay_yn", "smrtPayYn"),
+        price=price,
+        originalPrice=original_price,
+        discountRate=discount_rate,
+        discountAmount=discount_amount,
+        rate=_get_num(row, "rate", "rating_avg", "rating") or 0.0,
+        totalQuantity=int(_get_num(row, "totalQuantity", "total_qty", "review_count") or 0),
+        tags=_product_tags_from_row(row),
+    )
+
+
+def _normalize_product_payload(payload: BaseModel, tool_output: str) -> None:
+    raw_products = _product_rows_from_output(tool_output)
+    products = getattr(payload, "products", None)
+    metadata = getattr(payload, "metadata", None)
+    if not raw_products or not isinstance(products, list):
+        return
+
+    source_rows = raw_products[:10]
+    rebuilt_products: list[ProductItem] = []
+    rebuilt_metadata: list[ProductMeta] = []
+    for row in source_rows:
+        goods_no = _get_str(row, "goods_no", "goodsNo", "goods_id", "goodsId")
+        if not goods_no:
+            continue
+        rebuilt_products.append(_product_item_from_row(row))
+        rebuilt_metadata.append(ProductMeta(goodsId=goods_no))
+    if rebuilt_products:
+        payload.products = rebuilt_products
+        payload.metadata = rebuilt_metadata
+        return
+
+    rows_by_goods = {
+        goods_no: row
+        for row in raw_products
+        if (goods_no := _get_str(row, "goods_no", "goodsNo", "goods_id", "goodsId"))
+    }
+    for index, product in enumerate(products):
+        meta = metadata[index] if isinstance(metadata, list) and index < len(metadata) else None
+        goods_id = getattr(meta, "goodsId", "") if meta is not None else ""
+        row = rows_by_goods.get(str(goods_id or "").strip())
+        if row is None and index < len(raw_products):
+            row = raw_products[index]
+        if row is None:
+            continue
+
+        goods_name = _get_str(row, "goods_nm", "goodsNm", "title", "name")
+        tire_size = _get_str(row, "tire_size_1", "tire_size_2", "tire_size", "size")
+        if goods_name:
+            product.titleProductName = goods_name
+            product.title = f"{goods_name} {tire_size}".strip() if tire_size else goods_name
+        if tire_size:
+            product.titleTires = tire_size
+            product.tires = tire_size
+        brand = _get_str(row, "brand_nm", "brandName", "brand_name")
+        if brand:
+            product.brandName = brand.replace(" ", "").upper()
+        image_url = _get_str(row, "image_url", "imageUrl")
+        if image_url:
+            product.imageUrl = image_url
+        price = _product_price(row)
+        original_price = _product_original_price(row, price)
+        discount_amount = _product_discount_amount(row, price, original_price)
+        discount_rate = _product_discount_rate(row, discount_amount, original_price)
+        product.price = price
+        product.originalPrice = original_price
+        product.discountAmount = discount_amount
+        product.discountRate = discount_rate
+        product.rate = _get_num(row, "rate", "rating_avg", "rating") or 0.0
+        product.totalQuantity = int(_get_num(row, "totalQuantity", "total_qty", "review_count") or 0)
+        product.tags = _product_tags_from_row(row)
+        product.oeBadgeYn = _get_str(row, "oe_badge_yn", "oeBadgeYn", "oeBadgeYN")
+        product.oeMaker = _get_str(row, "t_oe_maker_1", "oeMaker")
+        product.smrtPayYn = _get_str(row, "smrt_pay_yn", "smrtPayYn")
 
 
 def _join_address(*parts: object) -> str:
@@ -664,7 +894,8 @@ async def build_rich_data_event(
             answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
         )
     try:
-        llm = get_router_llm().with_structured_output(template_model, method="function_calling")
+        wrapper_model = _relevance_wrapper(template_model)
+        llm = get_router_llm().with_structured_output(wrapper_model, method="function_calling")
         messages = [
             ("system", TEMPLATE_BUILDER_PROMPT),
             (
@@ -673,9 +904,19 @@ async def build_rich_data_event(
                 f"## 챗봇 답변\n{answer[:2000]}",
             ),
         ]
-        payload = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
+        decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
+        if not decision.applicable or decision.payload is None:
+            logger.info(
+                "[CHAT_V3] rich template '%s' skipped (tool=%s) — answer moved to a different topic",
+                template_name,
+                call["name"],
+            )
+            return None
+        payload = decision.payload
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
+        if template_name == "product":
+            _normalize_product_payload(payload, str(call["output"]))
         if template_name == "location":
             _normalize_location_payload(payload, str(call["output"]))
             payload.isBookingFlow = _is_booking_location_context(slots, decision)

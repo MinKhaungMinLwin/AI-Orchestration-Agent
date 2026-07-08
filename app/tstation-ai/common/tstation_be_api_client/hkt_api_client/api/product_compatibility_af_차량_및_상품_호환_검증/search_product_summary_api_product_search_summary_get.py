@@ -14,6 +14,7 @@ def _get_kwargs(
     *,
     keyword: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 5,
 ) -> dict[str, Any]:
 
@@ -32,6 +33,13 @@ def _get_kwargs(
     else:
         json_brand_cd = brand_cd
     params["brand_cd"] = json_brand_cd
+
+    json_three_pmsf_yn: None | str | Unset
+    if isinstance(three_pmsf_yn, Unset):
+        json_three_pmsf_yn = UNSET
+    else:
+        json_three_pmsf_yn = three_pmsf_yn
+    params["three_pmsf_yn"] = json_three_pmsf_yn
 
     params["limit"] = limit
 
@@ -81,6 +89,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     keyword: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 5,
 ) -> Response[HTTPValidationError | ProductSearchSummaryResponse]:
     """사이즈 미지정 상품군 검색
@@ -92,6 +101,7 @@ def sync_detailed(
         keyword (None | str | Unset): 검색할 제품명 키워드 (예: '키너지 EX', 'Ventus S2 AS')
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어)
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
         limit (int | Unset): 반환할 최대 상품군 수. 기본 5개 Default: 5.
 
     Raises:
@@ -105,6 +115,7 @@ def sync_detailed(
     kwargs = _get_kwargs(
         keyword=keyword,
         brand_cd=brand_cd,
+        three_pmsf_yn=three_pmsf_yn,
         limit=limit,
     )
 
@@ -120,6 +131,7 @@ def sync(
     client: AuthenticatedClient,
     keyword: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 5,
 ) -> HTTPValidationError | ProductSearchSummaryResponse | None:
     """사이즈 미지정 상품군 검색
@@ -131,6 +143,7 @@ def sync(
         keyword (None | str | Unset): 검색할 제품명 키워드 (예: '키너지 EX', 'Ventus S2 AS')
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어)
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
         limit (int | Unset): 반환할 최대 상품군 수. 기본 5개 Default: 5.
 
     Raises:
@@ -145,6 +158,7 @@ def sync(
         client=client,
         keyword=keyword,
         brand_cd=brand_cd,
+        three_pmsf_yn=three_pmsf_yn,
         limit=limit,
     ).parsed
 
@@ -154,6 +168,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     keyword: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 5,
 ) -> Response[HTTPValidationError | ProductSearchSummaryResponse]:
     """사이즈 미지정 상품군 검색
@@ -165,6 +180,7 @@ async def asyncio_detailed(
         keyword (None | str | Unset): 검색할 제품명 키워드 (예: '키너지 EX', 'Ventus S2 AS')
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어)
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
         limit (int | Unset): 반환할 최대 상품군 수. 기본 5개 Default: 5.
 
     Raises:
@@ -178,6 +194,7 @@ async def asyncio_detailed(
     kwargs = _get_kwargs(
         keyword=keyword,
         brand_cd=brand_cd,
+        three_pmsf_yn=three_pmsf_yn,
         limit=limit,
     )
 
@@ -191,6 +208,7 @@ async def asyncio(
     client: AuthenticatedClient,
     keyword: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
+    three_pmsf_yn: None | str | Unset = UNSET,
     limit: int | Unset = 5,
 ) -> HTTPValidationError | ProductSearchSummaryResponse | None:
     """사이즈 미지정 상품군 검색
@@ -202,6 +220,7 @@ async def asyncio(
         keyword (None | str | Unset): 검색할 제품명 키워드 (예: '키너지 EX', 'Ventus S2 AS')
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어)
+        three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
         limit (int | Unset): 반환할 최대 상품군 수. 기본 5개 Default: 5.
 
     Raises:
@@ -217,6 +236,7 @@ async def asyncio(
             client=client,
             keyword=keyword,
             brand_cd=brand_cd,
+            three_pmsf_yn=three_pmsf_yn,
             limit=limit,
         )
     ).parsed
