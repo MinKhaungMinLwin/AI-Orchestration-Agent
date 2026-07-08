@@ -1557,13 +1557,57 @@ def _fetch_schedule_for_shops(shop_ids: list[str], mode: ScheduleMode) -> dict[s
     return results
 
 
-def _cascade_schedule_tiers(
-    candidates: list[str],
-    today_shop_ids: list[str] | None,
-    tna_shop_ids: list[str] | None,
-    has_logistics: bool,
-) -> dict:
-    """Shared tier-cascade logic for get_multi_store_schedule_tool and transaction_store_preview_tool."""
+@tool
+def get_multi_store_schedule_tool(
+    shop_id_list: list[str],
+    today_shop_ids: list[str] | None = None,
+    tna_shop_ids: list[str] | None = None,
+    has_logistics: bool = False,
+):
+    """
+    Flow 3.5 — find earliest reservation slots across up to 3 stores using **tier cascade**.
+
+    The tool selects ONE tier across the whole batch based on inventory state:
+
+    | Tier | Trigger condition                                       | mode used      |
+    |------|---------------------------------------------------------|----------------|
+    | 1    | Candidate ∈ todayShopArray and has_logistics=True       | combined       |
+    | 2    | Candidate ∈ todayShopArray                              | in_store_only  |
+    | 3    | Tier 1–2 empty AND ≥1 candidate ∈ tnaShopArray          | tna_only       |
+    | 4    | Earlier tiers empty AND has_logistics=True              | logistics_only |
+    | none | All tiers empty                                         | (no BE call)   |
+
+    `todayShopArray` means "today is available", not "show only today". For normal
+    booking previews, today-capable stores use a broader schedule mode so customers
+    can choose other dates too. The first non-empty tier is returned.
+
+    Caller MUST first run get_store_inventory_tool + get_logistics_inventory_tool
+    so todayShopArray/tnaShopArray/logistics_qty are known.
+
+    Args:
+        shop_id_list (list[str]): Up to 3 candidate shop IDs (extras truncated).
+        today_shop_ids (list[str] | None): shop_ids in todayShopArray from get_store_inventory_tool.
+        tna_shop_ids (list[str] | None): shop_ids in tnaShopArray from get_store_inventory_tool.
+        has_logistics (bool): True if logistics_qty > 0 (from get_logistics_inventory_tool).
+
+    Example:
+        {
+          "shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"],
+          "today_shop_ids": ["BXXXXX"],
+          "tna_shop_ids": ["FXXXXX"],
+          "has_logistics": true
+        }
+    """
+    logger.debug(
+        "[TOOL][get_multi_store_schedule_tool] Called with: shop_id_list=%s, "
+        "today_shop_ids=%s, tna_shop_ids=%s, has_logistics=%s",
+        shop_id_list, today_shop_ids, tna_shop_ids, has_logistics,
+    )
+
+    candidates = [sid for sid in (shop_id_list or []) if sid][:3]
+    if not candidates:
+        return _error_response(None, "invalid_input", "shop_id_list is empty")
+
     today_set = set(today_shop_ids or [])
     tna_set = set(tna_shop_ids or [])
 
@@ -1573,22 +1617,22 @@ def _cascade_schedule_tiers(
         mode = ScheduleMode.IN_STORE_LOGISTICS_COMBINED if has_logistics else ScheduleMode.IN_STORE_ONLY
         results = _fetch_schedule_for_shops(tier1_shops, mode)
         if any(r.get("slots") for r in results.values()):
-            return {
+            return _success_response(200, {
                 "tier": mode.value,
                 "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier1_shops],
                 "candidate_shop_ids": candidates,
-            }
+            })
 
     # Tier 3 — tna_only on candidates ∩ tnaShopArray
     tier2_shops = [sid for sid in candidates if sid in tna_set]
     if tier2_shops:
         results = _fetch_schedule_for_shops(tier2_shops, ScheduleMode.TNA_ONLY)
         if any(r.get("slots") for r in results.values()):
-            return {
+            return _success_response(200, {
                 "tier": "tna_only",
                 "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier2_shops],
                 "candidate_shop_ids": candidates,
-            }
+            })
 
     # Tier 4 — logistics_only on remaining candidates (not in today/tna sets)
     if has_logistics:
@@ -1598,88 +1642,17 @@ def _cascade_schedule_tiers(
             tier3_shops = list(candidates)
         results = _fetch_schedule_for_shops(tier3_shops, ScheduleMode.LOGISTICS_ONLY)
         if any(r.get("slots") for r in results.values()):
-            return {
+            return _success_response(200, {
                 "tier": "logistics_only",
                 "stores": [{"shop_id": sid, **(results.get(sid) or {})} for sid in tier3_shops],
                 "candidate_shop_ids": candidates,
-            }
+            })
 
-    return {"tier": "none", "stores": [], "candidate_shop_ids": candidates}
-
-
-@tool
-def get_multi_store_schedule_tool(goods_no: str, ord_qty: int, shop_id_list: list[str]):
-    """
-    Flow 3.5 — check inventory AND find earliest reservation slots across up to 3 stores,
-    in a single call. Internally checks logistics + store inventory, then applies a
-    **tier cascade**; the caller does NOT need to call get_logistics_inventory_tool or
-    get_store_inventory_tool first.
-
-    The tool selects ONE tier across the whole batch based on inventory state:
-
-    | Tier | Trigger condition                                       | mode used      |
-    |------|---------------------------------------------------------|----------------|
-    | 1    | Candidate ∈ todayShopArray and logistics_qty>0          | combined       |
-    | 2    | Candidate ∈ todayShopArray                              | in_store_only  |
-    | 3    | Tier 1–2 empty AND ≥1 candidate ∈ tnaShopArray          | tna_only       |
-    | 4    | Earlier tiers empty AND logistics_qty>0                 | logistics_only |
-    | none | All tiers empty                                         | (no BE call)   |
-
-    `todayShopArray` means "today is available", not "show only today". For normal
-    booking previews, today-capable stores use a broader schedule mode so customers
-    can choose other dates too. The first non-empty tier is returned.
-
-    Args:
-        goods_no (str): Product number, used for the internal inventory check.
-        ord_qty (int): User-requested quantity. NEVER default this — ask the user if unknown.
-        shop_id_list (list[str]): Up to 3 candidate shop IDs (extras truncated).
-
-    Example:
-        {"goods_no": "GXXXXXXXXXXXX", "ord_qty": 4, "shop_id_list": ["BXXXXX", "FXXXXX", "CXXXXX"]}
-    """
-    logger.debug(
-        "[TOOL][get_multi_store_schedule_tool] Called with: goods_no=%s, ord_qty=%s, shop_id_list=%s",
-        goods_no, ord_qty, shop_id_list,
-    )
-
-    candidates = [sid for sid in (shop_id_list or []) if sid][:3]
-    if not candidates:
-        return _error_response(None, "invalid_input", "shop_id_list is empty")
-
-    be_client = get_client()
-    goods_list = [{"goodsNo": goods_no, "qty": str(ord_qty)}]
-    shop_id_dicts = [{"shopId": sid} for sid in candidates]
-
-    def _fetch_logistics():
-        return get_logistics_inventory(client=be_client, body=LogisticsRequest(goods_no=goods_no))
-
-    def _fetch_store_inventory():
-        g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
-        s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_dicts]
-        body = StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items)
-        return get_store_inventory(client=be_client, body=body)
-
-    inventory_results: dict[str, Any] = {}
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = {
-            executor.submit(_fetch_logistics): "logistics",
-            executor.submit(_fetch_store_inventory): "store_inventory",
-        }
-        for future in as_completed(futures):
-            name = futures[future]
-            try:
-                response = future.result()
-                inventory_results[name] = _to_dict(response.parsed) if response.parsed is not None else None
-            except Exception:
-                logger.warning("[TOOL][get_multi_store_schedule_tool] %s fetch failed", name)
-                inventory_results[name] = None
-
-    has_logistics = _extract_logistics_qty(inventory_results.get("logistics")) > 0
-    today_shop_ids = _extract_inventory_shop_ids(inventory_results.get("store_inventory"), "todayShopArray")
-    tna_shop_ids = _extract_inventory_shop_ids(inventory_results.get("store_inventory"), "tnaShopArray")
-
-    data = _cascade_schedule_tiers(candidates, today_shop_ids, tna_shop_ids, has_logistics)
-    return _success_response(200, data)
+    return _success_response(200, {
+        "tier": "none",
+        "stores": [],
+        "candidate_shop_ids": candidates,
+    })
 
 
 @tool
@@ -2242,7 +2215,13 @@ def transaction_store_preview_tool(
     logistics_qty = _extract_logistics_qty(results.get("logistics"))
     today_shop_ids = _extract_inventory_shop_ids(results.get("store_inventory"), "todayShopArray")
     tna_shop_ids = _extract_inventory_shop_ids(results.get("store_inventory"), "tnaShopArray")
-    schedule_data = _cascade_schedule_tiers(shop_ids, today_shop_ids, tna_shop_ids, logistics_qty > 0)
+    schedule = get_multi_store_schedule_tool.func(
+        shop_id_list=shop_ids,
+        today_shop_ids=today_shop_ids,
+        tna_shop_ids=tna_shop_ids,
+        has_logistics=logistics_qty > 0,
+    )
+    schedule_data = schedule.get("data") if isinstance(schedule, dict) else schedule
     # todayShopArray/tnaShopArray are already inventory-proven today-installable
     # candidates. Do not erase those candidates just because the range schedule
     # endpoint has no slot with today's cal_day.

@@ -770,7 +770,7 @@ Translate store brand: "T-Station"→"티스테이션", "The Tire Shop"→"더�
 | get_store_list_tool | Search stores by region name or store name |
 | get_store_detail_tool | Specific single date (YYYYMMDD) hours, holidays, reservation slots — use for Flow 5.1 / 5.5 |
 | get_store_schedule_tool | Reservation slots for ONE store using mode-based cal_day range (single BE call). mode ∈ {today_only, tna_only, logistics_only, in_store_only, in_store_logistics_combined, general} |
-| get_multi_store_schedule_tool | Flow 3.5 cascade for UP TO 3 stores. Caller passes goods_no + ord_qty + shop_id_list; tool checks logistics/store inventory internally, picks tier, and returns first non-empty. No need to call get_logistics_inventory_tool/get_store_inventory_tool first. todayShopArray means today is available, not that only today's slots should be shown. |
+| get_multi_store_schedule_tool | Flow 3.5 cascade for UP TO 3 stores. Caller passes shop_id_list + today_shop_ids + tna_shop_ids + has_logistics; tool picks tier internally and returns first non-empty. todayShopArray means today is available, not that only today's slots should be shown. |
 | save_to_cart_tool | User chooses cart (no store selected) |
 | quick_order_tool | User selected store, all info confirmed |
 | get_orders_of_user_tool | User asks to see their orders |
@@ -1364,9 +1364,7 @@ Trigger: user intent includes urgency keywords — "빨리", "가장 빠른", "�
 Example: "가장 빨리 장착 가능한 날이 언제예요?", "빨리 갈 수 있는 매장 알려줘"
 
 ⚠️ PERFORMANCE RULES (STRICT):
-- MUST use get_multi_store_schedule_tool — NEVER call get_logistics_inventory_tool / get_store_inventory_tool /
-  get_store_detail_tool / get_store_schedule_tool per store. The tool checks logistics + store inventory
-  internally and returns the cascaded schedule in ONE call — no separate inventory pre-fetch needed.
+- MUST use get_multi_store_schedule_tool — NEVER call get_store_detail_tool / get_store_schedule_tool per store
 - MUST limit store list to 3 stores maximum (limit=3)
 - The cascade tier is decided INSIDE the tool — do NOT pre-pick a mode.
 - `todayShopArray` means "today is available", not "only show today's schedule". Use `today_only` only when the user explicitly asks for 오늘/당일/지금 장착.
@@ -1382,11 +1380,22 @@ Steps:
    → Truly NOT provided and no store/region in recent context: "방문하시려는 지역이나 매장을 알려주시면 확인해 드릴게요 😊" → STOP
 3. get_store_list_tool(region_code or store_nm, limit=3) → store list
    ⚠️ Filter: only include stores with is_installable=true. Take top 3 installable stores for next steps.
-4. get_multi_store_schedule_tool(goods_no, ord_qty=qty, shop_id_list=[top 3 installable shop_ids])
-   → Tool internally checks logistics + store inventory, then cascades with broader booking ranges for
-     today-capable stores.
-   → Returns first non-empty tier in `result.data.tier`
-     with `result.data.stores[*].slots[*].cal_day,tm` populated.
+4. **Two-phase call** (multi-schedule depends on inventory results, so cannot be fully parallel):
+   ── Phase 1 — call BOTH IN PARALLEL (single agent turn, 2 tools): ──
+   a. get_store_inventory_tool(goods_list, installable shop_id_list only) → todayShopArray, tnaShopArray
+   b. get_logistics_inventory_tool(goods_no) → logistics_qty
+   ── Phase 2 — single tool call (next agent turn, after Phase 1 results land): ──
+   c. get_multi_store_schedule_tool(
+          shop_id_list=[top 3 installable shop_ids],
+          today_shop_ids=[shop_ids in todayShopArray ∩ candidates],
+          tna_shop_ids=[shop_ids in tnaShopArray ∩ candidates],
+          has_logistics=(logistics_qty > 0)
+      )
+      → Tool internally cascades with broader booking ranges for today-capable stores.
+      → Returns first non-empty tier in `result.data.tier`
+        with `result.data.stores[*].slots[*].cal_day,tm` populated.
+   ⚠️ DO NOT call (c) in the same turn as (a)/(b). The tool's tier/has_logistics inputs are derived
+       from (a)/(b) results — calling all three in parallel forces the cascade inputs to be guessed.
 5. Classify each candidate store using inventory + tier result:
    - Tier "in_store_only"/"in_store_logistics_combined" stores → show as "매장재고" with earliest slot
    - Tier "tna_only" stores → show as "매장재고 (T바로배송)" with earliest slot
