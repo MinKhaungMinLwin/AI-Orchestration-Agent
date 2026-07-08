@@ -259,8 +259,8 @@ DOMAIN_TOOL_MAP = {
 
 # Whitelist of fields kept in product items returned to the LLM. Everything
 # else is stripped to keep tool-result payload compact (~10x reduction on a
-# 5-item recommendation turn). Detail content (descriptions, full reviews) is
-# still reachable via get_product_description_tool when the user explicitly asks.
+# 5-item recommendation turn). Full detail content remains reachable via
+# get_product_description_tool when the user explicitly asks.
 _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Identity
     "goods_no", "ptrn_cd", "goods_nm", "title",
@@ -286,8 +286,8 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_oe_maker_1", "oe_badge_yn",
     # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
-    # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
-    "rating_avg", "rate", "review_count", "reviews",
+    # Rating / review (used for cards, sort_by, and concise search-result summaries)
+    "rating_avg", "rate", "review_count", "review_summary",
     # 상품 등록 일시 — used to identify newest product among same-keyword results
     "sys_reg_dtime",
     # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
@@ -500,15 +500,38 @@ def _strip_brand_only_keyword(keyword: str | None) -> str | None:
     return keyword
 
 
+def _summarize_reviews(reviews: Any, *, max_reviews: int = 3, max_chars_each: int = 90) -> str | None:
+    if not isinstance(reviews, list):
+        return None
+
+    snippets: list[str] = []
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+        content = _compact_html_text(review.get("gdas_cont"), max_chars=max_chars_each)
+        if not content:
+            continue
+        score = review.get("gdas_score")
+        prefix = f"{score}점: " if score not in (None, "") else ""
+        snippets.append(f"{prefix}{content}")
+        if len(snippets) >= max_reviews:
+            break
+
+    if not snippets:
+        return None
+    return " / ".join(snippets)
+
+
 def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
     """Fetch product description and return flat fields the LLM whitelist keeps.
 
     The description endpoint returns nested `images: [{img_path_nm, thnl_path_nm}, ...]`
-    and `rating: {review_count, rating_avg}` objects. The LLM whitelist
-    (`_TRIM_KEEP_FIELDS`) keeps only flat fields, so we flatten here:
+    and `rating: {review_count, rating_avg}` objects plus latest review rows.
+    The LLM whitelist (`_TRIM_KEEP_FIELDS`) keeps only flat fields, so we flatten here:
       - `image_url` ← first image's full URL (img_path_nm > thnl_path_nm fallback)
       - `rating_avg` / `rate` ← rating.rating_avg (rate is the FE alias)
       - `review_count` ← rating.review_count (used for sort_by="review_desc")
+      - `review_summary` ← up to three short review snippets, not the full review array
       - card display fields such as `prc_grd_nm`, when available from detail
     """
     try:
@@ -528,6 +551,9 @@ def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
             "rate": rating_avg,
             "review_count": review_count,
         }
+        review_summary = _summarize_reviews(desc.get("reviews"))
+        if review_summary:
+            flattened["review_summary"] = review_summary
         for key in (
             "prc_grd_nm",
             "goods_pfm_nm",
@@ -607,7 +633,7 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
 
     Enrichment fetch is preserved so future field needs can be served by
     widening _TRIM_KEEP_FIELDS — the LLM-visible payload is filtered to
-    that whitelist to prevent context bloat (HTML descs, reviews, etc.).
+    that whitelist to prevent context bloat (HTML descs, full review arrays, etc.).
     """
     if not items:
         return items

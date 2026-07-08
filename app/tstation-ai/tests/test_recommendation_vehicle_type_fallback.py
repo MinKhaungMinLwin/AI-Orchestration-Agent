@@ -29,6 +29,13 @@ class _FakeBE:
         return self._responses.pop(0)
 
 
+class _ParsedResp:
+    def __init__(self, parsed, status=200):
+        self.parsed = parsed
+        self.status_code = status
+        self.content = b""
+
+
 def _patch(monkeypatch, responses):
     be = _FakeBE(responses)
     monkeypatch.setattr(t, "get_products_recommendations", be)
@@ -170,6 +177,41 @@ def test_slim_product_item_hides_negative_three_pmsf_fact():
     })
 
     assert result == {"goods_no": "G1", "goods_nm": "벤투스 S1 에보 Z AS"}
+
+
+def test_review_summary_compacts_latest_review_contents():
+    result = t._summarize_reviews([
+        {"gdas_score": 5, "gdas_cont": "정숙성이 좋고 승차감이 편합니다."},
+        {"gdas_score": 4, "gdas_cont": "<p>빗길 제동이 안정적이에요.</p>"},
+        {"gdas_score": 5, "gdas_cont": "재구매 의향 있습니다."},
+        {"gdas_score": 3, "gdas_cont": "네 번째 리뷰는 제외됩니다."},
+    ])
+
+    assert result == "5점: 정숙성이 좋고 승차감이 편합니다. / 4점: 빗길 제동이 안정적이에요. / 5점: 재구매 의향 있습니다."
+    assert "네 번째" not in result
+
+
+def test_fetch_description_flattens_review_summary_without_full_reviews(monkeypatch):
+    def fake_get_product_description(**kwargs):
+        assert kwargs["goods_no"] == "G1"
+        return _ParsedResp({
+            "images": [{"img_path_nm": "https://example.test/tire.png"}],
+            "rating": {"rating_avg": 4.8, "review_count": 12},
+            "reviews": [
+                {"gdas_score": 5, "gdas_cont": "소음이 적고 고속 주행이 안정적입니다."},
+                {"gdas_score": 4, "gdas_cont": "승차감이 부드러워요."},
+            ],
+        })
+
+    monkeypatch.setattr(t, "get_product_description", fake_get_product_description)
+
+    result = t._fetch_description("G1", client=None)
+
+    assert result["image_url"] == "https://example.test/tire.png"
+    assert result["rating_avg"] == 4.8
+    assert result["review_count"] == 12
+    assert result["review_summary"] == "5점: 소음이 적고 고속 주행이 안정적입니다. / 4점: 승차감이 부드러워요."
+    assert "reviews" not in result
 
 
 def test_search_product_budget_passes_max_price_to_be_and_ignores_min_price(monkeypatch):
