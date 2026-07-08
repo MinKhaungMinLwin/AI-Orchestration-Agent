@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field, create_model
 
 from schemas.tstation.slots import ConversationSlots
+from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.agents.templates.schemas import (
     CheapestProductTemplate,
     DatepickTemplate,
@@ -153,6 +154,53 @@ def _single_product(data: dict[str, Any]) -> dict[str, Any] | None:
     items = payload.get("items") if isinstance(payload, dict) else None
     if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
         return items[0]
+    return None
+
+
+def _product_rows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[Any] = [data]
+    if isinstance(data.get("data"), dict):
+        candidates.append(data["data"])
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("items", "products", "data"):
+            rows = candidate.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _compact_product_name(value: Any) -> str:
+    return str(value or "").casefold().replace(" ", "")
+
+
+def _matching_single_product(data: dict[str, Any], slots: ConversationSlots) -> dict[str, Any] | None:
+    rows = _product_rows(data)
+    if not rows:
+        return _single_product(data)
+
+    target_size = normalize_tire_size(str(slots.tire_size or ""))
+    target_name = _compact_product_name(_product_label(slots.model_dump(mode="json", exclude_none=True)))
+    matched_rows = rows
+    if target_size:
+        size_rows = [
+            row
+            for row in matched_rows
+            if normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size") or "")) == target_size
+        ]
+        if size_rows:
+            matched_rows = size_rows
+    if target_name:
+        name_rows = []
+        for row in matched_rows:
+            row_name = _compact_product_name(row.get("goods_nm") or row.get("product_name") or row.get("title"))
+            if row_name and (row_name in target_name or target_name in row_name):
+                name_rows.append(row)
+        if name_rows:
+            matched_rows = name_rows
+    if len(matched_rows) == 1:
+        return matched_rows[0]
     return None
 
 
@@ -309,12 +357,12 @@ def harvest_order_slots(slots: ConversationSlots, tool_calls: list[dict]) -> Con
         _set_if_present(slots, "car_lnc_cd", args.get("car_lnc_cd"))
 
         if name in _PRODUCT_TOOLS:
-            item = _single_product(parsed)
+            item = _matching_single_product(parsed, slots)
             if item:
                 _set_if_present(slots, "goods_no", item.get("goods_no"))
                 _set_if_present(slots, "tire_model", item.get("goods_nm"))
                 _set_if_present(slots, "pending_product_name", item.get("goods_nm"))
-                _set_if_present(slots, "tire_size", item.get("tire_size_1"))
+                _set_if_present(slots, "tire_size", normalize_tire_size(str(item.get("tire_size_1") or "")))
 
         if name in _STORE_SEARCH_TOOLS:
             store = _single_store(parsed)
