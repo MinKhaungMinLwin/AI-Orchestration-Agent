@@ -11,6 +11,7 @@ import time
 from fastapi.responses import StreamingResponse
 
 from config.env import settings
+from config.tracing import build_trace_config, set_trace_name, tracer
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
 from services.tstation.chat_v3 import composer, context, memory, qc, sse, templates
@@ -41,17 +42,51 @@ def _tokens_enabled() -> bool:
     return bool(getattr(settings, "AI_CHAT_V3_STREAM_TOKENS", True))
 
 
+def _trace_config(
+    request: TStationChatRequest,
+    *,
+    run_name: str,
+    prompt_name: str,
+    tags: list[str],
+) -> dict:
+    return build_trace_config(
+        run_name=run_name,
+        session_id=request.session_id,
+        user_id=request.user_id,
+        trace_id=request.tracing_id,
+        tags=["chat_v3", *tags],
+        extra_metadata={"runtime": "chat_v3"},
+        prompt_name=prompt_name,
+    )
+
+
+def _flush_trace() -> None:
+    try:
+        tracer.flush()
+    except Exception:
+        logger.debug("[CHAT_V3] Langfuse flush failed", exc_info=True)
+
+
 async def _run_turn(request: TStationChatRequest, result: dict):
     t0 = time.perf_counter()
     set_tstation_be_token(request.access_token)
     set_tstation_origin_host(request.origin_host)
     user_text = context.last_user_text(request)
+    set_trace_name(user_text[:60] if user_text else "chat_v3")
     # Deterministic guard inside discovery tools against recommending for a
     # registered car the user did not name — V2 seeds this the same way.
     _audit_set_user_message(user_text)
 
     yield sse.status("생각 중...")
-    decision = await route_request(request)
+    decision = await route_request(
+        request,
+        trace_config=_trace_config(
+            request,
+            run_name="chat_v3_router",
+            prompt_name="chat_v3_router",
+            tags=["router"],
+        ),
+    )
     t_route = time.perf_counter()
 
     guard = get_guard(decision.guard_id) if decision else None
@@ -73,6 +108,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         )
         for event in sse.done():
             yield event
+        _flush_trace()
         return
 
     slots = await load_slots(request.session_id)
@@ -96,6 +132,12 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         tools_for_domains(domains),
         _tool_display_names(),
         stream_tokens=_tokens_enabled(),
+        trace_config=_trace_config(
+            request,
+            run_name="chat_v3_tool_loop",
+            prompt_name="chat_v3_chat",
+            tags=["tool_loop"],
+        ),
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")
     async for event in executor.stream():
@@ -108,7 +150,16 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     slots = templates.harvest_order_slots(slots, executor.tool_calls)
 
     answer = executor.final_text.strip() or ERROR_RESPONSE
-    corrected = await qc.verify_answer(answer, executor.tool_calls)
+    corrected = await qc.verify_answer(
+        answer,
+        executor.tool_calls,
+        trace_config=_trace_config(
+            request,
+            run_name="chat_v3_qc",
+            prompt_name="chat_v3_qc",
+            tags=["qc"],
+        ),
+    )
     if corrected != answer:
         yield sse.sse({"type": "qc_correction", "assistantResponse": corrected})
         answer = corrected
@@ -121,8 +172,21 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     result["answer"] = answer
     yield sse.message(answer)
     chips: list[dict] = []
-    quantity_chips = templates.quantity_quick_replies(answer)
-    rich_event = qna_event or (None if quantity_chips else await templates.build_rich_data_event(answer, executor.tool_calls))
+    quantity_chips = templates.quantity_quick_replies(answer, slots.ord_qty)
+    rich_event = qna_event or (
+        None
+        if quantity_chips
+        else await templates.build_rich_data_event(
+            answer,
+            executor.tool_calls,
+            trace_config=_trace_config(
+                request,
+                run_name="chat_v3_template_builder",
+                prompt_name="chat_v3_template_builder",
+                tags=["template"],
+            ),
+        )
+    )
     # K2 fallback: when the model answered with a plain order summary instead of
     # emitting the preOrder card via present_order_preview_tool (K1 → rich_event),
     # rebuild the card from slots. Guarded by build_preorder_fallback (needs goods_no).
@@ -144,7 +208,16 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         predicted_domains = ["TRANSACTION"]
         yield sse.sse({**preorder_event, "source_domain": domain})
     else:
-        chips = await composer.suggest_quick_replies(user_text, answer)
+        chips = await composer.suggest_quick_replies(
+            user_text,
+            answer,
+            trace_config=_trace_config(
+                request,
+                run_name="chat_v3_quick_replies",
+                prompt_name="chat_v3_quick_replies",
+                tags=["quick_reply"],
+            ),
+        )
         # V2 semantics: predictedDomains = likely domains of the user's NEXT turn.
         # The chips are exactly the next actions we offer, so their domains are
         # the prediction; fall back to the current domain when there are no chips.
@@ -175,6 +248,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         (t_tools - t_route) * 1000,
         (time.perf_counter() - t0) * 1000,
     )
+    _flush_trace()
 
 
 async def _run_turn_safe(request: TStationChatRequest, result: dict):
@@ -194,6 +268,7 @@ async def _run_turn_safe(request: TStationChatRequest, result: dict):
         )
         for event in sse.done():
             yield event
+        _flush_trace()
 
 
 class TStationChatServiceV3:

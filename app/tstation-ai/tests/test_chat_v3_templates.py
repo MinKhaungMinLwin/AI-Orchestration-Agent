@@ -298,10 +298,33 @@ def test_qna_complete_event_uses_redirect_link_without_exposing_url_in_answer():
     assert event["template"] == "qnaComplete"
     assert event["source_tool"] == "transfer_to_qna_tool"
     assert event["data"]["redictLink"] == tool_output["redictLink"]
+    assert event["data"]["cnslType"] == "\uae30\ud0c0"
     assert event["data"]["title"] == "Need help"
     assert event["data"]["summary"] == "Need help with my order"
     assert event["data"]["assistantResponse"] == "Please continue here."
     assert "http" not in event["data"]["assistantResponse"]
+
+
+def test_qna_complete_event_maps_consultation_category_code_to_label():
+    tool_output = {
+        "status": "success",
+        "redictLink": {
+            "pc": "https://www.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+            "mobile": "https://m.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+        },
+        "cnsl_clss_seq": "10002",
+        "inq_tit_nm": "Product question",
+        "ai_summary": "Product question summary",
+    }
+
+    event = templates.build_qna_complete_event(
+        "Please submit the 1:1 inquiry.",
+        [{"name": "transfer_to_qna_tool", "args": {}, "output": json.dumps(tool_output)}],
+    )
+
+    assert event is not None
+    assert event["data"]["cnslType"] == "\uc0c1\ud488\ubb38\uc758"
+    assert event["data"]["cnslType"] != "10002"
 
 
 def test_v3_support_tools_use_qna_handoff_instead_of_legacy_escalation():
@@ -311,3 +334,38 @@ def test_v3_support_tools_use_qna_handoff_instead_of_legacy_escalation():
 
     assert "transfer_to_qna_tool" in tool_names
     assert "escalate_tool" not in tool_names
+
+
+def test_transfer_to_qna_tool_defaults_missing_consultation_category_to_etc(monkeypatch):
+    from services.tstation.agents.e_support_agent import tools as support_tools
+
+    captured = {}
+
+    def fake_make_qna_payload_urls(cnsl_clss_seq=None, inq_tit_nm=None, ai_summary=None):
+        captured["cnsl_clss_seq"] = cnsl_clss_seq
+        captured["inq_tit_nm"] = inq_tit_nm
+        captured["ai_summary"] = ai_summary
+        return {
+            "pc": "https://www.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+            "mobile": "https://m.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+        }
+
+    monkeypatch.setattr(support_tools, "make_qna_payload_urls", fake_make_qna_payload_urls)
+
+    result = support_tools.transfer_to_qna_tool.func(
+        cnsl_clss_seq=None,
+        inq_tit_nm="1:1 inquiry",
+        ai_summary="Generic handoff request",
+    )
+
+    assert captured["cnsl_clss_seq"] == "10019"
+    assert result["cnsl_clss_seq"] == "10019"
+
+    result = support_tools.transfer_to_qna_tool.func(
+        cnsl_clss_seq="99999",
+        inq_tit_nm="1:1 inquiry",
+        ai_summary="Generic handoff request",
+    )
+
+    assert captured["cnsl_clss_seq"] == "10019"
+    assert result["cnsl_clss_seq"] == "10019"

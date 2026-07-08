@@ -54,6 +54,9 @@ from config.env import settings
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_QNA_CNSL_CLSS_SEQ = "10019"
+_QNA_CNSL_CLSS_SEQS = frozenset({"10002", "10006", "10010", "10013", "10017", "10019", "10025", "10034"})
+
 current_support_policy_intent: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_support_policy_intent",
     default="none",
@@ -505,6 +508,9 @@ def transfer_to_qna_tool(
     )
 
     try:
+        cnsl_clss_seq = str(cnsl_clss_seq or "").strip()
+        if cnsl_clss_seq not in _QNA_CNSL_CLSS_SEQS:
+            cnsl_clss_seq = _DEFAULT_QNA_CNSL_CLSS_SEQ
         redict_link = make_qna_payload_urls(
             cnsl_clss_seq=cnsl_clss_seq,
             inq_tit_nm=inq_tit_nm,

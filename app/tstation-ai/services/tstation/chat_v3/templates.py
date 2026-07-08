@@ -71,6 +71,17 @@ _QUANTITY_CHIPS = [
     {"label": "4개", "domain": "TRANSACTION"},
 ]
 
+_CNSL_TYPE_MAP = {
+    "10002": "\uc0c1\ud488\ubb38\uc758",
+    "10006": "\uc8fc\ubb38/\uacb0\uc81c/\ubc30\uc1a1",
+    "10010": "\ubc18\ud488/\uad50\ud658/\ud658\ubd88",
+    "10013": "\uc81c\uacf5\uc11c\ube44\uc2a4/\uc774\ubca4\ud2b8/\ud61c\ud0dd",
+    "10017": "\ud68c\uc6d0",
+    "10019": "\uae30\ud0c0",
+    "10025": "\uac00\ub9f9\uc810\uc81c\ud734\ubb38\uc758",
+    "10034": "\uc774\ub825\uc11c\uc811\uc218",
+}
+
 # Which template a tool's output can feed — data availability, not routing.
 _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "search_product_tool": ("product", ProductTemplate),
@@ -357,6 +368,11 @@ def _answer_without_urls(answer: str) -> str:
     return compact_answer_spacing("\n".join(lines))
 
 
+def _cnsl_type_label(cnsl_clss_seq: object) -> str:
+    seq = str(cnsl_clss_seq or "").strip()
+    return _CNSL_TYPE_MAP.get(seq, seq or "1:1")
+
+
 def build_qna_complete_event(answer: str, tool_calls: list[dict]) -> dict | None:
     """Build qnaComplete directly from transfer_to_qna_tool output."""
     raw = _latest_tool_output(tool_calls, "transfer_to_qna_tool")
@@ -372,7 +388,7 @@ def build_qna_complete_event(answer: str, tool_calls: list[dict]) -> dict | None
     payload = QnaCompleteTemplate(
         assistantResponse=assistant_response,
         redictLink=redict_link,
-        cnslType=str(raw.get("cnsl_clss_seq") or "1:1"),
+        cnslType=_cnsl_type_label(raw.get("cnsl_clss_seq")),
         title=title,
         summary=summary,
     )
@@ -488,7 +504,9 @@ def compact_answer_spacing(answer: str) -> str:
     return text.strip()
 
 
-def quantity_quick_replies(answer: str) -> list[dict]:
+def quantity_quick_replies(answer: str, ord_qty: int | None = None) -> list[dict]:
+    if ord_qty is not None:
+        return []
     text = str(answer or "")
     asks_quantity = (
         "몇 개" in text
@@ -543,7 +561,7 @@ def _normalize_location_payload(payload: BaseModel, tool_output: str) -> None:
                 meta.shopName = shop_name
 
 
-async def build_rich_data_event(answer: str, tool_calls: list[dict]) -> dict | None:
+async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_config: dict | None = None) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
     source = _pick_source(tool_calls)
     if source is None:
@@ -558,16 +576,15 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict]) -> dict | N
         )
     try:
         llm = get_router_llm().with_structured_output(template_model, method="function_calling")
-        payload = await llm.ainvoke(
-            [
-                ("system", TEMPLATE_BUILDER_PROMPT),
-                (
-                    "user",
-                    f"## 도구: {call['name']}\n## 도구 결과\n{str(call['output'])[:_MAX_TOOL_OUTPUT_CHARS]}\n\n"
-                    f"## 챗봇 답변\n{answer[:2000]}",
-                ),
-            ]
-        )
+        messages = [
+            ("system", TEMPLATE_BUILDER_PROMPT),
+            (
+                "user",
+                f"## 도구: {call['name']}\n## 도구 결과\n{str(call['output'])[:_MAX_TOOL_OUTPUT_CHARS]}\n\n"
+                f"## 챗봇 답변\n{answer[:2000]}",
+            ),
+        ]
+        payload = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
         if template_name == "location":
