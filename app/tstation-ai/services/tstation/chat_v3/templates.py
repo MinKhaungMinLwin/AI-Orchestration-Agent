@@ -92,6 +92,7 @@ _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "get_store_schedule_tool": ("datepick", DatepickTemplate),
     "get_multi_store_schedule_tool": ("datepick", DatepickTemplate),
     "transaction_store_preview_tool": ("location", LocationTemplate),
+    "present_order_preview_tool": ("preOrder", PreOrderTemplate),
     "quick_order_tool": ("orderComplete", OrderCompleteTemplate),
 }
 
@@ -193,7 +194,10 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
 
     pending_intent = str(snapshot.get("pending_intent") or "").strip()
     goal_type = str(snapshot.get("goal_type") or "").strip()
-    is_ready_to_add_to_cart = pending_intent == "cart" or goal_type == "add_to_cart"
+    # K1 tool passes the flag explicitly; K2 (slots snapshot) derives it from intent.
+    is_ready_to_add_to_cart = (
+        bool(snapshot.get("is_ready_to_add_to_cart")) or pending_intent == "cart" or goal_type == "add_to_cart"
+    )
     is_ready_to_order = not is_ready_to_add_to_cart
 
     payload = PreOrderTemplate(
@@ -545,6 +549,13 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict]) -> dict | N
     if source is None:
         return None
     template_name, template_model, call = source
+    if template_name == "preOrder":
+        # K1: the model emitted the order via present_order_preview_tool. Build the card
+        # in code from that snapshot (never via the generic LLM template builder — it
+        # cannot set isReadyToOrder / metadata.goodsId reliably). None → K2 slot fallback.
+        return build_preorder_data_event(
+            answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
+        )
     try:
         llm = get_router_llm().with_structured_output(template_model, method="function_calling")
         payload = await llm.ainvoke(

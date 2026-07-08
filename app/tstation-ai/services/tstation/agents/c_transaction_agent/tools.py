@@ -2298,6 +2298,44 @@ def transaction_store_preview_tool(
 # =====================================================
 
 @tool
+def present_order_preview_tool(
+    goods_no: str,
+    ord_qty: int,
+    shop_id: str | None = None,
+    shop_name: str | None = None,
+    requested_cal_day: str | None = None,
+    rsv_hour: str | None = None,
+    payment_amount: int | None = None,
+    product_name: str | None = None,
+    car_no: str | None = None,
+    car_lnc_cd: str | None = None,
+    is_ready_to_add_to_cart: bool = False,
+):
+    """확정된 주문 내용을 사용자에게 최종 확인용 카드(preOrder)로 보여줄 때 호출.
+
+    ⚠️ 실제 주문을 생성하지 않는다 (preview 전용). 주문 실행은 사용자가 확인한 뒤 quick_order_tool 로 한다.
+    주문(place_order): goods_no·수량·매장·희망일정·결제금액이 모두 확정된 뒤에만 호출.
+    장바구니(add_to_cart): goods_no·수량만 확정되면 호출하고 is_ready_to_add_to_cart=True 로 설정.
+    값은 이전 도구 결과/대화에서 확정된 것만 넣고 지어내지 말 것.
+    """
+    return {
+        "status": "ok",
+        "goods_no": goods_no,
+        "ord_qty": ord_qty,
+        "shop_id": shop_id,
+        "shop_name": shop_name,
+        "requested_cal_day": requested_cal_day,
+        "rsv_hour": rsv_hour,
+        "payment_amount": payment_amount,
+        "product_name": product_name,
+        "car_no": car_no,
+        "car_lnc_cd": car_lnc_cd,
+        "is_ready_to_add_to_cart": bool(is_ready_to_add_to_cart),
+        "is_ready_to_order": not bool(is_ready_to_add_to_cart),
+    }
+
+
+@tool
 def save_to_cart_tool(goods_no: str, ord_qty: int, car_lnc_cd: str | None = None):
     """
     장바구니에 상품 저장 (매장 선택 없이).
