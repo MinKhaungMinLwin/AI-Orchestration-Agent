@@ -798,7 +798,7 @@ def _normalize_location_payload(payload: BaseModel, tool_output: str) -> None:
                 meta.shopName = shop_name
 
 
-def _is_booking_location_context(slots: ConversationSlots | None, decision: RouteDecision | None) -> bool:
+def _is_booking_location_context(slots: ConversationSlots | None) -> bool:
     if slots is None:
         return False
     pending_intent = str(slots.pending_intent or "").strip()
@@ -807,8 +807,16 @@ def _is_booking_location_context(slots: ConversationSlots | None, decision: Rout
         return True
     if goal_type in {"place_order", "store_with_stock"}:
         return True
-    domains = decision.all_domains() if decision else []
-    return "TRANSACTION" in domains and bool(slots.goods_no and slots.ord_qty)
+    return bool(slots.goods_no and slots.ord_qty)
+
+
+def booking_flow_hint(slots: ConversationSlots | None) -> str | None:
+    """Guidance for the quick-reply composer when the user is mid order/booking flow."""
+    if not _is_booking_location_context(slots):
+        return None
+    if not (slots.requested_cal_day and slots.rsv_hour):
+        return "사용자는 상품과 매장까지 정했고 아직 예약 일정(날짜/시간)을 정하지 않았습니다. 다음 행동으로 예약 가능한 일정 확인을 제안하세요."
+    return "사용자는 주문/예약을 진행하는 중입니다. 다음 행동으로 주문 진행을 제안하세요."
 
 
 def _metadata_value(metadata: dict[str, Any], *keys: str) -> Any:
@@ -840,7 +848,6 @@ def _datepick_slot_values(payload: BaseModel, slots: ConversationSlots | None) -
 def _normalize_datepick_payload(
     payload: BaseModel,
     slots: ConversationSlots | None = None,
-    decision: RouteDecision | None = None,
 ) -> None:
     for item in getattr(payload, "dates", None) or []:
         item.date = _format_korean_date(getattr(item, "date", ""))
@@ -850,7 +857,7 @@ def _normalize_datepick_payload(
         metadata = payload.metadata
 
     slot_values = _datepick_slot_values(payload, slots)
-    contract_intent = "quick_order_reservation" if _is_booking_location_context(slots, decision) else "store_schedule"
+    contract_intent = "quick_order_reservation" if _is_booking_location_context(slots) else "store_schedule"
     metadata["domain"] = metadata.get("domain") or "TRANSACTION"
     metadata["cta_action"] = metadata.get("cta_action") or "select_schedule"
     metadata["source_intent"] = metadata.get("source_intent") or contract_intent
@@ -879,7 +886,6 @@ async def build_rich_data_event(
     trace_config: dict | None = None,
     *,
     slots: ConversationSlots | None = None,
-    decision: RouteDecision | None = None,
 ) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
     source = _pick_source(tool_calls)
@@ -904,24 +910,24 @@ async def build_rich_data_event(
                 f"## 챗봇 답변\n{answer[:2000]}",
             ),
         ]
-        decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
-        if not decision.applicable or decision.payload is None:
+        relevance = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
+        if not relevance.applicable or relevance.payload is None:
             logger.info(
                 "[CHAT_V3] rich template '%s' skipped (tool=%s) — answer moved to a different topic",
                 template_name,
                 call["name"],
             )
             return None
-        payload = decision.payload
+        payload = relevance.payload
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
         if template_name == "product":
             _normalize_product_payload(payload, str(call["output"]))
         if template_name == "location":
             _normalize_location_payload(payload, str(call["output"]))
-            payload.isBookingFlow = _is_booking_location_context(slots, decision)
+            payload.isBookingFlow = _is_booking_location_context(slots)
         elif template_name == "datepick":
-            _normalize_datepick_payload(payload, slots, decision)
+            _normalize_datepick_payload(payload, slots)
         return {
             "type": "data",
             "template": template_name,

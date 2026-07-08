@@ -189,7 +189,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 tags=["template"],
             ),
             slots=slots,
-            decision=decision,
         )
     )
     if quantity_chips:
@@ -216,6 +215,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 prompt_name="chat_v3_quick_replies",
                 tags=["quick_reply"],
             ),
+            flow_hint=templates.booking_flow_hint(slots),
         )
         # V2 semantics: predictedDomains = likely domains of the user's NEXT turn.
         # The chips are exactly the next actions we offer, so their domains are
