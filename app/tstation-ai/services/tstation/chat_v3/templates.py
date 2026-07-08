@@ -863,7 +863,13 @@ def format_location_answer(answer: str, tool_calls: list[dict]) -> str:
     return "\n\n".join(sections)
 
 
-def _normalize_location_payload(payload: BaseModel, tool_output: str) -> None:
+def _location_slot_values(shop_id: str, shop_name: str, slots: ConversationSlots | None) -> dict[str, Any]:
+    values = slots.model_dump(mode="json", exclude_none=True) if slots else {}
+    values.update({"shop_id": shop_id, "shop_name": shop_name, "store_name": shop_name})
+    return {key: value for key, value in values.items() if value not in (None, "", [])}
+
+
+def _normalize_location_payload(payload: BaseModel, tool_output: str, slots: ConversationSlots | None = None) -> None:
     raw_stores = _store_rows_from_output(tool_output)
     stores = getattr(payload, "stores", None)
     metadata = getattr(payload, "metadata", None)
@@ -885,6 +891,31 @@ def _normalize_location_payload(payload: BaseModel, tool_output: str) -> None:
                 meta.shopId = shop_id
             if shop_name:
                 meta.shopName = shop_name
+            if _is_booking_location_context(slots):
+                slots_payload = _location_slot_values(shop_id, shop_name, slots)
+                meta.domain = meta.domain or "TRANSACTION"
+                meta.cta_action = "select_store"
+                meta.ctaAction = "select_store"
+                meta.fills_slot = "store"
+                meta.fillsSlot = "store"
+                meta.entity_id = shop_id or None
+                meta.entity_label = shop_name or None
+                meta.source_intent = meta.source_intent or "quick_order_reservation"
+                meta.expected_contract_intent = meta.expected_contract_intent or "quick_order_reservation"
+                meta.expected_behavior = meta.expected_behavior or "slot_fill"
+                meta.slots = slots_payload
+                meta.ui_action = {
+                    "action_type": "select_store",
+                    "cta_action": "select_store",
+                    "fills_slot": "store",
+                    "expected_behavior": meta.expected_behavior,
+                    "source_intent": meta.source_intent,
+                    "expected_contract_intent": meta.expected_contract_intent,
+                    "entity_type": "store",
+                    "entity_id": shop_id or None,
+                    "entity_label": shop_name or None,
+                    "slots": slots_payload,
+                }
 
 
 def _is_booking_location_context(slots: ConversationSlots | None) -> bool:
@@ -1024,7 +1055,7 @@ async def build_rich_data_event(
             _normalize_product_payload(payload, str(call["output"]))
             _normalize_product_selection_payload(payload, slots)
         if template_name == "location":
-            _normalize_location_payload(payload, str(call["output"]))
+            _normalize_location_payload(payload, str(call["output"]), slots)
             payload.isBookingFlow = _is_booking_location_context(slots)
         elif template_name == "datepick":
             _normalize_datepick_payload(payload, slots)

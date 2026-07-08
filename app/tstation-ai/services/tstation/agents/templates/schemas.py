@@ -372,6 +372,14 @@ class LocationMeta(BaseModel):
     todayInstall: bool | str | None = None
     tnaDelivery: bool | str | None = None
     isInstallable: bool | str | None = None
+    domain: str | None = None
+    source_intent: str | None = None
+    expected_contract_intent: str | None = None
+    expected_behavior: str | None = None
+    entity_id: str | None = None
+    entity_label: str | None = None
+    slots: dict | None = None
+    ui_action: dict | None = None
 
 
 class LocationItem(BaseModel):

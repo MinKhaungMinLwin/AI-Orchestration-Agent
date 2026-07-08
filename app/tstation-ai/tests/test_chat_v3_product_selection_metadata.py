@@ -1,7 +1,17 @@
 import os
+import json
 
 from schemas.tstation.slots import ConversationSlots
-from services.tstation.agents.templates.schemas import DatepickTemplate, ProductItem, ProductMeta, ProductTemplate, ScheduleItem
+from services.tstation.agents.templates.schemas import (
+    DatepickTemplate,
+    LocationItem,
+    LocationMeta,
+    LocationTemplate,
+    ProductItem,
+    ProductMeta,
+    ProductTemplate,
+    ScheduleItem,
+)
 from schemas.tstation.chat import TStationChatRequest
 
 
@@ -55,6 +65,7 @@ from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 from services.tstation.chat_v3.slots.store import apply_patch  # noqa: E402
 from services.tstation.chat_v3.templates import (  # noqa: E402
     _normalize_datepick_payload,
+    _normalize_location_payload,
     _normalize_product_selection_payload,
     harvest_order_slots,
 )
@@ -130,6 +141,52 @@ def test_order_datepick_template_carries_existing_order_slots() -> None:
     assert metadata_slots["shop_id"] == "S0001"
     assert metadata_slots["pending_intent"] == "order"
     assert payload.metadata["ui_action"]["slots"]["goods_no"] == "G000000310126"
+
+
+def test_order_location_template_carries_select_store_slots() -> None:
+    payload = LocationTemplate(
+        assistantResponse="Select a store.",
+        stores=[
+            LocationItem(
+                nameAddress="T-Station Bundang",
+                distance="",
+                detailAddress="Bundang address",
+                isAllMyT=True,
+                todayInstall=False,
+                tnaDelivery=False,
+                description="",
+            )
+        ],
+        metadata=[LocationMeta(shopId="S0001")],
+    )
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        ord_qty=4,
+        tire_model="Ventus S2 AS",
+        tire_size="245/45R19",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    tool_output = {
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "S0001",
+                    "shop_nm": "T-Station Bundang",
+                    "addr_base": "Bundang address",
+                }
+            ]
+        }
+    }
+
+    _normalize_location_payload(payload, json.dumps(tool_output), slots)
+
+    metadata = payload.metadata[0]
+    assert metadata.ui_action["action_type"] == "select_store"
+    assert metadata.slots["goods_no"] == "G000000310126"
+    assert metadata.slots["ord_qty"] == 4
+    assert metadata.slots["shop_id"] == "S0001"
+    assert metadata.ui_action["slots"]["shop_id"] == "S0001"
 
 
 def test_harvest_order_slots_resolves_goods_no_from_product_name_and_size() -> None:
