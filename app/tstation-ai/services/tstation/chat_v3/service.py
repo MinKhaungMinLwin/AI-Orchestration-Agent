@@ -17,7 +17,12 @@ from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
 from services.tstation.chat_v3 import composer, context, memory, qc, sse, templates
 from services.tstation.chat_v3.executor import ToolLoopExecutor
-from services.tstation.chat_v3.prompts.persona import ERROR_RESPONSE, SYSTEM_PROMPT, TRANSACTION_WRITE_GUIDANCE
+from services.tstation.chat_v3.prompts.persona import (
+    ERROR_RESPONSE,
+    STORE_SEARCH_FLOW_GUIDANCE,
+    SYSTEM_PROMPT,
+    TRANSACTION_WRITE_GUIDANCE,
+)
 from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
 from services.tstation.chat_v3.slots.derive import apply_fe_slots, derive_slots_from_tool_calls
@@ -122,6 +127,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     extra_context = []
     if "TRANSACTION" in domains:
         extra_context.append(TRANSACTION_WRITE_GUIDANCE)
+        extra_context.append(STORE_SEARCH_FLOW_GUIDANCE)
     slots_block = slots_context_block(slots)
     if slots_block:
         extra_context.append(slots_block)
@@ -181,11 +187,10 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         answer = qna_event["data"]["assistantResponse"]
 
     chips: list[dict] = []
-    quantity_chips = templates.quantity_quick_replies(answer, slots.ord_qty)
-    preorder_event = None if quantity_chips else templates.build_preorder_fallback(answer, slots, decision)
+    preorder_event = templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
-        if quantity_chips or preorder_event
+        if preorder_event
         else await templates.build_rich_data_event(
             answer,
             executor.tool_calls,
@@ -203,15 +208,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         for event in token_events:
             yield event
         yield sse.message(answer)
-    if quantity_chips:
-        chips = quantity_chips
-        predicted_domains = ["TRANSACTION"]
-        yield sse.data_event(
-            "quickReply",
-            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": predicted_domains},
-            source_domain=domain,
-        )
-    elif rich_event:
+    if rich_event:
         predicted_domains = [domain]
         yield sse.sse({**rich_event, "source_domain": domain})
     elif preorder_event:

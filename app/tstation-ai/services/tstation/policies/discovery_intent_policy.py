@@ -1909,6 +1909,8 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 value = source.get(key)
                 if value is not None and args.get(key) is None:
                     args[key] = value
+    if args.get("min_price") is not None or args.get("max_price") is not None:
+        args["limit"] = 10
     context_for_recommendation = entities.get("recommendation_context") or {}
     if isinstance(context_for_recommendation, Mapping):
         for source_key in ("tool_args_patch", "expected_tool_args"):

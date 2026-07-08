@@ -75,13 +75,6 @@ _SERVICE_LABELS = {
     "126": "무상점검",
 }
 
-_QUANTITY_CHIPS = [
-    {"label": "1개", "domain": "TRANSACTION"},
-    {"label": "2개", "domain": "TRANSACTION"},
-    {"label": "3개", "domain": "TRANSACTION"},
-    {"label": "4개", "domain": "TRANSACTION"},
-]
-
 _CNSL_TYPE_MAP = {
     "10002": "\uc0c1\ud488\ubb38\uc758",
     "10006": "\uc8fc\ubb38/\uacb0\uc81c/\ubc30\uc1a1",
@@ -742,23 +735,6 @@ def compact_answer_spacing(answer: str) -> str:
     while "\n\n" in text:
         text = text.replace("\n\n", "\n")
     return text.strip()
-
-
-def quantity_quick_replies(answer: str, ord_qty: int | None = None) -> list[dict]:
-    if ord_qty is not None:
-        return []
-    text = str(answer or "")
-    asks_quantity = (
-        "몇 개" in text
-        or "몇 본" in text
-        or "수량" in text
-        or "4개로 진행" in text
-        or "4개 기준" in text
-    )
-    asks_confirmation = "진행할까요" in text or "선택" in text or "알려" in text or "말씀" in text
-    if asks_quantity and asks_confirmation:
-        return [dict(chip) for chip in _QUANTITY_CHIPS]
-    return []
 
 
 def format_location_answer(answer: str, tool_calls: list[dict]) -> str:

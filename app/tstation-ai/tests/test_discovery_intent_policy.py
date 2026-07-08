@@ -1086,6 +1086,7 @@ def test_recommendation_follow_up_inherits_persisted_price_range() -> None:
 
     assert plan.tool_args_patch.get("min_price") == 200000
     assert plan.tool_args_patch.get("max_price") == 299999
+    assert plan.tool_args_patch.get("limit") == 10
 
 
 def test_recommendation_follow_up_current_turn_price_replaces_carried_range() -> None:
@@ -1104,3 +1105,14 @@ def test_recommendation_follow_up_current_turn_price_replaces_carried_range() ->
 
     assert plan.tool_args_patch.get("max_price") == 300000
     assert plan.tool_args_patch.get("min_price") is None
+    assert plan.tool_args_patch.get("limit") == 10
+
+
+def test_price_range_recommendation_uses_ten_item_limit() -> None:
+    frame = build_discovery_intent_frame("20만원대 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["min_price"] == 200000
+    assert plan.tool_args_patch["max_price"] == 299999
+    assert plan.tool_args_patch["limit"] == 10
