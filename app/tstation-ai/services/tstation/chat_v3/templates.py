@@ -798,12 +798,32 @@ def _normalize_location_payload(payload: BaseModel, tool_output: str) -> None:
                 meta.shopName = shop_name
 
 
+def _is_booking_location_context(slots: ConversationSlots | None, decision: RouteDecision | None) -> bool:
+    if slots is None:
+        return False
+    pending_intent = str(slots.pending_intent or "").strip()
+    goal_type = str(slots.goal_type or "").strip()
+    if pending_intent in {"order", "reservation", "stock"}:
+        return True
+    if goal_type in {"place_order", "store_with_stock"}:
+        return True
+    domains = decision.all_domains() if decision else []
+    return "TRANSACTION" in domains and bool(slots.goods_no and slots.ord_qty)
+
+
 def _normalize_datepick_payload(payload: BaseModel) -> None:
     for item in getattr(payload, "dates", None) or []:
         item.date = _format_korean_date(getattr(item, "date", ""))
 
 
-async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_config: dict | None = None) -> dict | None:
+async def build_rich_data_event(
+    answer: str,
+    tool_calls: list[dict],
+    trace_config: dict | None = None,
+    *,
+    slots: ConversationSlots | None = None,
+    decision: RouteDecision | None = None,
+) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
     source = _pick_source(tool_calls)
     if source is None:
@@ -842,6 +862,7 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_confi
             _normalize_product_payload(payload, str(call["output"]))
         if template_name == "location":
             _normalize_location_payload(payload, str(call["output"]))
+            payload.isBookingFlow = _is_booking_location_context(slots, decision)
         elif template_name == "datepick":
             _normalize_datepick_payload(payload)
         return {

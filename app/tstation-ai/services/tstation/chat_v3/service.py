@@ -188,6 +188,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 prompt_name="chat_v3_template_builder",
                 tags=["template"],
             ),
+            slots=slots,
+            decision=decision,
         )
     )
     if quantity_chips:
