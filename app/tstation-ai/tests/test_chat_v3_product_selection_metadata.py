@@ -67,6 +67,7 @@ from services.tstation.chat_v3.templates import (  # noqa: E402
     _normalize_datepick_payload,
     _normalize_location_payload,
     _normalize_product_selection_payload,
+    _pick_source,
     harvest_order_slots,
 )
 
@@ -187,6 +188,43 @@ def test_order_location_template_carries_select_store_slots() -> None:
     assert metadata.slots["ord_qty"] == 4
     assert metadata.slots["shop_id"] == "S0001"
     assert metadata.ui_action["slots"]["shop_id"] == "S0001"
+
+
+def test_confirmed_order_flow_skips_stale_product_card_source() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        pending_product_name="Ventus S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    tool_calls = [
+        {
+            "name": "search_stores_tool",
+            "output": json.dumps({"data": {"items": [{"shop_id": "S0001", "shop_nm": "T-Station Bundang"}]}}),
+        },
+        {
+            "name": "search_product_tool",
+            "output": json.dumps({
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000310126",
+                            "goods_nm": "Ventus S2 AS",
+                            "tire_size_1": "245/45R19",
+                        }
+                    ]
+                }
+            }),
+        },
+    ]
+
+    source = _pick_source(tool_calls, slots)
+
+    assert source is not None
+    assert source[0] == "location"
+    assert source[2]["name"] == "search_stores_tool"
 
 
 def test_harvest_order_slots_resolves_goods_no_from_product_name_and_size() -> None:
