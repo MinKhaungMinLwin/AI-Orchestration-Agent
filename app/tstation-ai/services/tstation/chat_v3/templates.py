@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, create_model
 
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.templates.schemas import (
@@ -347,6 +347,34 @@ def _pick_source(tool_calls: list[dict]) -> tuple[str, type[BaseModel], dict] | 
         if entry and not output.startswith("Tool error") and _has_rows(output):
             return entry[0], entry[1], call
     return None
+
+
+_RELEVANCE_WRAPPERS: dict[str, type[BaseModel]] = {}
+
+
+def _relevance_wrapper(template_model: type[BaseModel]) -> type[BaseModel]:
+    """Wrap a template model with an `applicable` flag the LLM can set to false.
+
+    In a multi-round tool loop, `_pick_source` can only see WHICH tool ran
+    most recently — not whether the final answer is still about it. E.g. a
+    product tool run to confirm a quantity, followed by a final answer that
+    pivots to asking the user for a store location, leaves a stale product
+    call as the "most recent" one. Folding `applicable` into the SAME
+    structured-output call (instead of a separate check) lets the model
+    judge relevance against the actual final answer text at no extra cost.
+    """
+    wrapper = _RELEVANCE_WRAPPERS.get(template_model.__name__)
+    if wrapper is None:
+        wrapper = create_model(
+            f"{template_model.__name__}Decision",
+            applicable=(
+                bool,
+                Field(description="답변이 실제로 이 도구 결과를 보여주는 중이면 true, 다른 주제로 넘어갔으면 false"),
+            ),
+            payload=(template_model | None, Field(default=None, description="applicable=true일 때만 채우세요")),
+        )
+        _RELEVANCE_WRAPPERS[template_model.__name__] = wrapper
+    return wrapper
 
 
 def _parse_tool_output(output: object) -> dict[str, Any]:
@@ -745,7 +773,8 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_confi
             answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
         )
     try:
-        llm = get_router_llm().with_structured_output(template_model, method="function_calling")
+        wrapper_model = _relevance_wrapper(template_model)
+        llm = get_router_llm().with_structured_output(wrapper_model, method="function_calling")
         messages = [
             ("system", TEMPLATE_BUILDER_PROMPT),
             (
@@ -754,7 +783,15 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_confi
                 f"## 챗봇 답변\n{answer[:2000]}",
             ),
         ]
-        payload = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
+        decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
+        if not decision.applicable or decision.payload is None:
+            logger.info(
+                "[CHAT_V3] rich template '%s' skipped (tool=%s) — answer moved to a different topic",
+                template_name,
+                call["name"],
+            )
+            return None
+        payload = decision.payload
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
         if template_name == "product":
