@@ -128,6 +128,18 @@ def _is_selection_search(call: dict) -> bool:
     return args.get("min_price") is not None or args.get("max_price") is not None
 
 
+def _has_multiple_products(call: dict) -> bool:
+    """True when a product search returned ≥2 items — a genuine list to choose from.
+
+    A single item means search_product_tool was used as a specific-product LOOKUP
+    (review/spec of one tire), not a browse — so it must not feed a selection card.
+    """
+    parsed = _parse_tool_output(call.get("output"))
+    payload = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+    items = payload.get("items") if isinstance(payload, dict) else None
+    return isinstance(items, list) and len(items) >= 2
+
+
 def _has_rows(output: str) -> bool:
     """True when the tool output parses to non-empty JSON data."""
     try:
@@ -913,11 +925,11 @@ async def build_rich_data_event(
         return build_preorder_data_event(
             answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
         )
-    
+
     if (
         call.get("name") in _INFO_GATED_TOOLS
-        and not allow_selection_cards
         and not _is_selection_search(call)
+        and (not allow_selection_cards or not _has_multiple_products(call))
     ):
         return None
     try:
