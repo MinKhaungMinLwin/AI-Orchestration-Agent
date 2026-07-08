@@ -569,6 +569,79 @@ def test_preorder_fallback_builds_ready_order_card_from_slots():
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
 
 
+def test_get_final_price_tool_builds_preorder_without_llm(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("get_final_price_tool preOrder should be built without LLM")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    price_output = {
+        "status": "success",
+        "data": {
+            "cheapest_final_prc": 150000,
+            "wage_prc": 4100,
+            "sale_prc": 200000,
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "아래 내용으로 구매 진행해도 될까요?",
+            [
+                {
+                    "name": "get_final_price_tool",
+                    "args": {"goods_no": "G000000309783"},
+                    "output": json.dumps(price_output),
+                }
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["metadata"]["source"] == "chat_v3_final_price_preorder"
+    assert event["data"]["metadata"]["goodsId"] == "G000000309783"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 308200
+    assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
+
+
+def test_get_final_price_tool_does_not_build_preorder_without_schedule():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    price_output = {"status": "success", "data": {"cheapest_final_prc": 150000, "wage_prc": 4100}}
+
+    event = templates.build_final_price_preorder_event(
+        "아래 내용으로 구매 진행해도 될까요?",
+        slots,
+        {
+            "name": "get_final_price_tool",
+            "args": {"goods_no": "G000000309783"},
+            "output": json.dumps(price_output),
+        },
+    )
+
+    assert event is None
+
+
 async def _collect_turn_events(request: TStationChatRequest) -> list[str]:
     events = []
     async for event in service._run_turn(request, {}):  # noqa: SLF001
@@ -941,3 +1014,145 @@ def test_booking_flow_hint_offers_order_when_all_slots_ready():
 def test_booking_flow_hint_none_outside_booking_context():
     assert templates.booking_flow_hint(ConversationSlots()) is None
     assert templates.booking_flow_hint(None) is None
+
+
+def test_booking_flow_with_product_size_quantity_prioritizes_store_list_before_schedule(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        pending_intent="order",
+    )
+    store_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F00721",
+                    "shop_nm": "티스테이션 정발산점",
+                    "addr_base": "경기도 고양시 일산동구",
+                    "addr_dtl": "대산로 15",
+                    "is_installable": True,
+                }
+            ]
+        },
+    }
+    schedule_output = {
+        "status": "success",
+        "data": {"dates": [{"date": "20260709", "available": True, "availableTimes": [9, 10]}]},
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "고양시에서 구매/장착 가능한 매장 후보를 확인했어요.",
+            [
+                {"name": "search_stores_tool", "args": {"region": "고양시"}, "output": json.dumps(store_output)},
+                {"name": "get_multi_store_schedule_tool", "args": {}, "output": json.dumps(schedule_output)},
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["source_tool"] == "search_stores_tool"
+    assert event["data"]["metadata"][0]["shopId"] == "F00721"
+
+
+def test_booking_flow_with_store_selected_prioritizes_schedule_template(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F00721",
+        pending_intent="order",
+    )
+    store_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F00721",
+                    "shop_nm": "티스테이션 정발산점",
+                    "addr_base": "경기도 고양시 일산동구",
+                    "addr_dtl": "대산로 15",
+                }
+            ]
+        },
+    }
+    schedule_output = {
+        "status": "success",
+        "data": {"dates": [{"date": "20260709", "available": True, "availableTimes": [9, 10]}]},
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정발산점에서 예약 가능한 일정을 확인했어요.",
+            [
+                {"name": "get_multi_store_schedule_tool", "args": {"shop_id": "F00721"}, "output": json.dumps(schedule_output)},
+                {"name": "search_stores_tool", "args": {"region": "고양시"}, "output": json.dumps(store_output)},
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["source_tool"] == "get_multi_store_schedule_tool"
+    assert event["data"]["metadata"]["slots"]["shop_id"] == "F00721"
+
+
+def test_get_store_schedule_tool_builds_datepick_without_llm(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("get_store_schedule_tool datepick should be built without LLM")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_name="티스테이션 정발산점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    schedule_output = {
+        "status": "success",
+        "data": {
+            "shop_id": "F00721",
+            "shop_nm": "티스테이션 정발산점",
+            "slots": [
+                {"cal_day": "20260709", "tm": "0900"},
+                {"cal_day": "20260709", "tm": "1000"},
+                {"cal_day": "20260709", "tm": "1200"},
+                {"cal_day": "20260710", "tm": "13"},
+            ],
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정발산점 예약 가능한 일정을 확인했어요.",
+            [
+                {
+                    "name": "get_store_schedule_tool",
+                    "args": {"shop_id": "F00721", "mode": "general"},
+                    "output": json.dumps(schedule_output, ensure_ascii=False),
+                }
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["source_tool"] == "get_store_schedule_tool"
+    assert event["assistant_response_source"] == "code_chat_v3_get_store_schedule"
+    assert event["data"]["dates"][0]["date"] == "2026년 07월 09일"
+    assert event["data"]["dates"][0]["availableTimes"] == [9, 10]
+    assert event["data"]["dates"][1]["availableTimes"] == [13]
+    assert event["data"]["selectedDate"] == 0
+    assert event["data"]["metadata"]["slots"]["shop_id"] == "F00721"
+    assert event["data"]["metadata"]["ui_action"]["fills_slot"] == "requested_cal_day,rsv_hour"

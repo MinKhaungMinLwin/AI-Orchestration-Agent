@@ -113,6 +113,7 @@ _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "get_user_vehicles_tool": ("listCar", ListCarTemplate),
     "get_my_cars_tool": ("listCar", ListCarTemplate),
     "get_cheapest_price_tool": ("cheapestProduct", CheapestProductTemplate),
+    "get_final_price_tool": ("preOrder", PreOrderTemplate),
     "get_store_schedule_tool": ("datepick", DatepickTemplate),
     "get_multi_store_schedule_tool": ("datepick", DatepickTemplate),
     "transaction_store_preview_tool": ("location", LocationTemplate),
@@ -368,6 +369,28 @@ def build_preorder_fallback(answer: str, slots: ConversationSlots, decision: Rou
     )
 
 
+def build_final_price_preorder_event(answer: str, slots: ConversationSlots | None, call: dict) -> dict | None:
+    if slots is None or not _ready_order_slots(slots):
+        return None
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+    args_goods_no = str(args.get("goods_no") or "").strip()
+    if args_goods_no and args_goods_no != str(slots.goods_no or "").strip():
+        return None
+    payment_amount = _extract_payment_amount(_tool_payload(call.get("output")), slots.ord_qty)
+    if payment_amount is None:
+        payment_amount = _as_int(slots.payment_amount)
+    if payment_amount is None:
+        return None
+
+    snapshot = slots.model_dump(mode="json", exclude_none=True)
+    snapshot["payment_amount"] = payment_amount
+    return build_preorder_data_event(
+        answer,
+        snapshot,
+        source="chat_v3_final_price_preorder",
+    )
+
+
 def harvest_order_slots(slots: ConversationSlots, tool_calls: list[dict]) -> ConversationSlots:
     for call in tool_calls:
         name = str(call.get("name") or "")
@@ -432,20 +455,40 @@ def _answer_requests_store_selection(answer: str) -> bool:
     return any(action in text for action in ("알려", "선택", "골라", "말씀", "입력", "정해"))
 
 
+def _has_product_size_quantity(slots: ConversationSlots | None) -> bool:
+    if slots is None:
+        return False
+    return bool(slots.goods_no and slots.tire_size and _has_confirmed_quantity(slots))
+
+
 def _pick_source(
     tool_calls: list[dict],
     slots: ConversationSlots | None = None,
     previous_slots: ConversationSlots | None = None,
 ) -> tuple[str, type[BaseModel], dict] | None:
     """Most recent tool call whose output can feed a rich template."""
+    candidates: list[tuple[str, type[BaseModel], dict]] = []
     for call in reversed(tool_calls):
         entry = _TOOL_TEMPLATES.get(call.get("name") or "")
         output = str(call.get("output") or "")
         if entry and _should_skip_product_source(entry[0], slots, previous_slots):
             continue
         if entry and not output.startswith("Tool error") and _has_rows(output):
-            return entry[0], entry[1], call
-    return None
+            candidates.append((entry[0], entry[1], call))
+    if not candidates:
+        return None
+
+    if _has_product_size_quantity(slots):
+        if not slots.shop_id:
+            for candidate in candidates:
+                if candidate[0] == "location":
+                    return candidate
+            return None
+        for candidate in candidates:
+            if candidate[0] == "datepick":
+                return candidate
+
+    return candidates[0]
 
 
 def _should_gate_info_product_source(
@@ -500,6 +543,12 @@ def _parse_tool_output(output: object) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _tool_payload(output: object) -> dict[str, Any]:
+    parsed = _parse_tool_output(output)
+    data = parsed.get("data")
+    return data if isinstance(data, dict) else parsed
+
+
 def _get_str(row: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = row.get(key)
@@ -522,6 +571,86 @@ def _get_num(row: dict[str, Any], *keys: str) -> float | None:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _parse_schedule_hour(value: object) -> int | None:
+    text = str(value or "").strip()
+    if not text.isdigit():
+        return None
+    if len(text) <= 2:
+        hour = int(text)
+    elif len(text) == 4:
+        hour = int(text[:2])
+    else:
+        return None
+    return hour if 0 <= hour <= 23 else None
+
+
+def _schedule_slots_by_day(rows: object) -> dict[str, set[int]]:
+    by_day: dict[str, set[int]] = {}
+    if not isinstance(rows, list):
+        return by_day
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        cal_day = _get_str(row, "cal_day", "calDay")
+        hour = _parse_schedule_hour(row.get("tm") or row.get("time") or row.get("hour"))
+        if len(cal_day) != 8 or not cal_day.isdigit() or hour is None or hour == 12:
+            continue
+        by_day.setdefault(cal_day, set()).add(hour)
+    return by_day
+
+
+def _datepick_response(shop_name: str, dates: list[dict[str, Any]]) -> str:
+    first = next((date for date in dates if date.get("availableTimes")), None)
+    if not first:
+        return "예약 가능한 일정을 확인했어요. 원하시는 날짜와 시간을 선택해 주세요."
+    times = ", ".join(f"{hour}시" for hour in first["availableTimes"][:8])
+    subject = f"{shop_name}에서 " if shop_name else ""
+    return f"{subject}예약 가능한 일정을 확인했어요.\n{first['date']}: {times}\n원하시는 날짜와 시간을 선택해 주세요."
+
+
+def _get_store_schedule_datepick_event(answer: str, call: dict, slots: ConversationSlots | None = None) -> dict | None:
+    payload = _tool_payload(call.get("output"))
+    by_day = _schedule_slots_by_day(payload.get("slots"))
+    if not by_day:
+        return None
+
+    dates: list[dict[str, Any]] = []
+    selected_idx: int | None = None
+    for index, cal_day in enumerate(sorted(by_day.keys())):
+        times = sorted(by_day[cal_day])
+        dates.append({
+            "date": _format_korean_date(cal_day),
+            "available": bool(times),
+            "availableTimes": times,
+            "index": index,
+        })
+        if selected_idx is None and times:
+            selected_idx = index
+    if selected_idx is None:
+        return None
+
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+    shop_id = _get_str(payload, "shop_id", "shopId") or _get_str(args, "shop_id", "shopId")
+    shop_name = _get_str(payload, "shop_nm", "shopName", "storeName") or str(getattr(slots, "shop_name", "") or "")
+    metadata = {"shopId": shop_id or None}
+    if shop_name:
+        metadata["shopName"] = shop_name
+    datepick = DatepickTemplate(
+        assistantResponse=_datepick_response(shop_name, dates) or answer,
+        dates=dates,
+        selectedDate=selected_idx,
+        metadata=metadata,
+    )
+    _normalize_datepick_payload(datepick, slots)
+    return {
+        "type": "data",
+        "template": "datepick",
+        "data": datepick.model_dump(mode="json", exclude_none=True),
+        "source_tool": call["name"],
+        "assistant_response_source": "code_chat_v3_get_store_schedule",
+    }
 
 
 def _latest_tool_output(tool_calls: list[dict], tool_name: str) -> dict[str, Any]:
@@ -1200,6 +1329,8 @@ async def build_rich_data_event(
         return None
     template_name, template_model, call = source
     if template_name == "preOrder":
+        if call.get("name") == "get_final_price_tool":
+            return build_final_price_preorder_event(answer, slots, call)
         # K1: the model emitted the order via present_order_preview_tool. Build the card
         # in code from that snapshot (never via the generic LLM template builder — it
         # cannot set isReadyToOrder / metadata.goodsId reliably). None → K2 slot fallback.
@@ -1208,6 +1339,10 @@ async def build_rich_data_event(
         )
     if template_name == "location":
         return build_location_data_event(answer, call, slots)
+    if template_name == "datepick" and call.get("name") == "get_store_schedule_tool":
+        event = _get_store_schedule_datepick_event(answer, call, slots)
+        if event is not None:
+            return event
 
     if template_name == "product" and _is_quantity_required_flow(slots):
         logger.info("[CHAT_V3] product template skipped — order flow is asking for quantity")
