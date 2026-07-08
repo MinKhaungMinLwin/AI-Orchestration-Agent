@@ -838,6 +838,22 @@ def test_search_product_shows_card_when_selection_needed(monkeypatch):
     assert event is not None and event["template"] == "product"
 
 
+def test_quantity_required_order_flow_suppresses_product_card(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    slots = ConversationSlots(goods_no="G0001", pending_intent="order", goal_type="place_order")
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "구매를 진행하려면 수량이 필요해요.",
+            [{"name": "search_product_tool", "args": {"size": "245/45R18"}, "output": _PRODUCT_ROWS}],
+            slots=slots,
+            allow_selection_cards=True,
+        )
+    )
+
+    assert event is None
+
+
 def test_recommend_card_always_shown_even_when_selection_flag_false(monkeypatch):
     # Note: recommend/bestseller must ALWAYS show a card — they are outside the gate.
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())

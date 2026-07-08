@@ -1209,6 +1209,10 @@ async def build_rich_data_event(
     if template_name == "location":
         return build_location_data_event(answer, call, slots)
 
+    if template_name == "product" and _is_quantity_required_flow(slots):
+        logger.info("[CHAT_V3] product template skipped — order flow is asking for quantity")
+        return None
+
     if (
         template_name == "product"
         and _is_booking_location_context(slots)
