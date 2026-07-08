@@ -180,6 +180,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     # Part B: capture resolved order IDs (goods_no/shop_id/payment_amount) from this
     # turn's tool outputs into slots so the preOrder card + next-turn quick_order_tool
     # have their required args even when a later turn no longer re-calls the tools.
+    slots_before_harvest = slots.model_copy()
     slots = templates.harvest_order_slots(slots, executor.tool_calls)
 
     answer = executor.final_text.strip() or ERROR_RESPONSE
@@ -217,6 +218,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 tags=["template"],
             ),
             slots=slots,
+            previous_slots=slots_before_harvest,
             allow_selection_cards=_allow_selection_cards(decision),
         )
     )

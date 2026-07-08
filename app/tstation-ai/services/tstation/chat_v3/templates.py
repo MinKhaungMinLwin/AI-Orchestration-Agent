@@ -402,20 +402,53 @@ def harvest_order_slots(slots: ConversationSlots, tool_calls: list[dict]) -> Con
     return slots
 
 
-def _should_skip_product_source(template_name: str, slots: ConversationSlots | None) -> bool:
-    return template_name == "product" and bool(slots and slots.goods_no and _is_booking_location_context(slots))
+def _product_resolved_this_turn(
+    slots: ConversationSlots | None,
+    previous_slots: ConversationSlots | None,
+) -> bool:
+    return bool(slots and slots.goods_no and previous_slots and not previous_slots.goods_no)
 
 
-def _pick_source(tool_calls: list[dict], slots: ConversationSlots | None = None) -> tuple[str, type[BaseModel], dict] | None:
+def _should_skip_product_source(
+    template_name: str,
+    slots: ConversationSlots | None,
+    previous_slots: ConversationSlots | None = None,
+) -> bool:
+    return (
+        template_name == "product"
+        and bool(slots and slots.goods_no and _is_booking_location_context(slots))
+        and not _product_resolved_this_turn(slots, previous_slots)
+    )
+
+
+def _pick_source(
+    tool_calls: list[dict],
+    slots: ConversationSlots | None = None,
+    previous_slots: ConversationSlots | None = None,
+) -> tuple[str, type[BaseModel], dict] | None:
     """Most recent tool call whose output can feed a rich template."""
     for call in reversed(tool_calls):
         entry = _TOOL_TEMPLATES.get(call.get("name") or "")
         output = str(call.get("output") or "")
-        if entry and _should_skip_product_source(entry[0], slots):
+        if entry and _should_skip_product_source(entry[0], slots, previous_slots):
             continue
         if entry and not output.startswith("Tool error") and _has_rows(output):
             return entry[0], entry[1], call
     return None
+
+
+def _should_gate_info_product_source(
+    call: dict,
+    *,
+    allow_selection_cards: bool,
+    slots: ConversationSlots | None,
+    previous_slots: ConversationSlots | None,
+) -> bool:
+    if call.get("name") not in _INFO_GATED_TOOLS or _is_selection_search(call):
+        return False
+    if _product_resolved_this_turn(slots, previous_slots):
+        return False
+    return not allow_selection_cards or not _has_multiple_products(call)
 
 
 _RELEVANCE_WRAPPERS: dict[str, type[BaseModel]] = {}
@@ -1050,10 +1083,11 @@ async def build_rich_data_event(
     trace_config: dict | None = None,
     *,
     slots: ConversationSlots | None = None,
+    previous_slots: ConversationSlots | None = None,
     allow_selection_cards: bool = True,
 ) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
-    source = _pick_source(tool_calls, slots)
+    source = _pick_source(tool_calls, slots, previous_slots)
     if source is None:
         return None
     template_name, template_model, call = source
@@ -1066,9 +1100,12 @@ async def build_rich_data_event(
         )
 
     if (
-        call.get("name") in _INFO_GATED_TOOLS
-        and not _is_selection_search(call)
-        and (not allow_selection_cards or not _has_multiple_products(call))
+        _should_gate_info_product_source(
+            call,
+            allow_selection_cards=allow_selection_cards,
+            slots=slots,
+            previous_slots=previous_slots,
+        )
     ):
         return None
     try:
