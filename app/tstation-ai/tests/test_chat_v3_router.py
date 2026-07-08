@@ -51,6 +51,7 @@ from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from services.tstation.chat_v3.router.guards import get_guard  # noqa: E402
 from services.tstation.chat_v3.router.route import (  # noqa: E402
     _apply_delivery_policy_guard,
+    _apply_runflat_mixed_install_policy,
     _clear_in_range_reservation_date_guard,
     _move_static_faq_guard_to_intent,
 )
@@ -147,6 +148,24 @@ def test_static_faq_router_guard_is_moved_to_support_intent() -> None:
     assert result.extra_domains == []
     assert result.needs_selection_card is False
     assert result.intents == ["pickup_info"]
+
+
+def test_runflat_mixed_install_policy_overrides_vehicle_type_compatibility() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["vehicle_type_compatibility"],
+        needs_selection_card=True,
+    )
+    request = _request(messages=[{"role": "user", "content": "원래 런플랫 타이어인데 앞바퀴 2짝만 일반 타이어로 바꿔도 돼?"}])
+
+    result = _apply_runflat_mixed_install_policy(decision, request)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.extra_domains == []
+    assert result.needs_selection_card is False
+    assert result.intents[0] == "runflat_mixed_install_policy"
 
 
 def test_direct_home_delivery_policy_handles_short_home_delivery_question() -> None:

@@ -31,6 +31,22 @@ STATIC_FAQ_POLICY_DATABASE: dict[str, StaticFaqPolicy] = {
         ],
         "predicted_domains": ["DISCOVERY"],
     },
+    "runflat_mixed_install_policy": {
+        "answer": (
+            "기존에 런플랫 타이어가 장착된 차량이라면 앞바퀴 2짝만 일반 타이어로 바꾸는 것은 권장하지 않아요. "
+            "런플랫과 일반 타이어는 사이드월 강성, 승차감, 핸들링, 공기압 저하 시 거동이 달라서 전후 또는 좌우 혼용 시 "
+            "주행 안정성에 영향을 줄 수 있습니다.\n\n"
+            "교체가 필요하다면 차량 제조사 권장 규격과 장착 기준을 먼저 확인하고, 가능하면 4짝 모두 같은 구조와 규격의 "
+            "타이어로 맞추는 것이 안전합니다. 부득이하게 2짝만 교체해야 하는 경우에도 같은 축의 좌우 타이어는 동일한 "
+            "제품·규격·마모 상태로 맞추고, 장착 전 매장에서 차량 기준을 확인해 주세요."
+        ),
+        "quick_replies": [
+            {"label": "런플랫 상품 보기", "domain": "DISCOVERY"},
+            {"label": "내 차량으로 확인", "domain": "DISCOVERY"},
+            {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+        ],
+        "predicted_domains": ["SUPPORT", "DISCOVERY", "TRANSACTION"],
+    },
     "pickup_status": {
         "answer": (
             "픽업기사의 실시간 위치나 도착 시간은 챗봇에서 바로 확인하기 어려워요. "

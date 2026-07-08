@@ -38,6 +38,7 @@ def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
     assert "guard_id=\"none\", domain=SUPPORT" in static_faq_section
     for policy_key in (
         "vehicle_type_compatibility",
+        "runflat_mixed_install_policy",
         "pickup_status",
         "pickup_info",
         "direct_home_delivery",
@@ -54,3 +55,11 @@ def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
     ):
         assert policy_key not in guard_section
         assert policy_key in static_faq_section
+
+
+def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():
+    static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
+
+    assert "런플랫" in static_faq_section
+    assert "vehicle_type_compatibility가 아니라 runflat_mixed_install_policy" in static_faq_section
+    assert "앞바퀴/뒷바퀴 2짝만 일반 타이어" in static_faq_section

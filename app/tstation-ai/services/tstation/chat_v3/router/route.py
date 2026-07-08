@@ -38,6 +38,20 @@ _STATIC_FAQ_GUARD_INTENTS: dict[GuardId, str] = {
     GuardId.ONLINE_STORE_PRICE_POLICY: "online_store_price_policy",
     GuardId.REGIONAL_PRICE_POLICY: "regional_price_policy",
 }
+_RUNFLAT_TERMS = ("런플랫", "런 플랫", "runflat", "run flat", "run-flat")
+_RUNFLAT_MIXED_INSTALL_TERMS = (
+    "일반 타이어",
+    "일반타이어",
+    "앞바퀴",
+    "뒷바퀴",
+    "2짝",
+    "두짝",
+    "2개",
+    "두 개",
+    "혼용",
+    "바꿔도",
+    "교체",
+)
 
 
 def _router_input(request: TStationChatRequest) -> str:
@@ -179,6 +193,27 @@ def _move_static_faq_guard_to_intent(decision: RouteDecision) -> RouteDecision:
     return decision
 
 
+def _apply_runflat_mixed_install_policy(decision: RouteDecision, request: TStationChatRequest) -> RouteDecision:
+    text = _last_user_text(request).lower()
+    has_runflat = any(term in text for term in _RUNFLAT_TERMS)
+    has_mixed_install = any(term in text for term in _RUNFLAT_MIXED_INSTALL_TERMS)
+    if not has_runflat or not has_mixed_install:
+        return decision
+    policy_key = "runflat_mixed_install_policy"
+    if policy_key not in decision.intents:
+        logger.info(
+            "[CHAT_V3] applied runflat mixed-install static FAQ policy over guard=%s intents=%s",
+            decision.guard_id.value,
+            decision.intents,
+        )
+        decision.intents.insert(0, policy_key)
+    decision.guard_id = GuardId.NONE
+    decision.domain = Domain.SUPPORT
+    decision.extra_domains = []
+    decision.needs_selection_card = False
+    return decision
+
+
 async def route_request(request: TStationChatRequest, trace_config: dict | None = None) -> RouteDecision | None:
     try:
         # json_schema (default) requires every field in `required` (OpenAI strict
@@ -188,6 +223,7 @@ async def route_request(request: TStationChatRequest, trace_config: dict | None 
         decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         decision = _clear_in_range_reservation_date_guard(decision, request)
         decision = _move_static_faq_guard_to_intent(decision)
+        decision = _apply_runflat_mixed_install_policy(decision, request)
         decision = _apply_delivery_policy_guard(decision, request)
         logger.info(
             "[CHAT_V3] route guard=%s domains=%s intents=%s slots=%s",

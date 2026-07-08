@@ -39,6 +39,9 @@ intents 에 "card_installment_lookup" 을 포함하세요.
 아래 정책성 FAQ는 guard_id를 사용하지 말고 guard_id="none", domain=SUPPORT 로 라우팅하세요.
 intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPPORT 도구가 해당 key로 공식 답변을 조회합니다.
 - vehicle_type_compatibility: SUV에 승용차/세단용 타이어를 장착해도 되는지 묻는 질문
+  단, "런플랫" 차량/타이어에서 일반 타이어로 바꿔도 되는지, 앞/뒤 2짝만 일반 타이어로 교체해도 되는지 묻는 경우는
+  vehicle_type_compatibility가 아니라 runflat_mixed_install_policy 입니다.
+- runflat_mixed_install_policy: 기존 런플랫 타이어 차량에서 일반 타이어로 교체/혼용해도 되는지, 앞바퀴/뒷바퀴 2짝만 일반 타이어로 바꿔도 되는지 묻는 문의
 - pickup_status: 신청한 픽업서비스의 기사 위치/도착 시간/진행 상태 문의
 - pickup_info: 스마트픽업 서비스가 무엇인지/신청 방법/가능 여부 문의
 - direct_home_delivery: 타이어를 집/자택/주소지로 택배 수령하거나 직접/셀프 장착하려는 문의

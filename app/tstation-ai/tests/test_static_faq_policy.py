@@ -55,6 +55,7 @@ from services.tstation.policies.static_faq_policy import STATIC_FAQ_POLICY_DATAB
 def test_static_faq_policy_database_contains_moved_router_policy_keys() -> None:
     assert set(STATIC_FAQ_POLICY_DATABASE) == {
         "vehicle_type_compatibility",
+        "runflat_mixed_install_policy",
         "pickup_status",
         "pickup_info",
         "direct_home_delivery",
@@ -71,6 +72,9 @@ def test_static_faq_policy_database_contains_moved_router_policy_keys() -> None:
     }
     assert "집으로 배송받아 직접 장착하는 방식은 지원하지 않아요" in (
         get_static_faq_policy("direct_home_delivery") or {}
+    ).get("answer", "")
+    assert "앞바퀴 2짝만 일반 타이어로 바꾸는 것은 권장하지 않아요" in (
+        get_static_faq_policy("runflat_mixed_install_policy") or {}
     ).get("answer", "")
 
 
