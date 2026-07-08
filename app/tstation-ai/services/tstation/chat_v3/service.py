@@ -228,8 +228,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             },
             assistant_response_source=f"llm_guard_{guard.id}",
         )
-        for event in sse.done():
-            yield event
         _update_trace_monitoring(
             route_domains=[(decision.domain.value if decision else "LEADING")],
             tool_calls=[],
@@ -247,6 +245,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         if parent_span is not None:
             parent_span.end()
         _flush_trace()
+        for event in sse.done():
+            yield event
         return
 
     slots = await load_slots(request.session_id)
@@ -393,19 +393,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         predicted_domains = list(dict.fromkeys(chip["domain"] for chip in chips)) or [domain]
         quick_reply_event["data"]["predictedDomains"] = predicted_domains
         yield sse.sse(quick_reply_event)
-    yield sse.agent_flow("[DONE]", "success")
-    for event in sse.done():
-        yield event
-
-    slots = derive_slots_from_tool_calls(slots, executor.tool_calls)
-    await save_slots(request.session_id, slots, user_id=request.user_id)
-    await memory.persist_turn_context(
-        request.session_id,
-        tool_calls=executor.tool_calls,
-        quick_reply_domains=[chip["domain"] for chip in chips],
-        predicted_domains=predicted_domains,
-        user_id=request.user_id,
-    )
     logger.info(
         "[CHAT_V3] session=%s domains=%s tools=%d route=%.0fms tools_stage=%.0fms total=%.0fms",
         request.session_id,
@@ -433,6 +420,19 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if parent_span is not None:
         parent_span.end()
     _flush_trace()
+    yield sse.agent_flow("[DONE]", "success")
+    for event in sse.done():
+        yield event
+
+    slots = derive_slots_from_tool_calls(slots, executor.tool_calls)
+    await save_slots(request.session_id, slots, user_id=request.user_id)
+    await memory.persist_turn_context(
+        request.session_id,
+        tool_calls=executor.tool_calls,
+        quick_reply_domains=[chip["domain"] for chip in chips],
+        predicted_domains=predicted_domains,
+        user_id=request.user_id,
+    )
 
 
 async def _run_turn_safe(request: TStationChatRequest, result: dict):
