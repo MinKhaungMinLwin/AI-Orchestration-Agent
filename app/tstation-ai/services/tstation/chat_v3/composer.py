@@ -42,7 +42,7 @@ class QuickReplyChip(BaseModel):
 
 
 class QuickReplySuggestion(BaseModel):
-    quick_replies: list[QuickReplyChip] = Field(default_factory=list, max_length=2)
+    quick_replies: list[QuickReplyChip] = Field(default_factory=list, max_length=4)
 
 
 async def suggest_quick_replies(

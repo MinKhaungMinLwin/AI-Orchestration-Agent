@@ -58,6 +58,12 @@ _PRODUCT_TOOLS = {
     "get_best_selling_products_tool",
     "get_newest_products_tool",
 }
+_QUANTITY_QUICK_REPLIES = (
+    {"label": "1개", "domain": "TRANSACTION"},
+    {"label": "2개", "domain": "TRANSACTION"},
+    {"label": "3개", "domain": "TRANSACTION"},
+    {"label": "4개", "domain": "TRANSACTION"},
+)
 
 _PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
 _PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}
@@ -913,6 +919,49 @@ def compact_answer_spacing(answer: str) -> str:
     while "\n\n" in text:
         text = text.replace("\n\n", "\n")
     return text.strip()
+
+
+def _has_confirmed_quantity(slots: ConversationSlots | None) -> bool:
+    if slots is None:
+        return False
+    qty = slots.ord_qty
+    return isinstance(qty, int) and qty > 0
+
+
+def _is_quantity_required_flow(slots: ConversationSlots | None, decision: RouteDecision | None = None) -> bool:
+    if slots is None or _has_confirmed_quantity(slots):
+        return False
+    if not slots.goods_no:
+        return False
+    pending_intent = str(slots.pending_intent or "").strip()
+    goal_type = str(slots.goal_type or "").strip()
+    if pending_intent in {"order", "reservation", "cart"}:
+        return True
+    if goal_type in {"place_order", "add_to_cart", "store_with_stock"}:
+        return True
+    patch = decision.slots_patch.non_empty() if decision else {}
+    if str(patch.get("pending_intent") or "").strip() in {"order", "reservation", "cart"}:
+        return True
+    if str(patch.get("goal_type") or "").strip() in {"place_order", "add_to_cart", "store_with_stock"}:
+        return True
+    return False
+
+
+def _has_all_quantity_options(answer: str) -> bool:
+    text = str(answer or "")
+    return all(chip["label"] in text for chip in _QUANTITY_QUICK_REPLIES)
+
+
+def quantity_quick_replies(slots: ConversationSlots | None, decision: RouteDecision | None = None) -> list[dict[str, str]]:
+    if not _is_quantity_required_flow(slots, decision):
+        return []
+    return [dict(chip) for chip in _QUANTITY_QUICK_REPLIES]
+
+
+def ensure_quantity_options(answer: str, slots: ConversationSlots | None, decision: RouteDecision | None = None) -> str:
+    if not quantity_quick_replies(slots, decision) or _has_all_quantity_options(answer):
+        return answer
+    return compact_answer_spacing(f"{answer}\n수량은 1개, 2개, 3개, 4개 중에서 선택해 주세요.")
 
 
 def format_location_answer(answer: str, tool_calls: list[dict]) -> str:

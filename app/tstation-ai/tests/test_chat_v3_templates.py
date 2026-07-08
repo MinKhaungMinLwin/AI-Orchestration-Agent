@@ -505,11 +505,11 @@ def test_compact_answer_spacing_reduces_blank_lines_to_single_newline():
     )
 
 
-def test_quantity_question_uses_fixed_quantity_quick_replies():
-    chips = templates.quantity_quick_replies(
-        "구매 진행을 위해 수량과 장착 매장을 선택해야 해요.\n"
-        "보통 타이어는 4개 기준으로 주문하시는데, **4개로 진행할까요?**"
-    )
+def test_quantity_required_flow_uses_fixed_quantity_quick_replies():
+    slots = ConversationSlots(goods_no="G000000309783", pending_intent="order", goal_type="place_order")
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+
+    chips = templates.quantity_quick_replies(slots, decision)
 
     assert chips == [
         {"label": "1개", "domain": "TRANSACTION"},
@@ -517,6 +517,22 @@ def test_quantity_question_uses_fixed_quantity_quick_replies():
         {"label": "3개", "domain": "TRANSACTION"},
         {"label": "4개", "domain": "TRANSACTION"},
     ]
+
+
+def test_quantity_options_are_added_to_quantity_required_answer():
+    slots = ConversationSlots(goods_no="G000000309783", pending_intent="order", goal_type="place_order")
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+
+    answer = templates.ensure_quantity_options("구매 진행을 위해 타이어 수량을 선택해 주세요.", slots, decision)
+
+    assert "1개, 2개, 3개, 4개" in answer
+
+
+def test_confirmed_quantity_does_not_use_quantity_quick_replies():
+    slots = ConversationSlots(goods_no="G000000309783", ord_qty=2, pending_intent="order", goal_type="place_order")
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+
+    assert templates.quantity_quick_replies(slots, decision) == []
 
 
 def test_preorder_fallback_builds_ready_order_card_from_slots():

@@ -225,6 +225,10 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             allow_selection_cards=_allow_selection_cards(decision),
         )
     )
+    quantity_chips = [] if rich_event or preorder_event else templates.quantity_quick_replies(slots, decision)
+    if quantity_chips:
+        answer = templates.ensure_quantity_options(answer, slots, decision)
+        token_events = []
     result["answer"] = answer
     if (rich_event or preorder_event or {}).get("template") != "preOrder":
         for event in token_events:
@@ -237,17 +241,19 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         predicted_domains = ["TRANSACTION"]
         yield sse.sse({**preorder_event, "source_domain": domain})
     else:
-        chips = await composer.suggest_quick_replies(
-            user_text,
-            answer,
-            trace_config=_trace_config(
-                request,
-                run_name="chat_v3_quick_replies",
-                prompt_name="chat_v3_quick_replies",
-                tags=["quick_reply"],
-            ),
-            flow_hint=templates.booking_flow_hint(slots),
-        )
+        chips = quantity_chips
+        if not chips:
+            chips = await composer.suggest_quick_replies(
+                user_text,
+                answer,
+                trace_config=_trace_config(
+                    request,
+                    run_name="chat_v3_quick_replies",
+                    prompt_name="chat_v3_quick_replies",
+                    tags=["quick_reply"],
+                ),
+                flow_hint=templates.booking_flow_hint(slots),
+            )
         # V2 semantics: predictedDomains = likely domains of the user's NEXT turn.
         # The chips are exactly the next actions we offer, so their domains are
         # the prediction; fall back to the current domain when there are no chips.
