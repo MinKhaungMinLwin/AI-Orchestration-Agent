@@ -9,11 +9,13 @@ from services.tstation.agents.e_support_agent.tools import (
     get_maintenance_dday_tool,
     get_my_warranties_tool,
     get_product_warranties_tool,
+    get_static_faq_policy_tool,
     search_faq_hybrid_tool,
     transfer_to_qna_tool,
 )
 
 SUPPORT_TOOLS = [
+    get_static_faq_policy_tool,
     search_faq_hybrid_tool,
     get_product_warranties_tool,
     get_my_warranties_tool,

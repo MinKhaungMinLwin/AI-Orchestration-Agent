@@ -50,6 +50,7 @@ from services.tstation.rag import (
     get_reranker_service,
 )
 from services.tstation.rag.rag_config import RAGDynamicConfig
+from services.tstation.policies.static_faq_policy import get_static_faq_policy
 from config.env import settings
 
 logger = logging.getLogger(__name__)
@@ -186,6 +187,39 @@ def _augment_faq_query_for_policy(query: str) -> str:
 
 _GENERAL_INSTALLMENT_TYPE = "일반"
 _SMARTPAY_INSTALLMENT_TYPE = "스마트페이"
+
+
+@tool
+def get_static_faq_policy_tool(policy_key: str) -> dict:
+    """
+    Get an official deterministic FAQ policy answer by key.
+
+    Use this only when the router/planner already selected a policy key from
+    STATIC_FAQ_POLICY_DATABASE. Do not pass free-form user text.
+
+    Args:
+        policy_key: Exact policy intent key selected by the router/planner.
+    """
+    logger.debug("[TOOL][get_static_faq_policy_tool] policy_key=%s", policy_key)
+    policy = get_static_faq_policy(policy_key)
+    if policy is None:
+        return _error_response(
+            404,
+            {
+                "policy_key": policy_key,
+                "answer": None,
+                "message": "No static FAQ policy exists for this key.",
+            },
+        )
+    return _success_response(
+        200,
+        {
+            "policy_key": policy_key,
+            "answer": policy["answer"],
+            "quick_replies": policy["quick_replies"],
+            "predicted_domains": policy["predicted_domains"],
+        },
+    )
 
 
 def _normalize_card_installment_payment_type(payment_type: str | None) -> str:

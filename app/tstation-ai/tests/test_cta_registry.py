@@ -49,6 +49,40 @@ def test_coupon_url_cta_preserves_coupon_list_destination() -> None:
     assert chip["expected_behavior"] == "open_url"
 
 
+def test_legacy_policy_url_ctas_are_registered_for_v3_normalization() -> None:
+    cases = [
+        ("지난 이벤트 보기", CTAUrls.PROMOTION_PAST_EVENT_LIST, "promotion.past_event.open"),
+        ("픽업서비스 신청", CTAUrls.SMART_PICKUP, "smart_pickup.open"),
+        ("픽업서비스 내역", CTAUrls.SMART_PICKUP_LIST, "smart_pickup.list.open"),
+        ("정비이력보기", CTAUrls.STORE_SERVICE_HISTORY, "service_history.open"),
+        ("매장서비스 내역", CTAUrls.STORE_SERVICE_HISTORY, "service_history.open"),
+        ("상품 리뷰", CTAUrls.GOODS_REVIEW, "goods_review.open"),
+        ("보관 서비스 이력", CTAUrls.KEEP_SERVICE_HIST, "keep_service_history.open"),
+        ("점검/교체 알림", CTAUrls.REMINDING_ALARM, "maintenance.reminding_alarm.open"),
+        ("all my T 점검", CTAUrls.MEMBERSHIP_DASHBOARD, "membership.dashboard.open"),
+        ("마모도 측정 결과", CTAUrls.TIRE_CHECK_RESULT_LIST, "tire.check_result.open"),
+    ]
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": "확인 경로를 안내드릴게요.",
+            "quickReplies": [
+                {"label": label, "url": url, "domain": "SUPPORT"}
+                for label, url, _cta_id in cases
+            ],
+        },
+    }
+
+    normalize_quickreply_ctas(event)
+
+    for chip, (_label, expected_url, expected_cta_id) in zip(event["data"]["quickReplies"], cases, strict=True):
+        assert chip["url"] == expected_url
+        assert chip["cta_id"] == expected_cta_id
+        assert chip["expected_behavior"] == "open_url"
+
+
 def test_conversation_cta_gets_next_turn_contract_seed() -> None:
     event = {
         "type": "data",

@@ -32,6 +32,7 @@ from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_
 from services.tstation.chat_v3.tools import tools_for_domains
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
 from services.tstation.policies.cta_registry import normalize_quickreply_ctas
+from services.tstation.policies.static_faq_policy import STATIC_FAQ_POLICY_DATABASE
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,20 @@ def _allow_selection_cards(decision: RouteDecision | None) -> bool:
     if Domain.DISCOVERY in decision.extra_domains:
         return True
     return decision.needs_selection_card
+
+
+def _static_faq_policy_context(decision: RouteDecision | None) -> str | None:
+    if decision is None:
+        return None
+    policy_key = next((intent for intent in decision.intents if intent in STATIC_FAQ_POLICY_DATABASE), None)
+    if not policy_key:
+        return None
+    return (
+        "STATIC FAQ POLICY ROUTING:\n"
+        f"- The router selected policy_key={policy_key}.\n"
+        "- Before answering, call get_static_faq_policy_tool with exactly this policy_key.\n"
+        "- Use the returned answer as the official policy text. Do not use FAQ/RAG search for this policy."
+    )
 
 
 def _trace_config(
@@ -274,6 +289,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         extra_context.append(STORE_SEARCH_FLOW_GUIDANCE)
     if "DISCOVERY" in domains:
         extra_context.append(VEHICLE_LOOKUP_GUIDANCE)
+    static_faq_context = _static_faq_policy_context(decision)
+    if static_faq_context:
+        extra_context.append(static_faq_context)
     slots_block = slots_context_block(slots)
     if slots_block:
         extra_context.append(slots_block)

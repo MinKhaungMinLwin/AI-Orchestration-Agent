@@ -14,18 +14,10 @@ ROUTER_PROMPT = """\
 - regional_cheapest: 특정 지역/도시에서 "제일 싼/저렴한 매장이 어디냐"는 광역 가격 비교 질문 (예: "경기도에서 제일 싼 매장")
 - unsupported_brand: 금호·넥센·던롭·요코하마 등 미지원 타이어 브랜드의 상품/재고/가격 문의 (지원 브랜드: 한국타이어, 라우펜, 미쉐린, 피렐리, 브리지스톤, 콘티넨탈, 굿이어 → 이들은 none)
 - external_price: 다나와/네이버/구글 등 외부 사이트 최저가와 비교해 달라는 요청
-- past_event_page: 지난/종료된/끝난 이벤트를 보여 달라는 요청 (혜택 복구/재사용 요청은 expired_coupon_or_event)
 - coupon_issue_request: 챗봇더러 쿠폰을 직접 발급/지급해 달라는 요청
 - expired_coupon_or_event: 만료된 쿠폰이나 종료된 이벤트 혜택을 원복/재사용해 달라는 요청
 - nonexistent_benefit: 확인되지 않은 VIP/블랙카드/50% 할인 등 존재하지 않는 특별 혜택 요구
 - reservation_date_range: 예약/장착 희망 날짜가 이미 지난 날짜이거나 오늘로부터 30일 이후인 경우 (30일 이내 날짜는 none)
-- vehicle_type_compatibility: SUV에 승용차/세단용 타이어를 장착해도 되는지 묻는 질문
-- pickup_status: 신청한 픽업서비스의 기사 위치/도착 시간/진행 상태 문의
-- pickup_info: 스마트픽업 서비스가 무엇인지/신청 방법/가능 여부 문의
-- direct_home_delivery: 타이어를 집/자택/주소지로 택배 수령하거나 직접/셀프 장착하려는 문의
-- shipping_fee_region: 제주/서귀포/도서산간 배송비·추가 배송비 문의
-- online_store_price_policy: 온라인 판매가와 매장 현장 판매가가 같은지/다른지 묻는 문의
-- regional_price_policy: 지역·매장·배송 조건에 따라 상품 최종가가 같은지/다른지 묻는 문의
 
 ## 2. domain — guard가 none일 때 이번 턴을 처리할 주 영역
 - DISCOVERY: 타이어 추천, 상품 검색, 차량-타이어 호환, 내 차량 조회, 이벤트/혜택 상품 탐색
@@ -42,6 +34,24 @@ intents 에 "card_installment_lookup" 을 포함하세요.
 - 단, 스마트페이 월 납부액/월 결제금액/한 달에 얼마인지 묻는 경우는 TRANSACTION 의 가격·스마트페이 흐름입니다.
 - 카드 결제 실패·승인 오류, 카드 취소/환불 시점, 카드 할인/포인트/제휴 혜택, 쿠폰 적용/최종 혜택가 문의는
   card_installment_lookup 이 아닙니다.
+
+### 고정 FAQ 정책 key 라우팅
+아래 정책성 FAQ는 guard_id를 사용하지 말고 guard_id="none", domain=SUPPORT 로 라우팅하세요.
+intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPPORT 도구가 해당 key로 공식 답변을 조회합니다.
+- vehicle_type_compatibility: SUV에 승용차/세단용 타이어를 장착해도 되는지 묻는 질문
+- pickup_status: 신청한 픽업서비스의 기사 위치/도착 시간/진행 상태 문의
+- pickup_info: 스마트픽업 서비스가 무엇인지/신청 방법/가능 여부 문의
+- direct_home_delivery: 타이어를 집/자택/주소지로 택배 수령하거나 직접/셀프 장착하려는 문의
+- shipping_fee_region: 제주/서귀포/도서산간 배송비·추가 배송비 문의
+- online_store_price_policy: 온라인 판매가와 매장 현장 판매가가 같은지/다른지 묻는 문의
+- regional_price_policy: 지역·매장·배송 조건에 따라 상품 최종가가 같은지/다른지 묻는 문의
+- past_event_page: 지난/종료된/끝난 이벤트를 보여 달라는 요청
+- maintenance_history_access_policy: 정비이력/매장서비스 내역을 어디서 확인하는지 또는 다른 매장에서도 이력 확인 가능한지 묻는 문의
+- maintenance_reminding_alarm: 점검/교체 알림, 리마인딩 알림, all my T 점검 확인 경로 문의
+- my_goods_review_lookup: 내가 쓴 상품 리뷰/구매후기/베스트리뷰 확인 경로 문의
+- store_service_review_write: 매장 리뷰/매장 서비스 후기/칭찬/별점 작성 경로 문의
+- keep_service_history_lookup: 보관 서비스 이력, 맡긴 타이어, 보관 중인 타이어 확인 경로 문의
+- tire_check_result_lookup: 타이어 마모도 측정 결과 확인 경로 문의
 
 ### extra_domains — 한 턴에 여러 영역이 필요할 때만 채우세요
 이번 턴을 끝까지 처리하려면 다른 영역의 데이터가 먼저 필요한 경우 그 영역을 추가하세요.

@@ -9,6 +9,7 @@ from services.tstation.agents.e_support_agent.tools import (
     get_my_coupons_tool,
     get_my_warranties_tool,
     get_product_warranties_tool,
+    get_static_faq_policy_tool,
     search_faq_hybrid_tool,
     search_faq_rag_tool,
     search_product_tool,
@@ -135,6 +136,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 
 | Tool | Use when |
 |------|---------|
+| get_static_faq_policy_tool | Router/planner already selected a fixed policy key from STATIC_FAQ_POLICY_DATABASE. Use before FAQ/RAG and pass the exact key, not free-form user text. |
 | get_faq_tool | Intent 1B or 1C — policy/info questions |
 | search_faq_rag_tool | Fallback only: get_faq_tool fails or returns no relevant result at limit=200 |
 | transfer_to_qna_tool | Intent 0 (user agrees), 1A, 1C (after FAQ/policy answer), or FAQ exhausted |
@@ -701,6 +703,7 @@ def get_support_system_prompt() -> str:
 def get_support_tools() -> list:
     faq_tools = [
         get_faq_tool,
+        get_static_faq_policy_tool,
         search_faq_rag_tool,
         search_faq_hybrid_tool,
     ]
@@ -728,6 +731,7 @@ class SupportSubAgent(BaseAgent):
     # under FAQ.
     TOOL_TO_AF_MAP = {
         "get_faq_tool": "FAQ",
+        "get_static_faq_policy_tool": "FAQ",
         "search_faq_rag_tool": "FAQ",
         "search_faq_hybrid_tool": "FAQ",
         "transfer_to_qna_tool": "Fallback / Escalation",

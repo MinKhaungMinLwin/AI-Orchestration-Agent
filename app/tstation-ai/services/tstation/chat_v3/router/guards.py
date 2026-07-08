@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.chat_v3.router.schemas import GuardId
+from services.tstation.policies.static_faq_policy import get_static_faq_policy
 
 
 class Guard(BaseModel):
@@ -17,6 +18,18 @@ class Guard(BaseModel):
     text: str
     chips: list[dict]
     predicted_domains: list[str]
+
+
+def _guard_from_static_faq_policy(policy_key: str) -> Guard:
+    policy = get_static_faq_policy(policy_key)
+    if policy is None:
+        raise KeyError(f"Missing static FAQ policy: {policy_key}")
+    return Guard(
+        id=policy_key,
+        text=policy["answer"],
+        chips=policy["quick_replies"],
+        predicted_domains=policy["predicted_domains"],
+    )
 
 
 _STATIC_GUARDS: dict[GuardId, Guard] = {
@@ -84,15 +97,7 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         ],
         predicted_domains=["TRANSACTION", "DISCOVERY"],
     ),
-    GuardId.PAST_EVENT_PAGE: Guard(
-        id="past_event_page",
-        text="지난 이벤트와 종료된 이벤트는 티스테이션 이벤트의 '지난 이벤트' 페이지에서 확인하실 수 있어요.",
-        chips=[
-            {"label": "지난 이벤트 보기", "url": CTAUrls.PROMOTION_PAST_EVENT_LIST, "domain": "DISCOVERY"},
-            {"label": "진행 중인 이벤트", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
-        ],
-        predicted_domains=["DISCOVERY"],
-    ),
+    GuardId.PAST_EVENT_PAGE: _guard_from_static_faq_policy("past_event_page"),
     GuardId.COUPON_ISSUE_REQUEST: Guard(
         id="coupon_issue_request",
         text=(
@@ -130,100 +135,13 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         ],
         predicted_domains=["TRANSACTION", "DISCOVERY", "SUPPORT"],
     ),
-    GuardId.VEHICLE_TYPE_COMPATIBILITY: Guard(
-        id="vehicle_type_compatibility",
-        text=(
-            "SUV에는 승용차/세단용 타이어를 임의로 장착하는 건 권장하지 않아요. "
-            "같은 사이즈처럼 보여도 하중지수와 설계 기준이 다를 수 있어서, "
-            "차량 규격에 맞는 SUV용 또는 SUV 호환 타이어로 확인하는 게 안전합니다."
-        ),
-        chips=[
-            {"label": "SUV용 추천", "domain": "DISCOVERY"},
-            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-            {"label": "내 차량으로 확인", "domain": "DISCOVERY"},
-        ],
-        predicted_domains=["DISCOVERY"],
-    ),
-    GuardId.PICKUP_STATUS: Guard(
-        id="pickup_status",
-        text=(
-            "픽업기사의 실시간 위치나 도착 시간은 챗봇에서 바로 확인하기 어려워요. "
-            "신청하신 픽업/딜리버리 진행 현황은 아래 '픽업서비스 내역'에서 확인해 주세요."
-        ),
-        chips=[{"label": "픽업서비스 내역", "url": CTAUrls.SMART_PICKUP_LIST, "domain": "SUPPORT"}],
-        predicted_domains=["SUPPORT"],
-    ),
-    GuardId.PICKUP_INFO: Guard(
-        id="pickup_info",
-        text=(
-            "스마트픽업은 매장에서 고객 차량을 픽업해 타이어를 교체한 뒤 다시 인도하는 서비스예요. "
-            "아래 '픽업서비스 신청'에서 신청/관리하실 수 있으며, 픽업 가능 거리는 매장 기준 최대 30km까지예요. "
-            "요금과 실제 가능 여부는 픽업/인도 위치와 매장 운영에 따라 달라질 수 있어요."
-        ),
-        chips=[
-            {"label": "픽업서비스 신청", "url": CTAUrls.SMART_PICKUP, "domain": "SUPPORT"},
-            {"label": "내 근처 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "타이어 추천", "domain": "DISCOVERY"},
-        ],
-        predicted_domains=["SUPPORT", "TRANSACTION", "DISCOVERY"],
-    ),
-    GuardId.DIRECT_HOME_DELIVERY: Guard(
-        id="direct_home_delivery",
-        text=(
-            "현재 티스테이션닷컴에서는 타이어를 집으로 배송받아 직접 장착하는 방식은 지원하지 않아요. "
-            "온라인 주문은 선택하신 장착점으로 상품이 이동하고, 예약한 매장에서 장착받는 방식으로 진행됩니다."
-        ),
-        chips=[
-            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "타이어 추천", "domain": "DISCOVERY"},
-            {"label": "구매하기", "domain": "TRANSACTION"},
-        ],
-        predicted_domains=["SUPPORT", "TRANSACTION", "DISCOVERY"],
-    ),
-    GuardId.SHIPPING_FEE_REGION: Guard(
-        id="shipping_fee_region",
-        text=(
-            "서귀포시를 포함한 제주 지역은 상품 1개당 배송비 1만 원이 발생해요.\n\n"
-            "티스테이션닷컴은 기본적으로 무료배송·무료장착 원칙으로 운영되지만, "
-            "제주 지역은 추가 배송비가 적용됩니다.\n\n"
-            "정확한 배송비 내역은 실제 주문/결제 페이지의 결제금액에서 확인해 주세요."
-        ),
-        chips=[
-            {"label": "타이어 추천", "domain": "DISCOVERY"},
-            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "구매하기", "domain": "TRANSACTION"},
-        ],
-        predicted_domains=["SUPPORT", "DISCOVERY", "TRANSACTION"],
-    ),
-    GuardId.ONLINE_STORE_PRICE_POLICY: Guard(
-        id="online_store_price_policy",
-        text=(
-            "서울이든 제주든 온라인 주문 자체는 같은 방식으로 진행돼요. "
-            "주문/결제 단계에서 최종 금액을 확인한 뒤 선택한 장착점에서 장착받는 방식입니다.\n\n"
-            "온라인 판매가와 매장 현장 판매가는 행사, 쿠폰, 재고, 매장 운영 조건에 따라 다를 수 있어요. "
-            "제주 지역은 상품 1개당 배송비 1만 원이 추가될 수 있어 최종 결제금액에서 함께 확인해 주세요."
-        ),
-        chips=[
-            {"label": "온라인 상품 보기", "domain": "DISCOVERY"},
-            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "구매하기", "domain": "TRANSACTION"},
-        ],
-        predicted_domains=["SUPPORT", "DISCOVERY", "TRANSACTION"],
-    ),
-    GuardId.REGIONAL_PRICE_POLICY: Guard(
-        id="regional_price_policy",
-        text=(
-            "같은 상품이라도 지역, 장착점, 행사, 쿠폰, 재고, 배송 조건에 따라 최종 결제금액이 달라질 수 있어요.\n\n"
-            "특히 제주 지역은 상품 1개당 배송비 1만 원이 추가될 수 있어 서울 지역과 최종 금액이 다를 수 있습니다. "
-            "정확한 가격은 상품 규격과 장착점을 선택한 뒤 주문/결제 단계에서 확인해 주세요."
-        ),
-        chips=[
-            {"label": "상품 검색", "domain": "DISCOVERY"},
-            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "구매하기", "domain": "TRANSACTION"},
-        ],
-        predicted_domains=["SUPPORT", "DISCOVERY", "TRANSACTION"],
-    ),
+    GuardId.VEHICLE_TYPE_COMPATIBILITY: _guard_from_static_faq_policy("vehicle_type_compatibility"),
+    GuardId.PICKUP_STATUS: _guard_from_static_faq_policy("pickup_status"),
+    GuardId.PICKUP_INFO: _guard_from_static_faq_policy("pickup_info"),
+    GuardId.DIRECT_HOME_DELIVERY: _guard_from_static_faq_policy("direct_home_delivery"),
+    GuardId.SHIPPING_FEE_REGION: _guard_from_static_faq_policy("shipping_fee_region"),
+    GuardId.ONLINE_STORE_PRICE_POLICY: _guard_from_static_faq_policy("online_store_price_policy"),
+    GuardId.REGIONAL_PRICE_POLICY: _guard_from_static_faq_policy("regional_price_policy"),
 }
 
 

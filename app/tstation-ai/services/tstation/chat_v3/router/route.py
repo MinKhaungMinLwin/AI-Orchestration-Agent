@@ -14,19 +14,29 @@ from common.curr_time import get_current_time
 from schemas.tstation.chat import TStationChatRequest
 from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.router import ROUTER_PROMPT
-from services.tstation.chat_v3.router.schemas import GuardId, RouteDecision
+from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision
 from services.tstation.policies.delivery_policy_gate import DeliveryPolicyIntent, decide_delivery_policy_gate
 
 logger = logging.getLogger(__name__)
 
 _HISTORY_TURNS = 6
 _MAX_CHARS_PER_MESSAGE = 500
-_DELIVERY_POLICY_GUARDS: dict[DeliveryPolicyIntent, GuardId] = {
-    DeliveryPolicyIntent.DIRECT_HOME_DELIVERY: GuardId.DIRECT_HOME_DELIVERY,
-    DeliveryPolicyIntent.SHIPPING_FEE_REGION: GuardId.SHIPPING_FEE_REGION,
-    DeliveryPolicyIntent.SHIPPING_FEE_FOLLOWUP: GuardId.SHIPPING_FEE_REGION,
-    DeliveryPolicyIntent.ONLINE_STORE_PRICE_POLICY: GuardId.ONLINE_STORE_PRICE_POLICY,
-    DeliveryPolicyIntent.REGIONAL_PRICE_POLICY: GuardId.REGIONAL_PRICE_POLICY,
+_DELIVERY_POLICY_INTENTS: dict[DeliveryPolicyIntent, str] = {
+    DeliveryPolicyIntent.DIRECT_HOME_DELIVERY: "direct_home_delivery",
+    DeliveryPolicyIntent.SHIPPING_FEE_REGION: "shipping_fee_region",
+    DeliveryPolicyIntent.SHIPPING_FEE_FOLLOWUP: "shipping_fee_region",
+    DeliveryPolicyIntent.ONLINE_STORE_PRICE_POLICY: "online_store_price_policy",
+    DeliveryPolicyIntent.REGIONAL_PRICE_POLICY: "regional_price_policy",
+}
+_STATIC_FAQ_GUARD_INTENTS: dict[GuardId, str] = {
+    GuardId.PAST_EVENT_PAGE: "past_event_page",
+    GuardId.VEHICLE_TYPE_COMPATIBILITY: "vehicle_type_compatibility",
+    GuardId.PICKUP_STATUS: "pickup_status",
+    GuardId.PICKUP_INFO: "pickup_info",
+    GuardId.DIRECT_HOME_DELIVERY: "direct_home_delivery",
+    GuardId.SHIPPING_FEE_REGION: "shipping_fee_region",
+    GuardId.ONLINE_STORE_PRICE_POLICY: "online_store_price_policy",
+    GuardId.REGIONAL_PRICE_POLICY: "regional_price_policy",
 }
 
 
@@ -137,17 +147,35 @@ def _apply_delivery_policy_guard(decision: RouteDecision, request: TStationChatR
         user_text=_last_user_text(request),
         recent_context=_recent_context_before_last_user(request),
     )
-    guard_id = _DELIVERY_POLICY_GUARDS.get(policy.intent)
-    if not policy.is_actionable or guard_id is None:
+    policy_key = _DELIVERY_POLICY_INTENTS.get(policy.intent)
+    if not policy.is_actionable or policy_key is None:
         return decision
-    if decision.guard_id != guard_id:
+    if policy_key not in decision.intents:
         logger.info(
-            "[CHAT_V3] applied delivery policy guard=%s over router guard=%s reason=%s",
-            guard_id.value,
+            "[CHAT_V3] applied delivery static FAQ policy=%s over router guard=%s reason=%s",
+            policy_key,
             decision.guard_id.value,
             policy.reason,
         )
-    decision.guard_id = guard_id
+        decision.intents.insert(0, policy_key)
+    decision.guard_id = GuardId.NONE
+    decision.domain = Domain.SUPPORT
+    decision.extra_domains = []
+    decision.needs_selection_card = False
+    return decision
+
+
+def _move_static_faq_guard_to_intent(decision: RouteDecision) -> RouteDecision:
+    policy_key = _STATIC_FAQ_GUARD_INTENTS.get(decision.guard_id)
+    if policy_key is None:
+        return decision
+    logger.info("[CHAT_V3] moved static FAQ guard=%s to support intent", decision.guard_id.value)
+    if policy_key not in decision.intents:
+        decision.intents.insert(0, policy_key)
+    decision.guard_id = GuardId.NONE
+    decision.domain = Domain.SUPPORT
+    decision.extra_domains = []
+    decision.needs_selection_card = False
     return decision
 
 
@@ -159,6 +187,7 @@ async def route_request(request: TStationChatRequest, trace_config: dict | None 
         messages = [("system", ROUTER_PROMPT), ("user", _router_input(request))]
         decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         decision = _clear_in_range_reservation_date_guard(decision, request)
+        decision = _move_static_faq_guard_to_intent(decision)
         decision = _apply_delivery_policy_guard(decision, request)
         logger.info(
             "[CHAT_V3] route guard=%s domains=%s intents=%s slots=%s",

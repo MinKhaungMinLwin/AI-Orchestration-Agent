@@ -29,3 +29,28 @@ def test_router_prompt_does_not_absorb_neighboring_payment_intents_as_installmen
     assert "카드 취소/환불 시점" in ROUTER_PROMPT
     assert "카드 할인/포인트/제휴 혜택" in ROUTER_PROMPT
     assert "쿠폰 적용/최종 혜택가" in ROUTER_PROMPT
+
+
+def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
+    guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
+    static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
+
+    assert "guard_id=\"none\", domain=SUPPORT" in static_faq_section
+    for policy_key in (
+        "vehicle_type_compatibility",
+        "pickup_status",
+        "pickup_info",
+        "direct_home_delivery",
+        "shipping_fee_region",
+        "online_store_price_policy",
+        "regional_price_policy",
+        "past_event_page",
+        "maintenance_history_access_policy",
+        "maintenance_reminding_alarm",
+        "my_goods_review_lookup",
+        "store_service_review_write",
+        "keep_service_history_lookup",
+        "tire_check_result_lookup",
+    ):
+        assert policy_key not in guard_section
+        assert policy_key in static_faq_section

@@ -1165,6 +1165,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_orders_of_user_tool": "주문 내역 조회 중...",
     # Support
     "get_faq_tool": "자주 묻는 질문 검색 중...",
+    "get_static_faq_policy_tool": "정책 FAQ 확인 중...",
     "search_faq_hybrid_tool": "자주묻는 질문 조회중",
     "search_faq_rag_tool": "질문 검색 중...",
     "escalate_tool": "상담사 연결 중...",

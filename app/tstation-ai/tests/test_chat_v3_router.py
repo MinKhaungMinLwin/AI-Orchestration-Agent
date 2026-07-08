@@ -52,6 +52,7 @@ from services.tstation.chat_v3.router.guards import get_guard  # noqa: E402
 from services.tstation.chat_v3.router.route import (  # noqa: E402
     _apply_delivery_policy_guard,
     _clear_in_range_reservation_date_guard,
+    _move_static_faq_guard_to_intent,
 )
 from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision  # noqa: E402
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
@@ -126,7 +127,26 @@ def test_direct_home_delivery_policy_overrides_v3_router_guard() -> None:
 
     result = _apply_delivery_policy_guard(decision, request)
 
-    assert result.guard_id == GuardId.DIRECT_HOME_DELIVERY
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.intents[0] == "direct_home_delivery"
+
+
+def test_static_faq_router_guard_is_moved_to_support_intent() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.PICKUP_INFO,
+        domain=Domain.LEADING,
+        intents=[],
+        needs_selection_card=True,
+    )
+
+    result = _move_static_faq_guard_to_intent(decision)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.extra_domains == []
+    assert result.needs_selection_card is False
+    assert result.intents == ["pickup_info"]
 
 
 def test_direct_home_delivery_policy_handles_short_home_delivery_question() -> None:
@@ -140,7 +160,9 @@ def test_direct_home_delivery_policy_handles_short_home_delivery_question() -> N
 
     result = _apply_delivery_policy_guard(decision, request)
 
-    assert result.guard_id == GuardId.DIRECT_HOME_DELIVERY
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.intents[0] == "direct_home_delivery"
 
 
 def test_delivery_policy_guard_does_not_hijack_order_delivery_status() -> None:
@@ -168,7 +190,9 @@ def test_delivery_policy_guard_handles_jeju_shipping_fee() -> None:
 
     result = _apply_delivery_policy_guard(decision, request)
 
-    assert result.guard_id == GuardId.SHIPPING_FEE_REGION
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.intents[0] == "shipping_fee_region"
 
 
 def test_delivery_policy_guard_handles_short_shipping_fee_followup() -> None:
@@ -188,7 +212,9 @@ def test_delivery_policy_guard_handles_short_shipping_fee_followup() -> None:
 
     result = _apply_delivery_policy_guard(decision, request)
 
-    assert result.guard_id == GuardId.SHIPPING_FEE_REGION
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.intents[0] == "shipping_fee_region"
 
 
 def test_delivery_policy_guard_handles_online_store_price_policy() -> None:
@@ -202,7 +228,9 @@ def test_delivery_policy_guard_handles_online_store_price_policy() -> None:
 
     result = _apply_delivery_policy_guard(decision, request)
 
-    assert result.guard_id == GuardId.ONLINE_STORE_PRICE_POLICY
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.intents[0] == "online_store_price_policy"
 
 
 def test_delivery_policy_guard_handles_regional_price_policy() -> None:
@@ -216,7 +244,9 @@ def test_delivery_policy_guard_handles_regional_price_policy() -> None:
 
     result = _apply_delivery_policy_guard(decision, request)
 
-    assert result.guard_id == GuardId.REGIONAL_PRICE_POLICY
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.intents[0] == "regional_price_policy"
 
 
 def test_direct_home_delivery_guard_response_matches_policy() -> None:
