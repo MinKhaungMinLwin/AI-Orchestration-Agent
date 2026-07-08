@@ -48,14 +48,19 @@ for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
 from schemas.tstation.chat import TStationChatRequest  # noqa: E402
-from services.tstation.chat_v3.router.route import _clear_in_range_reservation_date_guard  # noqa: E402
+from services.tstation.chat_v3.router.guards import get_guard  # noqa: E402
+from services.tstation.chat_v3.router.route import (  # noqa: E402
+    _apply_delivery_policy_guard,
+    _clear_in_range_reservation_date_guard,
+)
 from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision  # noqa: E402
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 
 
 def _request(**kwargs) -> TStationChatRequest:
+    messages = kwargs.pop("messages", [{"role": "user", "content": "2026년 07월 09일 15:00"}])
     return TStationChatRequest(
-        messages=[{"role": "user", "content": "2026년 07월 09일 15:00"}],
+        messages=messages,
         stream=True,
         user_id="M200012931",
         session_id="session",
@@ -106,3 +111,130 @@ def test_in_range_reservation_schedule_from_ui_action_clears_date_range_guard() 
     result = _clear_in_range_reservation_date_guard(decision, request, today=date(2026, 7, 8))
 
     assert result.guard_id == GuardId.NONE
+
+
+def test_direct_home_delivery_policy_overrides_v3_router_guard() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["delivery_policy"],
+        needs_selection_card=False,
+    )
+    request = _request(
+        messages=[{"role": "user", "content": "타이어 2짝은 매장 장착하고 2짝은 집으로 택배 받을 수 있어?"}]
+    )
+
+    result = _apply_delivery_policy_guard(decision, request)
+
+    assert result.guard_id == GuardId.DIRECT_HOME_DELIVERY
+
+
+def test_direct_home_delivery_policy_handles_short_home_delivery_question() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["delivery_policy"],
+        needs_selection_card=False,
+    )
+    request = _request(messages=[{"role": "user", "content": "타이어 집으로 배송 받을수 있어?"}])
+
+    result = _apply_delivery_policy_guard(decision, request)
+
+    assert result.guard_id == GuardId.DIRECT_HOME_DELIVERY
+
+
+def test_delivery_policy_guard_does_not_hijack_order_delivery_status() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.TRANSACTION,
+        intents=["order_delivery_status"],
+        needs_selection_card=False,
+    )
+    request = _request(messages=[{"role": "user", "content": "주문 배송 상태 확인해줘"}])
+
+    result = _apply_delivery_policy_guard(decision, request)
+
+    assert result.guard_id == GuardId.NONE
+
+
+def test_delivery_policy_guard_handles_jeju_shipping_fee() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["delivery_policy"],
+        needs_selection_card=False,
+    )
+    request = _request(messages=[{"role": "user", "content": "서귀포시인데 배송비 더 들어?"}])
+
+    result = _apply_delivery_policy_guard(decision, request)
+
+    assert result.guard_id == GuardId.SHIPPING_FEE_REGION
+
+
+def test_delivery_policy_guard_handles_short_shipping_fee_followup() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["delivery_policy"],
+        needs_selection_card=False,
+    )
+    request = _request(
+        messages=[
+            {"role": "user", "content": "강원 산간 지역은 배송비 더 들어?"},
+            {"role": "assistant", "content": "지역별 추가 배송비는 결제 단계에서 확인해 주세요."},
+            {"role": "user", "content": "제주도는?"},
+        ]
+    )
+
+    result = _apply_delivery_policy_guard(decision, request)
+
+    assert result.guard_id == GuardId.SHIPPING_FEE_REGION
+
+
+def test_delivery_policy_guard_handles_online_store_price_policy() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["delivery_policy"],
+        needs_selection_card=False,
+    )
+    request = _request(messages=[{"role": "user", "content": "제주도 매장에서도 온라인 가격이랑 똑같아?"}])
+
+    result = _apply_delivery_policy_guard(decision, request)
+
+    assert result.guard_id == GuardId.ONLINE_STORE_PRICE_POLICY
+
+
+def test_delivery_policy_guard_handles_regional_price_policy() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["delivery_policy"],
+        needs_selection_card=False,
+    )
+    request = _request(messages=[{"role": "user", "content": "제주도는 서울이랑 같은 상품 가격이 달라?"}])
+
+    result = _apply_delivery_policy_guard(decision, request)
+
+    assert result.guard_id == GuardId.REGIONAL_PRICE_POLICY
+
+
+def test_direct_home_delivery_guard_response_matches_policy() -> None:
+    guard = get_guard(GuardId.DIRECT_HOME_DELIVERY)
+
+    assert guard is not None
+    assert "집으로 배송받아 직접 장착하는 방식은 지원하지 않아요" in guard.text
+    assert [chip["label"] for chip in guard.chips] == ["장착 매장 찾기", "타이어 추천", "구매하기"]
+
+
+def test_delivery_policy_guard_responses_match_v2_policy_texts() -> None:
+    shipping_guard = get_guard(GuardId.SHIPPING_FEE_REGION)
+    online_store_guard = get_guard(GuardId.ONLINE_STORE_PRICE_POLICY)
+    regional_price_guard = get_guard(GuardId.REGIONAL_PRICE_POLICY)
+
+    assert shipping_guard is not None
+    assert "상품 1개당 배송비 1만 원" in shipping_guard.text
+    assert online_store_guard is not None
+    assert "온라인 판매가와 매장 현장 판매가" in online_store_guard.text
+    assert regional_price_guard is not None
+    assert "지역, 장착점, 행사, 쿠폰, 재고, 배송 조건" in regional_price_guard.text

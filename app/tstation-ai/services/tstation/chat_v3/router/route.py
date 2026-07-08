@@ -15,11 +15,19 @@ from schemas.tstation.chat import TStationChatRequest
 from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.router import ROUTER_PROMPT
 from services.tstation.chat_v3.router.schemas import GuardId, RouteDecision
+from services.tstation.policies.delivery_policy_gate import DeliveryPolicyIntent, decide_delivery_policy_gate
 
 logger = logging.getLogger(__name__)
 
 _HISTORY_TURNS = 6
 _MAX_CHARS_PER_MESSAGE = 500
+_DELIVERY_POLICY_GUARDS: dict[DeliveryPolicyIntent, GuardId] = {
+    DeliveryPolicyIntent.DIRECT_HOME_DELIVERY: GuardId.DIRECT_HOME_DELIVERY,
+    DeliveryPolicyIntent.SHIPPING_FEE_REGION: GuardId.SHIPPING_FEE_REGION,
+    DeliveryPolicyIntent.SHIPPING_FEE_FOLLOWUP: GuardId.SHIPPING_FEE_REGION,
+    DeliveryPolicyIntent.ONLINE_STORE_PRICE_POLICY: GuardId.ONLINE_STORE_PRICE_POLICY,
+    DeliveryPolicyIntent.REGIONAL_PRICE_POLICY: GuardId.REGIONAL_PRICE_POLICY,
+}
 
 
 def _router_input(request: TStationChatRequest) -> str:
@@ -34,6 +42,29 @@ def _router_input(request: TStationChatRequest) -> str:
         lines.append("## UI 액션 (ui_action)")
         lines.append(json.dumps(request.ui_action, ensure_ascii=False)[:_MAX_CHARS_PER_MESSAGE])
     return "\n".join(lines)
+
+
+def _last_user_text(request: TStationChatRequest) -> str:
+    for msg in reversed(request.messages):
+        if msg.get("role") == "user":
+            return str(msg.get("content") or "")
+    return ""
+
+
+def _recent_context_before_last_user(request: TStationChatRequest) -> str:
+    context_lines: list[str] = []
+    skipped_last_user = False
+    for msg in reversed(request.messages):
+        role = msg.get("role")
+        if role == "user" and not skipped_last_user:
+            skipped_last_user = True
+            continue
+        content = str(msg.get("content") or "").strip()
+        if content:
+            context_lines.append(content[:_MAX_CHARS_PER_MESSAGE])
+        if len(context_lines) >= _HISTORY_TURNS:
+            break
+    return "\n".join(reversed(context_lines))
 
 
 def _today() -> date:
@@ -101,6 +132,25 @@ def _clear_in_range_reservation_date_guard(
     return decision
 
 
+def _apply_delivery_policy_guard(decision: RouteDecision, request: TStationChatRequest) -> RouteDecision:
+    policy = decide_delivery_policy_gate(
+        user_text=_last_user_text(request),
+        recent_context=_recent_context_before_last_user(request),
+    )
+    guard_id = _DELIVERY_POLICY_GUARDS.get(policy.intent)
+    if not policy.is_actionable or guard_id is None:
+        return decision
+    if decision.guard_id != guard_id:
+        logger.info(
+            "[CHAT_V3] applied delivery policy guard=%s over router guard=%s reason=%s",
+            guard_id.value,
+            decision.guard_id.value,
+            policy.reason,
+        )
+    decision.guard_id = guard_id
+    return decision
+
+
 async def route_request(request: TStationChatRequest, trace_config: dict | None = None) -> RouteDecision | None:
     try:
         # json_schema (default) requires every field in `required` (OpenAI strict
@@ -109,6 +159,7 @@ async def route_request(request: TStationChatRequest, trace_config: dict | None 
         messages = [("system", ROUTER_PROMPT), ("user", _router_input(request))]
         decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         decision = _clear_in_range_reservation_date_guard(decision, request)
+        decision = _apply_delivery_policy_guard(decision, request)
         logger.info(
             "[CHAT_V3] route guard=%s domains=%s intents=%s slots=%s",
             decision.guard_id.value,

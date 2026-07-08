@@ -22,6 +22,10 @@ ROUTER_PROMPT = """\
 - vehicle_type_compatibility: SUV에 승용차/세단용 타이어를 장착해도 되는지 묻는 질문
 - pickup_status: 신청한 픽업서비스의 기사 위치/도착 시간/진행 상태 문의
 - pickup_info: 스마트픽업 서비스가 무엇인지/신청 방법/가능 여부 문의
+- direct_home_delivery: 타이어를 집/자택/주소지로 택배 수령하거나 직접/셀프 장착하려는 문의
+- shipping_fee_region: 제주/서귀포/도서산간 배송비·추가 배송비 문의
+- online_store_price_policy: 온라인 판매가와 매장 현장 판매가가 같은지/다른지 묻는 문의
+- regional_price_policy: 지역·매장·배송 조건에 따라 상품 최종가가 같은지/다른지 묻는 문의
 
 ## 2. domain — guard가 none일 때 이번 턴을 처리할 주 영역
 - DISCOVERY: 타이어 추천, 상품 검색, 차량-타이어 호환, 내 차량 조회, 이벤트/혜택 상품 탐색

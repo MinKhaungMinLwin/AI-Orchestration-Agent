@@ -167,6 +167,63 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         ],
         predicted_domains=["SUPPORT", "TRANSACTION", "DISCOVERY"],
     ),
+    GuardId.DIRECT_HOME_DELIVERY: Guard(
+        id="direct_home_delivery",
+        text=(
+            "현재 티스테이션닷컴에서는 타이어를 집으로 배송받아 직접 장착하는 방식은 지원하지 않아요. "
+            "온라인 주문은 선택하신 장착점으로 상품이 이동하고, 예약한 매장에서 장착받는 방식으로 진행됩니다."
+        ),
+        chips=[
+            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "타이어 추천", "domain": "DISCOVERY"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
+        ],
+        predicted_domains=["SUPPORT", "TRANSACTION", "DISCOVERY"],
+    ),
+    GuardId.SHIPPING_FEE_REGION: Guard(
+        id="shipping_fee_region",
+        text=(
+            "서귀포시를 포함한 제주 지역은 상품 1개당 배송비 1만 원이 발생해요.\n\n"
+            "티스테이션닷컴은 기본적으로 무료배송·무료장착 원칙으로 운영되지만, "
+            "제주 지역은 추가 배송비가 적용됩니다.\n\n"
+            "정확한 배송비 내역은 실제 주문/결제 페이지의 결제금액에서 확인해 주세요."
+        ),
+        chips=[
+            {"label": "타이어 추천", "domain": "DISCOVERY"},
+            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
+        ],
+        predicted_domains=["SUPPORT", "DISCOVERY", "TRANSACTION"],
+    ),
+    GuardId.ONLINE_STORE_PRICE_POLICY: Guard(
+        id="online_store_price_policy",
+        text=(
+            "서울이든 제주든 온라인 주문 자체는 같은 방식으로 진행돼요. "
+            "주문/결제 단계에서 최종 금액을 확인한 뒤 선택한 장착점에서 장착받는 방식입니다.\n\n"
+            "온라인 판매가와 매장 현장 판매가는 행사, 쿠폰, 재고, 매장 운영 조건에 따라 다를 수 있어요. "
+            "제주 지역은 상품 1개당 배송비 1만 원이 추가될 수 있어 최종 결제금액에서 함께 확인해 주세요."
+        ),
+        chips=[
+            {"label": "온라인 상품 보기", "domain": "DISCOVERY"},
+            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
+        ],
+        predicted_domains=["SUPPORT", "DISCOVERY", "TRANSACTION"],
+    ),
+    GuardId.REGIONAL_PRICE_POLICY: Guard(
+        id="regional_price_policy",
+        text=(
+            "같은 상품이라도 지역, 장착점, 행사, 쿠폰, 재고, 배송 조건에 따라 최종 결제금액이 달라질 수 있어요.\n\n"
+            "특히 제주 지역은 상품 1개당 배송비 1만 원이 추가될 수 있어 서울 지역과 최종 금액이 다를 수 있습니다. "
+            "정확한 가격은 상품 규격과 장착점을 선택한 뒤 주문/결제 단계에서 확인해 주세요."
+        ),
+        chips=[
+            {"label": "상품 검색", "domain": "DISCOVERY"},
+            {"label": "장착 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "구매하기", "domain": "TRANSACTION"},
+        ],
+        predicted_domains=["SUPPORT", "DISCOVERY", "TRANSACTION"],
+    ),
 }
 
 

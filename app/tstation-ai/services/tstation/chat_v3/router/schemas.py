@@ -22,6 +22,10 @@ class GuardId(str, Enum):
     VEHICLE_TYPE_COMPATIBILITY = "vehicle_type_compatibility"
     PICKUP_STATUS = "pickup_status"
     PICKUP_INFO = "pickup_info"
+    DIRECT_HOME_DELIVERY = "direct_home_delivery"
+    SHIPPING_FEE_REGION = "shipping_fee_region"
+    ONLINE_STORE_PRICE_POLICY = "online_store_price_policy"
+    REGIONAL_PRICE_POLICY = "regional_price_policy"
 
 
 class Domain(str, Enum):
