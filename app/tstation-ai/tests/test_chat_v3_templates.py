@@ -274,3 +274,40 @@ def test_save_to_cart_does_not_emit_order_complete_rich_template():
     )
 
     assert source is None
+
+
+def test_qna_complete_event_uses_redirect_link_without_exposing_url_in_answer():
+    tool_output = {
+        "status": "success",
+        "response": "[open](https://csexample.com/cs/chat?summary=raw)",
+        "redictLink": {
+            "pc": "https://www.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+            "mobile": "https://m.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+        },
+        "cnsl_clss_seq": "10019",
+        "inq_tit_nm": "Need help",
+        "ai_summary": "Need help with my order",
+    }
+
+    event = templates.build_qna_complete_event(
+        "Please continue here.\n[open](https://csexample.com/cs/chat?summary=raw)",
+        [{"name": "transfer_to_qna_tool", "args": {}, "output": json.dumps(tool_output)}],
+    )
+
+    assert event is not None
+    assert event["template"] == "qnaComplete"
+    assert event["source_tool"] == "transfer_to_qna_tool"
+    assert event["data"]["redictLink"] == tool_output["redictLink"]
+    assert event["data"]["title"] == "Need help"
+    assert event["data"]["summary"] == "Need help with my order"
+    assert event["data"]["assistantResponse"] == "Please continue here."
+    assert "http" not in event["data"]["assistantResponse"]
+
+
+def test_v3_support_tools_use_qna_handoff_instead_of_legacy_escalation():
+    from services.tstation.chat_v3.tools.support import SUPPORT_TOOLS
+
+    tool_names = {tool.name for tool in SUPPORT_TOOLS}
+
+    assert "transfer_to_qna_tool" in tool_names
+    assert "escalate_tool" not in tool_names

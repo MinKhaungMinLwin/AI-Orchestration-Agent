@@ -102,6 +102,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         yield event
     t_tools = time.perf_counter()
 
+    # Part B: capture resolved order IDs (goods_no/shop_id/payment_amount) from this
+    # turn's tool outputs into slots so the preOrder card + next-turn quick_order_tool
+    # have their required args even when a later turn no longer re-calls the tools.
     slots = templates.harvest_order_slots(slots, executor.tool_calls)
 
     answer = executor.final_text.strip() or ERROR_RESPONSE
@@ -111,20 +114,22 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         answer = corrected
     answer = templates.format_location_answer(answer, executor.tool_calls)
     answer = templates.compact_answer_spacing(answer)
+    qna_event = templates.build_qna_complete_event(answer, executor.tool_calls)
+    if qna_event:
+        answer = qna_event["data"]["assistantResponse"]
 
     result["answer"] = answer
     yield sse.message(answer)
     chips: list[dict] = []
-    rich_event = await templates.build_rich_data_event(answer, executor.tool_calls)
-    preorder_event = None if rich_event else templates.build_preorder_fallback(answer, slots, decision)
-    quantity_chips = [] if rich_event or preorder_event else templates.quantity_quick_replies(answer)
-    if rich_event:
-        predicted_domains = [domain]
-        yield sse.sse({**rich_event, "source_domain": domain})
-    elif preorder_event:
-        predicted_domains = ["TRANSACTION"]
-        yield sse.sse({**preorder_event, "source_domain": domain})
-    elif quantity_chips:
+    quantity_chips = templates.quantity_quick_replies(answer)
+    rich_event = qna_event or (None if quantity_chips else await templates.build_rich_data_event(answer, executor.tool_calls))
+    # K2 fallback: when the model answered with a plain order summary instead of
+    # emitting the preOrder card via present_order_preview_tool (K1 → rich_event),
+    # rebuild the card from slots. Guarded by build_preorder_fallback (needs goods_no).
+    preorder_event = (
+        None if (quantity_chips or rich_event) else templates.build_preorder_fallback(answer, slots, decision)
+    )
+    if quantity_chips:
         chips = quantity_chips
         predicted_domains = ["TRANSACTION"]
         yield sse.data_event(
@@ -132,6 +137,12 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": predicted_domains},
             source_domain=domain,
         )
+    elif rich_event:
+        predicted_domains = [domain]
+        yield sse.sse({**rich_event, "source_domain": domain})
+    elif preorder_event:
+        predicted_domains = ["TRANSACTION"]
+        yield sse.sse({**preorder_event, "source_domain": domain})
     else:
         chips = await composer.suggest_quick_replies(user_text, answer)
         # V2 semantics: predictedDomains = likely domains of the user's NEXT turn.
