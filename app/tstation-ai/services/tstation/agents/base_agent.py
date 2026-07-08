@@ -1154,6 +1154,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_multi_store_schedule_tool": "매장 확인중",
     "get_stores_with_time_filter_tool": "매장 조회중",
     "transaction_store_preview_tool": "매장 정보 조회중",
+    "present_order_preview_tool": "주문 내용 확인 중...",
     "get_maintenance_history_tool": "정비내역 조회중",
     "get_my_reservations_tool": "예약내역 조회중",
     "get_favorite_stores_tool": "단골매장 조회 중...",

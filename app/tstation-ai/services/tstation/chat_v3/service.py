@@ -146,6 +146,11 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         yield event
     t_tools = time.perf_counter()
 
+    # Part B: capture resolved order IDs (goods_no/shop_id/payment_amount) from this
+    # turn's tool outputs into slots so the preOrder card + next-turn quick_order_tool
+    # have their required args even when a later turn no longer re-calls the tools.
+    slots = templates.harvest_order_slots(slots, executor.tool_calls)
+
     answer = executor.final_text.strip() or ERROR_RESPONSE
     corrected = await qc.verify_answer(
         answer,
@@ -184,6 +189,12 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             ),
         )
     )
+    # K2 fallback: when the model answered with a plain order summary instead of
+    # emitting the preOrder card via present_order_preview_tool (K1 → rich_event),
+    # rebuild the card from slots. Guarded by build_preorder_fallback (needs goods_no).
+    preorder_event = (
+        None if (quantity_chips or rich_event) else templates.build_preorder_fallback(answer, slots, decision)
+    )
     if quantity_chips:
         chips = quantity_chips
         predicted_domains = ["TRANSACTION"]
@@ -195,6 +206,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     elif rich_event:
         predicted_domains = [domain]
         yield sse.sse({**rich_event, "source_domain": domain})
+    elif preorder_event:
+        predicted_domains = ["TRANSACTION"]
+        yield sse.sse({**preorder_event, "source_domain": domain})
     else:
         chips = await composer.suggest_quick_replies(
             user_text,

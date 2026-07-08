@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.templates.schemas import (
     CheapestProductTemplate,
     DatepickTemplate,
@@ -24,10 +25,33 @@ from services.tstation.agents.templates.schemas import (
 )
 from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.templates import TEMPLATE_BUILDER_PROMPT
+from services.tstation.chat_v3.router.schemas import RouteDecision
 
 logger = logging.getLogger(__name__)
 
 _MAX_TOOL_OUTPUT_CHARS = 12000
+# Concrete order slots the router can fill from the user's message. When one of these
+# appears in this turn's slots_patch, the order just took shape → treat this as the
+# preOrder confirmation moment (the flow-doc `order_slots_complete → build_preorder`
+# transition). goal_type/pending_intent are excluded on purpose: the router re-emits
+# them across many turns, so they don't mark *this* turn as the confirmation.
+_CONFIRM_SLOT_KEYS = {"ord_qty", "shop_name", "requested_cal_day", "rsv_hour"}
+_PRODUCT_FIELDS = ("product_name", "pending_product_name", "tire_model")
+_STORE_SEARCH_TOOLS = {
+    "search_stores_tool",
+    "search_stores_complex_tool",
+    "get_nearby_stores_tool",
+    "get_store_list_tool",
+    "get_stores_with_time_filter_tool",
+    "transaction_store_preview_tool",
+}
+_PRODUCT_TOOLS = {
+    "search_product_tool",
+    "search_product_summary_tool",
+    "get_products_recommendations_tool",
+    "get_best_selling_products_tool",
+    "get_newest_products_tool",
+}
 
 _SERVICE_LABELS = {
     "113": "타이어",
@@ -78,9 +102,9 @@ _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "get_cheapest_price_tool": ("cheapestProduct", CheapestProductTemplate),
     "get_store_schedule_tool": ("datepick", DatepickTemplate),
     "get_multi_store_schedule_tool": ("datepick", DatepickTemplate),
-    "transaction_store_preview_tool": ("preOrder", PreOrderTemplate),
+    "transaction_store_preview_tool": ("location", LocationTemplate),
+    "present_order_preview_tool": ("preOrder", PreOrderTemplate),
     "quick_order_tool": ("orderComplete", OrderCompleteTemplate),
-    "save_to_cart_tool": ("orderComplete", OrderCompleteTemplate),
 }
 
 
@@ -93,6 +117,217 @@ def _has_rows(output: str) -> bool:
     if isinstance(parsed, dict):
         return any(bool(v) for v in parsed.values())
     return bool(parsed)
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_json(output: object) -> dict[str, Any]:
+    if isinstance(output, dict):
+        return output
+    if not isinstance(output, str):
+        return {}
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _set_if_present(slots: ConversationSlots, field: str, value: Any) -> None:
+    if value in (None, ""):
+        return
+    setattr(slots, field, value)
+
+
+def _single_product(data: dict[str, Any]) -> dict[str, Any] | None:
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
+        return items[0]
+    return None
+
+
+def _single_store(data: dict[str, Any]) -> dict[str, Any] | None:
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    stores = payload.get("stores") if isinstance(payload, dict) else None
+    if isinstance(stores, list) and len(stores) == 1 and isinstance(stores[0], dict):
+        return stores[0]
+    return None
+
+
+def _extract_payment_amount(data: dict[str, Any], ord_qty: int | None) -> int | None:
+    payload = data.get("data") if isinstance(data.get("data"), dict) else data
+    if not isinstance(payload, dict):
+        return None
+    unit = _as_int(payload.get("cheapest_final_prc"))
+    if unit is None:
+        unit = _as_int(payload.get("extra_fvr_sale_prc"))
+    if unit is None:
+        unit = _as_int(payload.get("sale_prc"))
+    wage = _as_int(payload.get("wage_prc")) or 0
+    if unit is None or not ord_qty or ord_qty <= 0:
+        return None
+    return (unit + wage) * ord_qty
+
+
+def _product_label(snapshot: dict[str, Any]) -> str:
+    product = ""
+    for field in _PRODUCT_FIELDS:
+        text = str(snapshot.get(field) or "").strip()
+        if text:
+            product = text
+            break
+    tire_size = str(snapshot.get("tire_size") or "").strip()
+    if product and tire_size and tire_size not in product:
+        return f"{product} {tire_size}"
+    return product or tire_size or str(snapshot.get("goods_no") or "").strip()
+
+
+def _booking_datetime(snapshot: dict[str, Any]) -> str | None:
+    day = str(snapshot.get("requested_cal_day") or "").strip()
+    hour = str(snapshot.get("rsv_hour") or "").strip()
+    if len(day) != 8 or not day.isdigit() or not hour:
+        return None
+    hour = hour.split(":", 1)[0].zfill(2)
+    return f"{day[:4]}년 {day[4:6]}월 {day[6:8]}일 {hour}:00"
+
+
+def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: str) -> dict | None:
+    goods_no = str(snapshot.get("goods_no") or "").strip()
+    ord_qty = _as_int(snapshot.get("ord_qty"))
+    if not goods_no or ord_qty is None or ord_qty <= 0:
+        return None
+
+    pending_intent = str(snapshot.get("pending_intent") or "").strip()
+    goal_type = str(snapshot.get("goal_type") or "").strip()
+    # K1 tool passes the flag explicitly; K2 (slots snapshot) derives it from intent.
+    is_ready_to_add_to_cart = (
+        bool(snapshot.get("is_ready_to_add_to_cart")) or pending_intent == "cart" or goal_type == "add_to_cart"
+    )
+    is_ready_to_order = not is_ready_to_add_to_cart
+
+    payload = PreOrderTemplate(
+        assistantResponse=str(answer or "").strip() or "주문 내용을 확인해 주세요.",
+        orderInfo={
+            "carInfo": str(snapshot.get("car_no") or "").strip() or None,
+            "product": _product_label(snapshot),
+            "quantity": ord_qty,
+            "storeName": str(snapshot.get("shop_name") or "").strip() or None,
+            "bookingDateTime": _booking_datetime(snapshot),
+            "paymentAmount": _as_int(snapshot.get("payment_amount")),
+        },
+        isReadyToOrder=is_ready_to_order,
+        isReadyToAddToCart=is_ready_to_add_to_cart,
+        metadata={
+            "goodsId": goods_no,
+            "goodsNo": goods_no,
+            "goods_no": goods_no,
+            "productName": str(snapshot.get("product_name") or snapshot.get("pending_product_name") or "").strip() or None,
+            "quantity": ord_qty,
+            "ordQty": ord_qty,
+            "ord_qty": ord_qty,
+            "shopId": str(snapshot.get("shop_id") or "").strip() or None,
+            "shop_id": str(snapshot.get("shop_id") or "").strip() or None,
+            "storeName": str(snapshot.get("shop_name") or "").strip() or None,
+            "requestedCalDay": str(snapshot.get("requested_cal_day") or "").strip() or None,
+            "requested_cal_day": str(snapshot.get("requested_cal_day") or "").strip() or None,
+            "rsvHour": str(snapshot.get("rsv_hour") or "").strip() or None,
+            "rsv_hour": str(snapshot.get("rsv_hour") or "").strip() or None,
+            "carNo": str(snapshot.get("car_no") or "").strip() or None,
+            "carLncCd": str(snapshot.get("car_lnc_cd") or "").strip() or None,
+            "source": source,
+        },
+    )
+    return {
+        "type": "data",
+        "template": "preOrder",
+        "data": payload.model_dump(mode="json", exclude_none=True),
+    }
+
+
+def _ready_order_slots(slots: ConversationSlots) -> bool:
+    return bool(
+        slots.goods_no
+        and slots.shop_id
+        and slots.ord_qty
+        and slots.requested_cal_day
+        and slots.rsv_hour
+        and (slots.pending_intent == "order" or slots.goal_type == "place_order")
+    )
+
+
+def _ready_cart_slots(slots: ConversationSlots) -> bool:
+    return bool(
+        slots.goods_no
+        and slots.ord_qty
+        and (slots.pending_intent == "cart" or slots.goal_type == "add_to_cart")
+    )
+
+
+def _looks_like_confirmation_turn(decision: RouteDecision | None) -> bool:
+    """True when this turn filled a concrete order slot — the build_preorder transition.
+
+    Re-shows (order already complete, no new slot filled this turn) are handled by K1
+    (the LLM re-calling present_order_preview_tool), so no answer-text keyword matching
+    is needed here — the confirmation signal comes entirely from the router's slots_patch.
+    """
+    patch = decision.slots_patch.non_empty() if decision else {}
+    return any(key in patch for key in _CONFIRM_SLOT_KEYS)
+
+
+def build_preorder_fallback(answer: str, slots: ConversationSlots, decision: RouteDecision | None) -> dict | None:
+    if not _looks_like_confirmation_turn(decision):
+        return None
+    if not (_ready_order_slots(slots) or _ready_cart_slots(slots)):
+        return None
+    return build_preorder_data_event(
+        answer,
+        slots.model_dump(mode="json", exclude_none=True),
+        source="chat_v3_slot_fallback_preorder",
+    )
+
+
+def harvest_order_slots(slots: ConversationSlots, tool_calls: list[dict]) -> ConversationSlots:
+    for call in tool_calls:
+        name = str(call.get("name") or "")
+        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        parsed = _parse_json(call.get("output"))
+
+        _set_if_present(slots, "goods_no", args.get("goods_no"))
+        _set_if_present(slots, "ord_qty", _as_int(args.get("ord_qty")))
+        _set_if_present(slots, "shop_id", args.get("shop_id"))
+        _set_if_present(slots, "requested_cal_day", args.get("rsv_date") or args.get("requested_cal_day"))
+        _set_if_present(slots, "rsv_hour", args.get("rsv_hour"))
+        _set_if_present(slots, "car_lnc_cd", args.get("car_lnc_cd"))
+
+        if name in _PRODUCT_TOOLS:
+            item = _single_product(parsed)
+            if item:
+                _set_if_present(slots, "goods_no", item.get("goods_no"))
+                _set_if_present(slots, "tire_model", item.get("goods_nm"))
+                _set_if_present(slots, "pending_product_name", item.get("goods_nm"))
+                _set_if_present(slots, "tire_size", item.get("tire_size_1"))
+
+        if name in _STORE_SEARCH_TOOLS:
+            store = _single_store(parsed)
+            if store:
+                _set_if_present(slots, "shop_id", store.get("shop_id") or store.get("shopId"))
+                _set_if_present(slots, "shop_name", store.get("shop_nm") or store.get("shopName"))
+
+        if name in {"get_final_price_tool", "transaction_store_preview_tool"}:
+            payment_amount = _extract_payment_amount(parsed.get("data", {}).get("price", parsed), slots.ord_qty)
+            if payment_amount is not None:
+                slots.payment_amount = payment_amount
+                slots.price_basis = "payment_amount"
+                slots.price_source_tool = name
+                slots.source_tool = name
+
+    return slots
 
 
 def _pick_source(tool_calls: list[dict]) -> tuple[str, type[BaseModel], dict] | None:
@@ -332,6 +567,13 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_confi
     if source is None:
         return None
     template_name, template_model, call = source
+    if template_name == "preOrder":
+        # K1: the model emitted the order via present_order_preview_tool. Build the card
+        # in code from that snapshot (never via the generic LLM template builder — it
+        # cannot set isReadyToOrder / metadata.goodsId reliably). None → K2 slot fallback.
+        return build_preorder_data_event(
+            answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
+        )
     try:
         llm = get_router_llm().with_structured_output(template_model, method="function_calling")
         messages = [
