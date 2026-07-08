@@ -171,8 +171,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if qna_event:
         answer = qna_event["data"]["assistantResponse"]
 
-    result["answer"] = answer
-    yield sse.message(answer)
     chips: list[dict] = []
     quantity_chips = templates.quantity_quick_replies(answer, slots.ord_qty)
     preorder_event = None if quantity_chips else templates.build_preorder_fallback(answer, slots, decision)
@@ -191,6 +189,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             slots=slots,
         )
     )
+    result["answer"] = answer
+    if (rich_event or preorder_event or {}).get("template") != "preOrder":
+        yield sse.message(answer)
     if quantity_chips:
         chips = quantity_chips
         predicted_domains = ["TRANSACTION"]
