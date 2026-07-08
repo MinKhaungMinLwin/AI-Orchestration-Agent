@@ -505,6 +505,7 @@ def transfer_to_qna_tool(
     )
 
     try:
+        cnsl_clss_seq = str(cnsl_clss_seq or "10019").strip()
         redict_link = make_qna_payload_urls(
             cnsl_clss_seq=cnsl_clss_seq,
             inq_tit_nm=inq_tit_nm,
