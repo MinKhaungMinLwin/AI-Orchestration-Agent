@@ -6,6 +6,7 @@ _PERSONA = runpy.run_path(Path("services/tstation/chat_v3/prompts/persona.py"))
 SYSTEM_PROMPT = _PERSONA["SYSTEM_PROMPT"]
 TRANSACTION_WRITE_GUIDANCE = _PERSONA["TRANSACTION_WRITE_GUIDANCE"]
 STORE_SEARCH_FLOW_GUIDANCE = _PERSONA["STORE_SEARCH_FLOW_GUIDANCE"]
+VEHICLE_LOOKUP_GUIDANCE = _PERSONA["VEHICLE_LOOKUP_GUIDANCE"]
 
 
 def test_system_prompt_limits_store_recommendations_to_tool_verifiable_conditions():
@@ -30,3 +31,12 @@ def test_store_flow_resolves_shown_branch_selection_from_memory():
     assert "새로 매장을 검색하지 말고" in STORE_SEARCH_FLOW_GUIDANCE
     assert "shop_id" in STORE_SEARCH_FLOW_GUIDANCE
     assert "지점명" in STORE_SEARCH_FLOW_GUIDANCE and "store_nm" in STORE_SEARCH_FLOW_GUIDANCE
+
+
+def test_vehicle_lookup_guidance_calls_tool_without_waiting_for_a_request_verb():
+    # A bare "차량번호 + 소유주명" message (no request verb) must still trigger
+    # get_user_vehicles_tool once DISCOVERY is bound — the model shouldn't just
+    # acknowledge the info and wait to be asked.
+    assert "get_user_vehicles_tool" in VEHICLE_LOOKUP_GUIDANCE
+    assert "car_no" in VEHICLE_LOOKUP_GUIDANCE and "owner_nm" in VEHICLE_LOOKUP_GUIDANCE
+    assert "요청 문구가 없어도" in VEHICLE_LOOKUP_GUIDANCE

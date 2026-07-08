@@ -22,6 +22,7 @@ from services.tstation.chat_v3.prompts.persona import (
     STORE_SEARCH_FLOW_GUIDANCE,
     SYSTEM_PROMPT,
     TRANSACTION_WRITE_GUIDANCE,
+    VEHICLE_LOOKUP_GUIDANCE,
 )
 from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
@@ -144,6 +145,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if "TRANSACTION" in domains:
         extra_context.append(TRANSACTION_WRITE_GUIDANCE)
         extra_context.append(STORE_SEARCH_FLOW_GUIDANCE)
+    if "DISCOVERY" in domains:
+        extra_context.append(VEHICLE_LOOKUP_GUIDANCE)
     slots_block = slots_context_block(slots)
     if slots_block:
         extra_context.append(slots_block)
