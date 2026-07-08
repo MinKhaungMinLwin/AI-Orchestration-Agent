@@ -20,6 +20,8 @@ from services.tstation.agents.templates.schemas import (
     LocationTemplate,
     OrderCompleteTemplate,
     PreOrderTemplate,
+    ProductItem,
+    ProductMeta,
     ProductTag,
     ProductTemplate,
     QnaCompleteTemplate,
@@ -551,11 +553,53 @@ def _product_discount_rate(row: dict[str, Any], discount_amount: int | None, ori
     return None
 
 
+def _product_item_from_row(row: dict[str, Any]) -> ProductItem:
+    goods_name = _get_str(row, "goods_nm", "goodsNm", "title", "name")
+    tire_size = _get_str(row, "tire_size_1", "tire_size_2", "tire_size", "size")
+    price = _product_price(row)
+    original_price = _product_original_price(row, price)
+    discount_amount = _product_discount_amount(row, price, original_price)
+    discount_rate = _product_discount_rate(row, discount_amount, original_price)
+    brand = _get_str(row, "brand_nm", "brandName", "brand_name")
+    return ProductItem(
+        imageUrl=_get_str(row, "image_url", "imageUrl"),
+        title=f"{goods_name} {tire_size}".strip() or tire_size or _get_str(row, "goods_no"),
+        tires=tire_size,
+        titleProductName=goods_name,
+        titleTires=tire_size,
+        brandName=brand.replace(" ", "").upper() if brand else "",
+        oeBadgeYn=_get_str(row, "oe_badge_yn", "oeBadgeYn", "oeBadgeYN"),
+        oeMaker=_get_str(row, "t_oe_maker_1", "oeMaker"),
+        smrtPayYn=_get_str(row, "smrt_pay_yn", "smrtPayYn"),
+        price=price,
+        originalPrice=original_price,
+        discountRate=discount_rate,
+        discountAmount=discount_amount,
+        rate=_get_num(row, "rate", "rating_avg", "rating") or 0.0,
+        totalQuantity=int(_get_num(row, "totalQuantity", "total_qty", "review_count") or 0),
+        tags=_product_tags_from_row(row),
+    )
+
+
 def _normalize_product_payload(payload: BaseModel, tool_output: str) -> None:
     raw_products = _product_rows_from_output(tool_output)
     products = getattr(payload, "products", None)
     metadata = getattr(payload, "metadata", None)
     if not raw_products or not isinstance(products, list):
+        return
+
+    source_rows = raw_products[:10]
+    rebuilt_products: list[ProductItem] = []
+    rebuilt_metadata: list[ProductMeta] = []
+    for row in source_rows:
+        goods_no = _get_str(row, "goods_no", "goodsNo", "goods_id", "goodsId")
+        if not goods_no:
+            continue
+        rebuilt_products.append(_product_item_from_row(row))
+        rebuilt_metadata.append(ProductMeta(goodsId=goods_no))
+    if rebuilt_products:
+        payload.products = rebuilt_products
+        payload.metadata = rebuilt_metadata
         return
 
     rows_by_goods = {

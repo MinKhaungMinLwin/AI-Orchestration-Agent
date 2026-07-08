@@ -155,6 +155,53 @@ class _FakeProductRouterLLM:
         return _FakeProductStructuredLLM()
 
 
+class _FakeShortProductStructuredLLM:
+    async def ainvoke(self, messages):
+        return ProductTemplate(
+            assistantResponse="두 개만 언급한 답변입니다.",
+            products=[
+                {
+                    "imageUrl": "",
+                    "title": "임의 상품 1",
+                    "tires": "",
+                    "titleProductName": "임의 상품 1",
+                    "titleTires": "",
+                    "brandName": "",
+                    "oeBadgeYn": "",
+                    "price": 1,
+                    "originalPrice": 1,
+                    "discountRate": 0,
+                    "discountAmount": 0,
+                    "rate": 0,
+                    "totalQuantity": 0,
+                    "tags": [],
+                },
+                {
+                    "imageUrl": "",
+                    "title": "임의 상품 2",
+                    "tires": "",
+                    "titleProductName": "임의 상품 2",
+                    "titleTires": "",
+                    "brandName": "",
+                    "oeBadgeYn": "",
+                    "price": 1,
+                    "originalPrice": 1,
+                    "discountRate": 0,
+                    "discountAmount": 0,
+                    "rate": 0,
+                    "totalQuantity": 0,
+                    "tags": [],
+                },
+            ],
+            metadata=[{"goodsId": "TEMP1"}, {"goodsId": "TEMP2"}],
+        )
+
+
+class _FakeShortProductRouterLLM:
+    def with_structured_output(self, model, method):
+        return _FakeShortProductStructuredLLM()
+
+
 def test_location_template_normalizes_store_name_and_address_from_tool_output(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
     tool_output = {
@@ -265,6 +312,43 @@ def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
         {"text": "흡음재", "primary": False},
     ]
     assert product["oeBadgeYn"] == "Y"
+
+
+def test_product_template_rebuilds_card_count_from_tool_rows(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeShortProductRouterLLM())
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "goods_no": f"G{i:04d}",
+                    "goods_nm": f"상품{i}",
+                    "tire_size_1": f"22{i}/45R17",
+                    "brand_nm": "HANKOOK",
+                    "extra_fvr_sale_prc": 199_000 - i,
+                    "sale_prc": 210_000 - i,
+                    "rating_avg": 4.0,
+                    "review_count": i,
+                }
+                for i in range(1, 7)
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "답변에는 2개만 언급됐지만 도구 결과는 6개입니다.",
+            [{"name": "search_product_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert len(event["data"]["products"]) == 6
+    assert len(event["data"]["metadata"]) == 6
+    assert event["data"]["products"][0]["titleProductName"] == "상품1"
+    assert event["data"]["products"][5]["titleProductName"] == "상품6"
+    assert event["data"]["metadata"] == [{"goodsId": f"G{i:04d}"} for i in range(1, 7)]
 
 
 def test_location_answer_uses_fixed_store_info_labels():
