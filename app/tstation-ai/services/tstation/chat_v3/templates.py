@@ -904,15 +904,15 @@ async def build_rich_data_event(
                 f"## 챗봇 답변\n{answer[:2000]}",
             ),
         ]
-        decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
-        if not decision.applicable or decision.payload is None:
+        relevance = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
+        if not relevance.applicable or relevance.payload is None:
             logger.info(
                 "[CHAT_V3] rich template '%s' skipped (tool=%s) — answer moved to a different topic",
                 template_name,
                 call["name"],
             )
             return None
-        payload = decision.payload
+        payload = relevance.payload
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
         if template_name == "product":
