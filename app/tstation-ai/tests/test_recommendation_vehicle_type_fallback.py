@@ -125,3 +125,25 @@ def test_invalid_vehicle_type_returns_422(monkeypatch):
     assert result["http_status"] == 422
     assert result["reason"] == "INVALID_VEHICLE_TYPE"
     assert len(be.calls) == 0  # rejected before any BE call
+
+
+def test_three_pmsf_description_is_added_for_certified_product():
+    result = t._append_three_pmsf_description({
+        "goods_nm": "웨더플렉스 GT",
+        "three_pmsf_yn": "Y",
+        "pc_prod_remark_desc": "프리미엄 올웨더 타이어입니다.",
+    })
+
+    assert "3PMSF 인증" in result["pc_prod_remark_desc"]
+    assert result["three_pmsf_description"].startswith("3PMSF 인증")
+
+
+def test_three_pmsf_description_is_not_duplicated():
+    result = t._append_three_pmsf_description({
+        "goods_nm": "웨더플렉스 GT",
+        "three_pmsf_yn": "Y",
+        "pc_prod_remark_desc": "3PMSF 인증으로 눈길 성능 기준을 충족합니다.",
+    })
+
+    assert result["pc_prod_remark_desc"].count("3PMSF") == 1
+    assert result["three_pmsf_description"].startswith("3PMSF 인증")

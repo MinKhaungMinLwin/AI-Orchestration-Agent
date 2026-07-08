@@ -68,6 +68,23 @@ current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = co
 )
 
 _RECOMMENDATION_LIMIT_CAP = 10
+_THREE_PMSF_DESCRIPTION = "3PMSF 인증으로 눈길 성능 기준을 충족해 올웨더 주행 신뢰도를 높인 타이어입니다."
+
+
+def _truthy_flag(value: Any) -> bool:
+    return str(value or "").strip().upper() in {"Y", "O", "TRUE", "1"}
+
+
+def _append_three_pmsf_description(data: dict[str, Any]) -> dict[str, Any]:
+    if not _truthy_flag(data.get("three_pmsf_yn")):
+        return data
+    enriched = dict(data)
+    searchable_text = " ".join(str(enriched.get(key) or "") for key in ("slogan", "pc_prod_remark_desc", "pc_prod_tech_desc"))
+    if "3PMS" not in searchable_text.upper() and "삼봉" not in searchable_text:
+        current = str(enriched.get("pc_prod_remark_desc") or "").strip()
+        enriched["pc_prod_remark_desc"] = f"{current} {_THREE_PMSF_DESCRIPTION}".strip()
+    enriched["three_pmsf_description"] = _THREE_PMSF_DESCRIPTION
+    return enriched
 
 
 def _attach_vehicle_type_to_vehicle_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -263,7 +280,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_highspd", "t_highspd_cd", "t_high_hand_avg",
     "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
-    "goods_dtl_pfm_nm", "sound_absorber_yn", "three_pmsf_yn",
+    "goods_dtl_pfm_nm", "sound_absorber_yn", "three_pmsf_yn", "three_pmsf_description",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
     "t_oe_maker_1", "oe_badge_yn",
@@ -495,14 +512,18 @@ def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
         for key in (
             "prc_grd_nm",
             "goods_pfm_nm",
+            "three_pmsf_yn",
             "brand_nm",
             "oe_badge_yn",
             "t_oe_maker_1",
             "smrt_pay_yn",
+            "pc_prod_remark_desc",
+            "pc_prod_tech_desc",
+            "slogan",
         ):
             if desc.get(key) not in (None, ""):
                 flattened[key] = desc[key]
-        return flattened
+        return _append_three_pmsf_description(flattened)
     except Exception:
         logger.warning("[_fetch_description] Failed for goods_no=%s", goods_no)
         return {}
@@ -1121,7 +1142,7 @@ def get_product_description_tool(goods_no: str):
                 response.content.decode(errors="ignore") or "Failed to get product description"
             )
         # logger.debug("[TOOL][get_product_description_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _append_three_pmsf_description(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_product_description_tool] Failed")
         return _error_response(None, str(e), "Failed to get product description")
