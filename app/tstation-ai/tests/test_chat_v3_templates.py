@@ -292,6 +292,45 @@ def test_location_template_marks_booking_flow_from_order_slots(monkeypatch):
     assert event["data"]["metadata"][0]["shopId"] == "F00721"
 
 
+def test_location_template_builds_directly_from_tool_items(monkeypatch):
+    def fail_if_llm_builder_is_used():
+        raise AssertionError("location template should be built directly from store tool output")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_if_llm_builder_is_used)
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "shop_id": "F09090",
+                    "shop_nm": "T-Station Hannam",
+                    "addr_base": "Seoul Yongsan-gu",
+                    "addr_dtl": "Hannam-daero 80",
+                    "tel_no": "02-790-2921",
+                    "is_all_my_t": True,
+                    "is_installable": True,
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "Here are matching stores.",
+            [{"name": "search_stores_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+            slots=ConversationSlots(goods_no="G000000309783", ord_qty=4, pending_intent="order"),
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["data"]["stores"][0]["nameAddress"] == "T-Station Hannam"
+    assert event["data"]["stores"][0]["detailAddress"] == "Seoul Yongsan-gu Hannam-daero 80"
+    assert event["data"]["metadata"][0]["shopId"] == "F09090"
+    assert event["data"]["metadata"][0]["sourceTool"] == "search_stores_tool"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["shop_id"] == "F09090"
+
+
 def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
 

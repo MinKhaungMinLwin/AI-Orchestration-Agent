@@ -18,6 +18,8 @@ from services.tstation.agents.templates.schemas import (
     CheapestProductTemplate,
     DatepickTemplate,
     ListCarTemplate,
+    LocationItem,
+    LocationMeta,
     LocationTemplate,
     OrderCompleteTemplate,
     PreOrderTemplate,
@@ -567,11 +569,14 @@ def _store_rows_from_output(output: str) -> list[dict[str, Any]]:
     if not isinstance(parsed, dict):
         return []
     data = parsed.get("data")
-    if isinstance(data, dict) and isinstance(data.get("stores"), list):
-        return [row for row in data["stores"] if isinstance(row, dict)]
-    stores = parsed.get("stores")
-    if isinstance(stores, list):
-        return [row for row in stores if isinstance(row, dict)]
+    candidates = [data, parsed]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("stores", "items", "stores_available"):
+            rows = candidate.get(key)
+            if isinstance(rows, list):
+                return [row for row in rows if isinstance(row, dict)]
     return []
 
 
@@ -974,6 +979,57 @@ def _normalize_location_payload(payload: BaseModel, tool_output: str, slots: Con
                 }
 
 
+def build_location_data_event(answer: str, call: dict, slots: ConversationSlots | None = None) -> dict | None:
+    raw_stores = _store_rows_from_output(str(call.get("output") or ""))
+    if not raw_stores:
+        return None
+
+    stores: list[LocationItem] = []
+    metadata: list[LocationMeta] = []
+    for index, row in enumerate(raw_stores[:10], start=1):
+        shop_id = _get_str(row, "shop_id", "shopId")
+        if not shop_id:
+            continue
+        shop_name = _get_str(row, "shop_nm", "shopName", "storeName", "name") or f"매장 {index}"
+        stores.append(
+            LocationItem(
+                nameAddress=shop_name,
+                distance=_get_str(row, "distance", "distance_km", "distanceKm", "dist"),
+                detailAddress=_join_address(row.get("addr_base"), row.get("addr_dtl")),
+                isAllMyT=_truthy_flag(row.get("is_all_my_t") or row.get("all_my_t_yn") or row.get("allMyT")),
+                todayInstall=_truthy_flag(row.get("today_install") or row.get("todayInstall")),
+                tnaDelivery=_truthy_flag(row.get("tna_delivery") or row.get("tnaDelivery")),
+                description="\n".join(_store_info_lines(row)),
+            )
+        )
+        metadata.append(
+            LocationMeta(
+                shopId=shop_id,
+                shopName=shop_name,
+                sourceTool=str(call.get("name") or "") or None,
+                source_tool=str(call.get("name") or "") or None,
+                isInstallable=row.get("is_installable"),
+            )
+        )
+
+    if not stores:
+        return None
+
+    payload = LocationTemplate(
+        assistantResponse=answer,
+        stores=stores,
+        metadata=metadata,
+        isBookingFlow=_is_booking_location_context(slots),
+    )
+    _normalize_location_payload(payload, str(call.get("output") or ""), slots)
+    return {
+        "type": "data",
+        "template": "location",
+        "data": payload.model_dump(mode="json", exclude_none=True),
+        "source_tool": call["name"],
+    }
+
+
 def _is_booking_location_context(slots: ConversationSlots | None) -> bool:
     if slots is None:
         return False
@@ -1094,6 +1150,8 @@ async def build_rich_data_event(
         return build_preorder_data_event(
             answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
         )
+    if template_name == "location":
+        return build_location_data_event(answer, call, slots)
 
     if _should_gate_info_product_source(
         call,
