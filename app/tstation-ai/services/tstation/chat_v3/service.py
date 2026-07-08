@@ -12,7 +12,7 @@ import time
 from fastapi.responses import StreamingResponse
 
 from config.env import settings
-from config.tracing import build_trace_config, set_trace_name, tracer
+from config.tracing import build_trace_config, safe_trace_update, set_trace_name, trace_span, tracer, truncate_for_trace
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
 from services.tstation.chat_v3 import composer, context, memory, qc, sse, templates
@@ -263,6 +263,14 @@ async def _run_turn(request: TStationChatRequest, result: dict):
 
     slots = derive_slots_from_tool_calls(slots, executor.tool_calls)
     await save_slots(request.session_id, slots, user_id=request.user_id)
+    with trace_span(
+        "chat_v3_turn_slots",
+        trace_id=request.tracing_id,
+        input={"user_text": user_text},
+    ) as slots_span:
+        slots_payload = truncate_for_trace(slots.model_dump(exclude_none=True))
+        safe_trace_update(slots_span, output={"answer": answer, "slots": slots_payload})
+        safe_trace_update(slots_span, trace=True, metadata={"slots": slots_payload})
     await memory.persist_turn_context(
         request.session_id,
         tool_calls=executor.tool_calls,
