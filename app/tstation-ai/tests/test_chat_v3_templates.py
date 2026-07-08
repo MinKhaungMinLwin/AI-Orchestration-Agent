@@ -48,7 +48,7 @@ _TEST_ENV_DEFAULTS = {
 for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
-from services.tstation.agents.templates.schemas import LocationTemplate  # noqa: E402
+from services.tstation.agents.templates.schemas import DatepickTemplate, LocationTemplate  # noqa: E402
 from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from schemas.tstation.slots import ConversationSlots  # noqa: E402
 from services.tstation.chat_v3 import service  # noqa: E402
@@ -102,6 +102,24 @@ class _FakeToolLoopExecutor:
             yield None
 
 
+class _FakeDatepickStructuredLLM:
+    async def ainvoke(self, messages):
+        return DatepickTemplate(
+            assistantResponse="예약 가능한 날짜를 확인해 주세요.",
+            dates=[
+                {"date": "20260710", "available": True, "availableTimes": [10, 11], "index": 0},
+                {"date": "이미 포맷됨", "available": False, "availableTimes": [], "index": 1},
+            ],
+            selectedDate=0,
+            metadata={"shopId": "F00721"},
+        )
+
+
+class _FakeDatepickRouterLLM:
+    def with_structured_output(self, model, method):
+        return _FakeDatepickStructuredLLM()
+
+
 def test_location_template_normalizes_store_name_and_address_from_tool_output(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
     tool_output = {
@@ -142,6 +160,22 @@ def test_location_template_normalizes_store_name_and_address_from_tool_output(mo
     )
     assert meta["shopId"] == "C01410"
     assert meta["shopName"] == "티스테이션 안양호계점"
+
+
+def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "예약 가능한 날짜를 확인해 주세요.",
+            [{"name": "get_store_schedule_tool", "args": {"shop_id": "F00721"}, "output": json.dumps({"data": {"stores": []}}, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["data"]["dates"][0]["date"] == "2026년 07월 10일"
+    assert event["data"]["dates"][1]["date"] == "이미 포맷됨"
 
 
 def test_location_answer_uses_fixed_store_info_labels():
