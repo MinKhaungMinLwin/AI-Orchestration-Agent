@@ -71,6 +71,7 @@ def test_customer_monitoring_groups_domain_af_and_tools() -> None:
     assert metadata["result_count"] == 1
     assert metadata["final_status"] == "success"
     assert metadata["status_reason"] == "tool_success_with_template"
+    assert metadata["error_reason"] == "none"
     assert "af:inventory" in payload["tags"]
     assert "tool:get_store_inventory_tool" in payload["tags"]
     assert "status:success" in payload["tags"]
@@ -87,6 +88,7 @@ def test_customer_monitoring_marks_no_results_as_fallback() -> None:
     assert metadata["primary_af"] == "Product Recommendation AF"
     assert metadata["final_status"] == "fallback"
     assert metadata["status_reason"] == "tool_no_results"
+    assert metadata["error_reason"] == "tool_no_results"
     assert metadata["no_result_tools"] == ["search_product_tool"]
     assert "status:fallback" in payload["tags"]
 
@@ -103,6 +105,7 @@ def test_customer_monitoring_marks_qc_correction_as_partial_success() -> None:
     assert metadata["primary_af"] == "FAQ AF"
     assert metadata["final_status"] == "partial_success"
     assert metadata["status_reason"] == "qc_corrected"
+    assert metadata["error_reason"] == "qc_corrected"
     assert "status:partial_success" in payload["tags"]
 
 
@@ -157,3 +160,47 @@ def test_update_trace_monitoring_keeps_current_trace_update_with_parent_span(mon
     assert current_trace_calls[0]["metadata"]["primary_af"] == "Product Recommendation AF"
     assert current_trace_calls[0]["input"] == "타이어 추천"
     assert current_trace_calls[0]["output"] == "추천 타이어입니다."
+
+
+def test_update_trace_monitoring_records_customer_event_with_turn_metadata(monkeypatch) -> None:
+    events: list[dict] = []
+    scores: list[dict] = []
+
+    class FakeEvent:
+        def score_trace(self, **kwargs):
+            scores.append(kwargs)
+
+    class FakeTracer:
+        def create_event(self, **kwargs):
+            events.append(kwargs)
+            return FakeEvent()
+
+        def update_current_trace(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(service, "tracer", FakeTracer())
+
+    service._update_trace_monitoring(
+        trace_id="trace-1",
+        parent_span_id="span-1",
+        session_id="session-1",
+        user_id="user-1",
+        message_id="message-1",
+        route_intents=["place_order", "product_search"],
+        route_domains=["TRANSACTION", "DISCOVERY"],
+        tool_calls=[{"name": "present_order_preview_tool", "output": '{"status":"success"}'}],
+        final_template="preOrder",
+        answer="주문 내용을 확인해 주세요.",
+        user_text="주문할래",
+        latency_ms=100,
+    )
+
+    assert events
+    metadata = events[0]["metadata"]
+    assert events[0]["trace_context"] == {"trace_id": "trace-1", "parent_span_id": "span-1"}
+    assert metadata["message_id"] == "message-1"
+    assert metadata["route_intents"] == ["place_order", "product_search"]
+    assert metadata["error_reason"] == "none"
+    assert "intent:place_order" in metadata["tags"]
+    assert scores[0]["name"] == "customer_final_status"
+    assert scores[0]["value"] == "success"

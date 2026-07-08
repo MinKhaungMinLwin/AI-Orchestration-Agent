@@ -414,6 +414,7 @@ async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict 
         chip_context=chat_body.chip_context.model_dump() if chat_body.chip_context else None,
         ui_action=chat_body.ui_action,
         slots=chat_body.slots,
+        metadata={"message_id": msg_id},
         **({"tracing_id": tracing_id} if tracing_id else {}),
     )
 
@@ -985,4 +986,3 @@ async def validate_token_endpoint(credentials: HTTPAuthorizationCredentials = Se
     except ValueError:
         return ValidateTokenResponse(valid=False, user_id=user_id, reason="Invalid token expiration")
     return ValidateTokenResponse(valid=True, user_id=user_id)
-
