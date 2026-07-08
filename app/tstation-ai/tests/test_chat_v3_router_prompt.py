@@ -12,4 +12,4 @@ def test_router_routes_bare_info_to_the_domain_that_can_use_it():
     # info itself is the intent.
     assert "요청 문구가 없어도" in ROUTER_PROMPT
     assert "LEADING(잡담)으로 분류해 정보를 흘려보내지" in ROUTER_PROMPT
-    assert "29조3344 공태웅" in ROUTER_PROMPT
+    assert "09조8765 홍길동" in ROUTER_PROMPT
