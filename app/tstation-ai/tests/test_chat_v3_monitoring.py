@@ -126,3 +126,34 @@ def test_update_trace_monitoring_uses_langfuse_current_trace(monkeypatch) -> Non
     assert calls[0]["metadata"]["primary_af"] == "Quick Shopping AF"
     assert calls[0]["metadata"]["final_status"] == "success"
     assert "af:quick_shopping" in calls[0]["tags"]
+
+
+def test_update_trace_monitoring_keeps_current_trace_update_with_parent_span(monkeypatch) -> None:
+    current_trace_calls: list[dict] = []
+    parent_trace_calls: list[dict] = []
+
+    class FakeParentSpan:
+        def update_trace(self, **kwargs):
+            parent_trace_calls.append(kwargs)
+
+    class FakeTracer:
+        def update_current_trace(self, **kwargs):
+            current_trace_calls.append(kwargs)
+
+    monkeypatch.setattr(service, "tracer", FakeTracer())
+
+    service._update_trace_monitoring(
+        trace_observation=FakeParentSpan(),
+        route_domains=["DISCOVERY"],
+        tool_calls=[{"name": "get_products_recommendations_tool", "output": '{"status":"success"}'}],
+        final_template="product",
+        answer="추천 타이어입니다.",
+        user_text="타이어 추천",
+        latency_ms=100,
+    )
+
+    assert parent_trace_calls
+    assert current_trace_calls
+    assert current_trace_calls[0]["metadata"]["primary_af"] == "Product Recommendation AF"
+    assert current_trace_calls[0]["input"] == "타이어 추천"
+    assert current_trace_calls[0]["output"] == "추천 타이어입니다."

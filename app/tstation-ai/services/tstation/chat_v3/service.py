@@ -5,6 +5,7 @@ Turn pipeline (all decisions LLM-made, zero regex):
                                  → pass:  tool loop → QC → quick replies
 """
 
+import contextlib
 import json
 import logging
 import time
@@ -94,6 +95,15 @@ def _flush_trace() -> None:
         logger.debug("[CHAT_V3] Langfuse flush failed", exc_info=True)
 
 
+def _close_trace_context(parent_context, parent_span) -> None:
+    if parent_span is not None:
+        with contextlib.suppress(Exception):
+            parent_span.end()
+    if parent_context is not None:
+        with contextlib.suppress(Exception):
+            parent_context.__exit__(None, None, None)
+
+
 def _update_trace_monitoring(
     *,
     trace_observation=None,
@@ -124,7 +134,6 @@ def _update_trace_monitoring(
         trace_update["output"] = truncate_for_trace(answer)
     if trace_observation is not None:
         safe_trace_update(trace_observation, trace=True, **trace_update)
-        return
     try:
         tracer.update_current_trace(**trace_update)
     except Exception:
@@ -137,16 +146,19 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     set_tstation_origin_host(request.origin_host)
     user_text = context.last_user_text(request)
     set_trace_name(user_text[:60] if user_text else "chat_v3")
+    parent_context = None
     parent_span = None
     parent_span_id = None
     if _tracing_enabled:
         try:
-            parent_span = tracer.start_span(
+            parent_context = tracer.start_as_current_span(
                 name="chat_v3",
                 trace_context={"trace_id": request.tracing_id},
                 input=truncate_for_trace(user_text),
                 metadata={"runtime": "chat_v3"},
+                end_on_exit=False,
             )
+            parent_span = parent_context.__enter__()
             parent_span_id = parent_span.id
             safe_trace_update(
                 parent_span,
@@ -205,8 +217,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
         )
-        if parent_span is not None:
-            parent_span.end()
+        _close_trace_context(parent_context, parent_span)
         _flush_trace()
         return
 
@@ -387,8 +398,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         latency_ms=int((time.perf_counter() - t0) * 1000),
         trace_observation=parent_span,
     )
-    if parent_span is not None:
-        parent_span.end()
+    _close_trace_context(parent_context, parent_span)
     _flush_trace()
 
 
