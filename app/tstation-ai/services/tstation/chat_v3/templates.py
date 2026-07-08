@@ -439,6 +439,13 @@ def _format_time_range(start: object, end: object) -> str:
     return start_text or end_text or "-"
 
 
+def _format_korean_date(value: object) -> str:
+    text = str(value or "").strip()
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}년 {text[4:6]}월 {text[6:8]}일"
+    return text
+
+
 def _closed_days(row: dict[str, Any]) -> str:
     end_day = str(row.get("shop_biz_end_wday") or "").strip()
     if end_day == "일요일":
@@ -561,6 +568,11 @@ def _normalize_location_payload(payload: BaseModel, tool_output: str) -> None:
                 meta.shopName = shop_name
 
 
+def _normalize_datepick_payload(payload: BaseModel) -> None:
+    for item in getattr(payload, "dates", None) or []:
+        item.date = _format_korean_date(getattr(item, "date", ""))
+
+
 async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_config: dict | None = None) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
     source = _pick_source(tool_calls)
@@ -589,6 +601,8 @@ async def build_rich_data_event(answer: str, tool_calls: list[dict], trace_confi
             payload.assistantResponse = answer
         if template_name == "location":
             _normalize_location_payload(payload, str(call["output"]))
+        elif template_name == "datepick":
+            _normalize_datepick_payload(payload)
         return {
             "type": "data",
             "template": template_name,
