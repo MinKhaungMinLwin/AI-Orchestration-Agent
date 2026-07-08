@@ -5,6 +5,7 @@ Turn pipeline (all decisions LLM-made, zero regex):
                                  → pass:  tool loop → QC → quick replies
 """
 
+import json
 import logging
 import time
 
@@ -142,7 +143,15 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         ),
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")
+    token_events: list[str] = []
     async for event in executor.stream():
+        try:
+            payload = json.loads(event.strip()[6:]) if event.strip().startswith("data: ") else {}
+        except json.JSONDecodeError:
+            payload = {}
+        if payload.get("type") == "token":
+            token_events.append(event)
+            continue
         yield event
     t_tools = time.perf_counter()
 
@@ -191,6 +200,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     )
     result["answer"] = answer
     if (rich_event or preorder_event or {}).get("template") != "preOrder":
+        for event in token_events:
+            yield event
         yield sse.message(answer)
     if quantity_chips:
         chips = quantity_chips
