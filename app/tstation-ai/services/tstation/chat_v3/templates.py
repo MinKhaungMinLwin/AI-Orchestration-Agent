@@ -873,11 +873,21 @@ def _datepick_slot_values(payload: BaseModel, slots: ConversationSlots | None) -
     metadata = metadata if isinstance(metadata, dict) else {}
     values = slots.model_dump(mode="json", exclude_none=True) if slots else {}
     aliases = {
+        "goods_no": ("goods_no", "goodsNo", "goodsId"),
+        "ord_qty": ("ord_qty", "ordQty", "quantity"),
+        "tire_model": ("tire_model", "productName", "product_name"),
+        "pending_product_name": ("pending_product_name", "productName", "product_name"),
+        "tire_size": ("tire_size", "tireSize"),
         "shop_id": ("shop_id", "shopId"),
         "shop_name": ("shop_name", "shopName", "storeName"),
         "store_name": ("store_name", "storeName", "shopName"),
         "requested_cal_day": ("requested_cal_day", "requestedCalDay"),
         "rsv_hour": ("rsv_hour", "rsvHour"),
+        "payment_amount": ("payment_amount", "paymentAmount"),
+        "pending_intent": ("pending_intent", "pendingIntent"),
+        "goal_type": ("goal_type", "goalType"),
+        "car_no": ("car_no", "carNo"),
+        "car_lnc_cd": ("car_lnc_cd", "carLncCd"),
     }
     return {
         field: values.get(field) or _metadata_value(metadata, *keys)
