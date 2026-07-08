@@ -651,6 +651,40 @@ def test_transaction_preview_source_maps_to_location_not_preorder():
     assert source[0] == "location"
 
 
+def test_product_template_is_skipped_when_answer_asks_for_store_selection(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("product relevance LLM should not run when answer asks for store selection")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(goods_no="G0001", ord_qty=2, pending_intent="order", goal_type="place_order")
+    previous_slots = ConversationSlots(pending_intent="order", goal_type="place_order")
+    tool_calls = [{
+        "name": "search_product_tool",
+        "args": {"query": "벤투스"},
+        "output": json.dumps({
+            "status": "success",
+            "data": {
+                "items": [{
+                    "goods_no": "G0001",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "245/45R19",
+                    "extra_fvr_sale_prc": 180000,
+                }]
+            },
+        }),
+    }]
+
+    event = asyncio.run(templates.build_rich_data_event(
+        "상품은 확인했습니다. 장착할 지역이나 매장을 선택해 주세요.",
+        tool_calls,
+        slots=slots,
+        previous_slots=previous_slots,
+        allow_selection_cards=True,
+    ))
+
+    assert event is None
+
+
 def test_save_to_cart_does_not_emit_order_complete_rich_template():
     source = templates._pick_source(  # noqa: SLF001
         [{"name": "save_to_cart_tool", "args": {}, "output": json.dumps({"status": "success", "data": {"result": True}})}]

@@ -419,6 +419,13 @@ def _should_skip_product_source(
     )
 
 
+def _answer_requests_store_selection(answer: str) -> bool:
+    text = str(answer or "").replace(" ", "")
+    if not any(anchor in text for anchor in ("장착매장", "매장", "지역", "장소", "근처", "지점")):
+        return False
+    return any(action in text for action in ("알려", "선택", "골라", "말씀", "입력", "정해"))
+
+
 def _pick_source(
     tool_calls: list[dict],
     slots: ConversationSlots | None = None,
@@ -1152,6 +1159,15 @@ async def build_rich_data_event(
         )
     if template_name == "location":
         return build_location_data_event(answer, call, slots)
+
+    if (
+        template_name == "product"
+        and _is_booking_location_context(slots)
+        and not slots.shop_id
+        and _answer_requests_store_selection(answer)
+    ):
+        logger.info("[CHAT_V3] product template skipped — answer is asking for store/location selection")
+        return None
 
     if _should_gate_info_product_source(
         call,
