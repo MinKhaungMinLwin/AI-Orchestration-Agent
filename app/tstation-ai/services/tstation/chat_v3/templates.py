@@ -223,7 +223,6 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
     is_ready_to_order = not is_ready_to_add_to_cart
 
     payload = PreOrderTemplate(
-        assistantResponse=str(answer or "").strip() or "주문 내용을 확인해 주세요.",
         orderInfo={
             "carInfo": str(snapshot.get("car_no") or "").strip() or None,
             "product": _product_label(snapshot),
