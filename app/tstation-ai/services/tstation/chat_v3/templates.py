@@ -371,6 +371,18 @@ def _truthy_flag(value: object) -> bool:
     return str(value or "").strip().upper() in {"Y", "O", "TRUE", "1"}
 
 
+def _get_num(row: dict[str, Any], *keys: str) -> float | None:
+    for key in keys:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(str(value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _latest_tool_output(tool_calls: list[dict], tool_name: str) -> dict[str, Any]:
     for call in reversed(tool_calls):
         if call.get("name") == tool_name:
@@ -481,6 +493,36 @@ def _product_tags_from_row(row: dict[str, Any]) -> list[ProductTag]:
     return tags
 
 
+def _product_price(row: dict[str, Any]) -> int | None:
+    price = _get_num(row, "cheapest_final_prc", "extra_fvr_sale_prc", "final_unit_price", "final_prc", "price")
+    return int(price) if price else None
+
+
+def _product_original_price(row: dict[str, Any], price: int | None) -> int | None:
+    original = _get_num(row, "sale_prc", "originalPrice", "original_price")
+    if original:
+        return int(original)
+    return price
+
+
+def _product_discount_amount(row: dict[str, Any], price: int | None, original_price: int | None) -> int | None:
+    discount = _get_num(row, "discountAmount", "discount_amount")
+    if discount:
+        return int(discount)
+    if price and original_price and original_price > price:
+        return original_price - price
+    return None
+
+
+def _product_discount_rate(row: dict[str, Any], discount_amount: int | None, original_price: int | None) -> float | None:
+    rate = _get_num(row, "extra_fvr_sale_per", "discountRate", "discount_rate")
+    if rate:
+        return rate
+    if discount_amount and original_price:
+        return round(discount_amount / original_price * 100, 1)
+    return None
+
+
 def _normalize_product_payload(payload: BaseModel, tool_output: str) -> None:
     raw_products = _product_rows_from_output(tool_output)
     products = getattr(payload, "products", None)
@@ -502,8 +544,34 @@ def _normalize_product_payload(payload: BaseModel, tool_output: str) -> None:
         if row is None:
             continue
 
+        goods_name = _get_str(row, "goods_nm", "goodsNm", "title", "name")
+        tire_size = _get_str(row, "tire_size_1", "tire_size_2", "tire_size", "size")
+        if goods_name:
+            product.titleProductName = goods_name
+            product.title = f"{goods_name} {tire_size}".strip() if tire_size else goods_name
+        if tire_size:
+            product.titleTires = tire_size
+            product.tires = tire_size
+        brand = _get_str(row, "brand_nm", "brandName", "brand_name")
+        if brand:
+            product.brandName = brand.replace(" ", "").upper()
+        image_url = _get_str(row, "image_url", "imageUrl")
+        if image_url:
+            product.imageUrl = image_url
+        price = _product_price(row)
+        original_price = _product_original_price(row, price)
+        discount_amount = _product_discount_amount(row, price, original_price)
+        discount_rate = _product_discount_rate(row, discount_amount, original_price)
+        product.price = price
+        product.originalPrice = original_price
+        product.discountAmount = discount_amount
+        product.discountRate = discount_rate
+        product.rate = _get_num(row, "rate", "rating_avg", "rating") or 0.0
+        product.totalQuantity = int(_get_num(row, "totalQuantity", "total_qty", "review_count") or 0)
         product.tags = _product_tags_from_row(row)
         product.oeBadgeYn = _get_str(row, "oe_badge_yn", "oeBadgeYn", "oeBadgeYN")
+        product.oeMaker = _get_str(row, "t_oe_maker_1", "oeMaker")
+        product.smrtPayYn = _get_str(row, "smrt_pay_yn", "smrtPayYn")
 
 
 def _join_address(*parts: object) -> str:

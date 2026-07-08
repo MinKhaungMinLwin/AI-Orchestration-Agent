@@ -127,11 +127,11 @@ class _FakeProductStructuredLLM:
             products=[
                 {
                     "imageUrl": "",
-                    "title": "벤투스 S2 AS 245/45R19",
+                    "title": "벤투스 S2 AS",
                     "tires": "",
-                    "titleProductName": "벤투스 S2 AS",
-                    "titleTires": "245/45R19",
-                    "brandName": "HANKOOK",
+                    "titleProductName": "사계절",
+                    "titleTires": "COMFORT",
+                    "brandName": "",
                     "oeBadgeYn": "",
                     "price": 180000,
                     "originalPrice": 200000,
@@ -223,6 +223,7 @@ def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
                 "goods_nm": "벤투스 S2 AS",
                 "tire_size_1": "245/45R19",
                 "brand_nm": "HANKOOK",
+                "image_url": "https://example.com/tire.png",
                 "prc_grd_nm": "프리미엄+",
                 "goods_pfm_nm": "COMFORT",
                 "goods_dtl_pfm_nm": "흡음재 적용",
@@ -246,6 +247,18 @@ def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
     assert event is not None
     assert event["template"] == "product"
     product = event["data"]["products"][0]
+    assert product["title"] == "벤투스 S2 AS 245/45R19"
+    assert product["titleProductName"] == "벤투스 S2 AS"
+    assert product["titleTires"] == "245/45R19"
+    assert product["tires"] == "245/45R19"
+    assert product["brandName"] == "HANKOOK"
+    assert product["imageUrl"] == "https://example.com/tire.png"
+    assert product["price"] == 180000
+    assert product["originalPrice"] == 200000
+    assert product["discountAmount"] == 20000
+    assert product["discountRate"] == 10.0
+    assert product["rate"] == 4.5
+    assert product["totalQuantity"] == 7
     assert product["tags"] == [
         {"text": "프리미엄", "primary": True},
         {"text": "정숙/승차감", "primary": False},
