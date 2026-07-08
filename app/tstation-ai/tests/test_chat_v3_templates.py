@@ -167,3 +167,23 @@ def test_location_answer_uses_fixed_store_info_labels():
         "   특징: all my T, 온라인 장착 가능, 수입차 특화점, 전기차 특화점\n"
         "   서비스: 타이어, 타이어 보관서비스, 경정비, 휠얼라이먼트, 무상점검"
     )
+
+
+def test_compact_answer_spacing_reduces_blank_lines_to_single_newline():
+    answer = templates.compact_answer_spacing(
+        "좋아요 😊 T’Bot과 함께 타이어 쇼핑을 도와드릴게요.\n\n"
+        "원하시는 방식으로 시작할 수 있어요.\n\n"
+        "1. **내 차에 맞는 타이어 추천**\n"
+        "   - 등록된 차량 기준으로 찾아드릴 수 있어요.  \n"
+        "   \n"
+        "원하시면 바로 추천해드릴게요."
+    )
+
+    assert "\n\n" not in answer
+    assert answer == (
+        "좋아요 😊 T’Bot과 함께 타이어 쇼핑을 도와드릴게요.\n"
+        "원하시는 방식으로 시작할 수 있어요.\n"
+        "1. **내 차에 맞는 타이어 추천**\n"
+        "   - 등록된 차량 기준으로 찾아드릴 수 있어요.\n"
+        "원하시면 바로 추천해드릴게요."
+    )

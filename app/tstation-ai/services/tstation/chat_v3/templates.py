@@ -182,6 +182,14 @@ def _intro_from_answer(answer: str) -> str:
     return intro if intro and not intro.startswith("1.") else "확인된 매장 정보입니다."
 
 
+def compact_answer_spacing(answer: str) -> str:
+    text = str(answer or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    while "\n\n" in text:
+        text = text.replace("\n\n", "\n")
+    return text.strip()
+
+
 def format_location_answer(answer: str, tool_calls: list[dict]) -> str:
     source = _pick_source(tool_calls)
     if source is None or source[0] != "location":

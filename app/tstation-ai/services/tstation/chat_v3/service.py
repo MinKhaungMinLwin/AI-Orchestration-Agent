@@ -57,14 +57,15 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     guard = get_guard(decision.guard_id) if decision else None
     if guard:
         logger.info("[CHAT_V3] guard=%s for session=%s", guard.id, request.session_id)
-        result["answer"] = guard.text
+        guard_text = templates.compact_answer_spacing(guard.text)
+        result["answer"] = guard_text
         if _tokens_enabled():
-            yield sse.token(guard.text)
-        yield sse.message(guard.text)
+            yield sse.token(guard_text)
+        yield sse.message(guard_text)
         yield sse.data_event(
             "quickReply",
             {
-                "assistantResponse": guard.text,
+                "assistantResponse": guard_text,
                 "quickReplies": guard.chips,
                 "predictedDomains": guard.predicted_domains,
             },
@@ -107,6 +108,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         yield sse.sse({"type": "qc_correction", "assistantResponse": corrected})
         answer = corrected
     answer = templates.format_location_answer(answer, executor.tool_calls)
+    answer = templates.compact_answer_spacing(answer)
 
     result["answer"] = answer
     yield sse.message(answer)
