@@ -77,7 +77,7 @@ def _truthy_flag(value: Any) -> bool:
 
 def _append_three_pmsf_description(data: dict[str, Any]) -> dict[str, Any]:
     if not _truthy_flag(data.get("three_pmsf_yn")):
-        return data
+        return {k: v for k, v in data.items() if k not in {"three_pmsf_yn", "three_pmsf_description"}}
     enriched = dict(data)
     searchable_text = " ".join(str(enriched.get(key) or "") for key in ("slogan", "pc_prod_remark_desc", "pc_prod_tech_desc"))
     if "3PMS" not in searchable_text.upper() and "삼봉" not in searchable_text:
@@ -434,7 +434,11 @@ def _slim_product_item(item: dict) -> dict:
     reviews, nested rating object, and any unknown future bloat. Keeps only
     fields in _TRIM_KEEP_FIELDS.
     """
-    return {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
+    slim = {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
+    if not _truthy_flag(slim.get("three_pmsf_yn")):
+        slim.pop("three_pmsf_yn", None)
+        slim.pop("three_pmsf_description", None)
+    return slim
 
 
 def _compact_html_text(value: Any, *, max_chars: int = 600) -> str | None:

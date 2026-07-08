@@ -149,6 +149,29 @@ def test_three_pmsf_description_is_not_duplicated():
     assert result["three_pmsf_description"].startswith("3PMSF 인증")
 
 
+def test_three_pmsf_negative_flag_is_hidden_from_description_payload():
+    result = t._append_three_pmsf_description({
+        "goods_nm": "벤투스 S1 에보 Z AS",
+        "three_pmsf_yn": "N",
+        "pc_prod_remark_desc": "사계절 타이어입니다.",
+    })
+
+    assert "three_pmsf_yn" not in result
+    assert "three_pmsf_description" not in result
+    assert result["pc_prod_remark_desc"] == "사계절 타이어입니다."
+
+
+def test_slim_product_item_hides_negative_three_pmsf_fact():
+    result = t._slim_product_item({
+        "goods_no": "G1",
+        "goods_nm": "벤투스 S1 에보 Z AS",
+        "three_pmsf_yn": "N",
+        "three_pmsf_description": "should not leak",
+    })
+
+    assert result == {"goods_no": "G1", "goods_nm": "벤투스 S1 에보 Z AS"}
+
+
 def test_search_product_budget_passes_max_price_to_be_and_ignores_min_price(monkeypatch):
     be = _FakeBE([_Resp([{"goods_no": "G1", "goods_nm": "Budget tire", "extra_fvr_sale_prc": 299_000}])])
     monkeypatch.setattr(t, "search_product", be)
