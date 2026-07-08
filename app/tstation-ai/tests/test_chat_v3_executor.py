@@ -48,6 +48,7 @@ for key, value in _TEST_ENV_DEFAULTS.items():
 
 from services.tstation.chat_v3.executor import _normalize_tool_call  # noqa: E402
 from services.tstation.chat_v3.tools.discovery import DISCOVERY_TOOLS  # noqa: E402
+from services.tstation.chat_v3.tools import tools_for_domain  # noqa: E402
 
 
 def test_v3_discovery_tools_do_not_expose_car_model_group_lookup() -> None:
@@ -55,6 +56,12 @@ def test_v3_discovery_tools_do_not_expose_car_model_group_lookup() -> None:
 
     assert "search_car_model_groups_tool" not in tool_names
     assert "get_products_recommendations_tool" in tool_names
+
+
+def test_v3_transaction_tools_can_resolve_product_goods_no() -> None:
+    tool_names = {tool.name for tool in tools_for_domain("TRANSACTION")}
+
+    assert "search_product_tool" in tool_names
 
 
 def test_removed_car_model_group_call_rewrites_to_recommendation_vehicle_type() -> None:

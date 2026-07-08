@@ -123,11 +123,7 @@ def _is_selection_search(call: dict) -> bool:
 
 
 def _has_multiple_products(call: dict) -> bool:
-    """True when a product search returned ≥2 items — a genuine list to choose from.
-
-    A single item means search_product_tool was used as a specific-product LOOKUP
-    (review/spec of one tire), not a browse — so it must not feed a selection card.
-    """
+    """True when a product search returned >=2 items: a genuine list to choose from."""
     parsed = _parse_tool_output(call.get("output"))
     payload = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
     items = payload.get("items") if isinstance(payload, dict) else None
@@ -1099,13 +1095,11 @@ async def build_rich_data_event(
             answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
         )
 
-    if (
-        _should_gate_info_product_source(
-            call,
-            allow_selection_cards=allow_selection_cards,
-            slots=slots,
-            previous_slots=previous_slots,
-        )
+    if _should_gate_info_product_source(
+        call,
+        allow_selection_cards=allow_selection_cards,
+        slots=slots,
+        previous_slots=previous_slots,
     ):
         return None
     try:

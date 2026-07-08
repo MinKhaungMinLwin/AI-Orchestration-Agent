@@ -32,8 +32,10 @@ from services.tstation.agents.c_transaction_agent.tools import (
     search_stores_tool,
     transaction_store_preview_tool,
 )
+from services.tstation.agents.b_discovery_agent.tools import search_product_tool
 
 TRANSACTION_READ_TOOLS = [
+    search_product_tool,
     get_final_price_tool,
     get_my_coupons_tool,
     get_coupon_applicable_products_tool,
