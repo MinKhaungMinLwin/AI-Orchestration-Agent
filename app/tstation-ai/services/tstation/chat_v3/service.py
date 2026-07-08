@@ -178,11 +178,10 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         answer = qna_event["data"]["assistantResponse"]
 
     chips: list[dict] = []
-    quantity_chips = templates.quantity_quick_replies(answer, slots.ord_qty)
-    preorder_event = None if quantity_chips else templates.build_preorder_fallback(answer, slots, decision)
+    preorder_event = templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
-        if quantity_chips or preorder_event
+        if preorder_event
         else await templates.build_rich_data_event(
             answer,
             executor.tool_calls,
@@ -198,15 +197,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     result["answer"] = answer
     if (rich_event or preorder_event or {}).get("template") != "preOrder":
         yield sse.message(answer)
-    if quantity_chips:
-        chips = quantity_chips
-        predicted_domains = ["TRANSACTION"]
-        yield sse.data_event(
-            "quickReply",
-            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": predicted_domains},
-            source_domain=domain,
-        )
-    elif rich_event:
+    if rich_event:
         predicted_domains = [domain]
         yield sse.sse({**rich_event, "source_domain": domain})
     elif preorder_event:
