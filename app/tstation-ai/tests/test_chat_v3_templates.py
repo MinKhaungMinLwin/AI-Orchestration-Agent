@@ -162,6 +162,42 @@ def test_location_template_normalizes_store_name_and_address_from_tool_output(mo
     assert meta["shopName"] == "티스테이션 안양호계점"
 
 
+def test_location_template_marks_booking_flow_from_order_slots(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
+    tool_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F00721",
+                    "shop_nm": "T-Station Hannam Branch",
+                    "addr_base": "80, Hannam-daero, Yongsan-gu, Seoul",
+                    "addr_dtl": "",
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "I checked. It can be installed at T-Station Hannam Branch.",
+            [{"name": "get_store_list_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+            slots=ConversationSlots(
+                goods_no="G000000309783",
+                ord_qty=2,
+                pending_intent="order",
+                goal_type="place_order",
+            ),
+            decision=RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"]),
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["data"]["isBookingFlow"] is True
+    assert event["data"]["metadata"][0]["shopId"] == "F00721"
+
+
 def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
 
