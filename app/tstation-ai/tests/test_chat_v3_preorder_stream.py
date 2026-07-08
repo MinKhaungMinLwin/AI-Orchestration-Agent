@@ -95,8 +95,7 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
             self.tool_calls = []
 
         async def stream(self):
-            if False:
-                yield ""
+            yield service.sse.token("Please confirm the order details.")
 
     async def fake_verify_answer(answer, tool_calls, trace_config):
         return answer
@@ -133,7 +132,7 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
         if event:
             events.append(event)
 
-    assert not [event for event in events if event.get("type") == "message"]
+    assert not [event for event in events if event.get("type") in {"message", "token"}]
     assert any(
         event.get("type") == "data" and event.get("template") == "preOrder"
         for event in events
