@@ -45,13 +45,21 @@ class QuickReplySuggestion(BaseModel):
     quick_replies: list[QuickReplyChip] = Field(default_factory=list, max_length=2)
 
 
-async def suggest_quick_replies(user_text: str, answer: str, trace_config: dict | None = None) -> list[dict]:
+async def suggest_quick_replies(
+    user_text: str,
+    answer: str,
+    trace_config: dict | None = None,
+    flow_hint: str | None = None,
+) -> list[dict]:
     """Return [{label, domain}, ...] chips for the FE, or [] on failure."""
     try:
         llm = get_router_llm().with_structured_output(QuickReplySuggestion, method="function_calling")
+        user_content = f"사용자 질문:\n{user_text}\n\n챗봇 답변:\n{answer[:2000]}"
+        if flow_hint:
+            user_content += f"\n\n[진행 상태]\n{flow_hint}"
         messages = [
             ("system", QUICK_REPLY_PROMPT),
-            ("user", f"사용자 질문:\n{user_text}\n\n챗봇 답변:\n{answer[:2000]}"),
+            ("user", user_content),
         ]
         suggestion = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         return [
