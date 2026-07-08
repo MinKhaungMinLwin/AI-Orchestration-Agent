@@ -287,3 +287,12 @@ def test_transfer_to_qna_tool_defaults_missing_consultation_category_to_etc(monk
 
     assert captured["cnsl_clss_seq"] == "10019"
     assert result["cnsl_clss_seq"] == "10019"
+
+    result = support_tools.transfer_to_qna_tool.func(
+        cnsl_clss_seq="99999",
+        inq_tit_nm="1:1 inquiry",
+        ai_summary="Generic handoff request",
+    )
+
+    assert captured["cnsl_clss_seq"] == "10019"
+    assert result["cnsl_clss_seq"] == "10019"
