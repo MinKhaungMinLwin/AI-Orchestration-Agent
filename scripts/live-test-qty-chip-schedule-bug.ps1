@@ -4,11 +4,17 @@
   [string]$Origin = "https://wwwqa.tstation.com",
   [string]$SessionId = ("live-qty-chip-" + [guid]::NewGuid().ToString("N")),
   # Edit these to match real catalog/store data in your QA environment.
+  # This default sequence is a verified-working path on chat_v3: an unmatched
+  # size search -> browse all products -> pick product+qty together -> give a
+  # region -> pick a store. Turn 3 is where ord_qty first gets resolved.
   [string]$ProductQuery = "235/55R18 벤투스 S2 AS 주문할게",
-  [string]$QtyMessage = "2개",
-  [string]$StoreOptionMessage = "1",
-  [string]$RegionMessage = "강남",
-  [string]$StorePickMessage = "1번 매장으로 할게"
+  [string]$BrowseAllMessage = "전체 상품보기",
+  [string]$ProductAndQtyMessage = "1번 다이나프로 HL3로 2개 주문할게",
+  [string]$RegionMessage = "한남",
+  [string]$StorePickMessage = "1번 매장으로 할게",
+  # 1-based index into $Turns of the message that first resolves ord_qty.
+  # From that turn's response onward, qty chips must never reappear.
+  [int]$QtyResolvedFromTurn = 3
 )
 
 if (-not $Jwt) {
@@ -33,13 +39,10 @@ if (-not $Jwt) {
   exit 2
 }
 
-# Ordered user turns that walk the order flow up to the store-schedule step
-# where the bug reproduces: STEP1 product -> STEP2 qty -> STEP4 store option
-# -> STEP5A region -> STEP5A store pick -> (bug) datepick/quickReply turn.
 $Turns = @(
   $ProductQuery,
-  $QtyMessage,
-  $StoreOptionMessage,
+  $BrowseAllMessage,
+  $ProductAndQtyMessage,
   $RegionMessage,
   $StorePickMessage
 )
@@ -87,14 +90,16 @@ function Send-Turn {
   return $events
 }
 
-$allDataEvents = @()
+# Same fixed chip vocabulary chat_v3/templates.py:_QUANTITY_CHIPS emits.
+$QtyChipSet = @("1개", "2개", "3개", "4개")
+
+$allTurnResults = @()
 
 for ($i = 0; $i -lt $Turns.Count; $i++) {
-  $events = Send-Turn -Message $Turns[$i] -Index ($i + 1)
+  $turnNumber = $i + 1
+  $events = Send-Turn -Message $Turns[$i] -Index $turnNumber
 
   $dataEvents = @($events | Where-Object { $_.type -eq "data" })
-  $allDataEvents += $dataEvents
-
   $tools = @($events | Where-Object { $_.type -eq "tool" } | ForEach-Object { $_.tool })
   $messages = @($events | Where-Object { $_.type -eq "message" } | ForEach-Object { $_.content })
 
@@ -106,31 +111,33 @@ for ($i = 0; $i -lt $Turns.Count; $i++) {
   if ($messages) {
     Write-Host "message: $($messages -join ' | ')"
   }
+
+  $allTurnResults += [pscustomobject]@{
+    TurnNumber = $turnNumber
+    DataEvents = $dataEvents
+  }
 }
 
 Write-Host ""
-Write-Host "--- Checking for the qty-chip/schedule-ask mismatch bug ---"
-
-# Same known-bad chip set that used to get force-injected by the qty
-# normalizer regardless of turn context.
-$QtyChipSet = @("1개", "2개", "3개", "4개")
+Write-Host "--- Checking: once ord_qty is resolved, qty chips must never reappear ---"
+Write-Host "qty_resolved_from_turn=$QtyResolvedFromTurn (chat_v3/templates.py quantity_quick_replies gates on slots.ord_qty)"
 
 $mismatches = @()
 
-foreach ($de in $allDataEvents) {
-  if ($de.template -ne "quickReply") { continue }
-  $text = [string]$de.data.assistantResponse
-  $asksForDateTime = ($text -match "날짜") -and ($text -match "시간")
-  if (-not $asksForDateTime) { continue }
-
-  $chipLabels = @($de.data.quickReplies | ForEach-Object { $_.label })
-  $isQtyChipSet = ($chipLabels.Count -gt 0) -and (
-    (Compare-Object $chipLabels $QtyChipSet -SyncWindow 0).Length -eq 0 -or
-    (Compare-Object $chipLabels @("1개","2개") -SyncWindow 0).Length -eq 0
-  )
-
-  if ($isQtyChipSet) {
-    $mismatches += $de
+foreach ($turnResult in $allTurnResults) {
+  if ($turnResult.TurnNumber -lt $QtyResolvedFromTurn) { continue }
+  foreach ($de in $turnResult.DataEvents) {
+    if ($de.template -ne "quickReply") { continue }
+    $chipLabels = @($de.data.quickReplies | ForEach-Object { $_.label })
+    if ($chipLabels.Count -eq 0) { continue }
+    $isQtyChipSet = (Compare-Object $chipLabels $QtyChipSet -SyncWindow 0).Length -eq 0
+    if ($isQtyChipSet) {
+      $mismatches += [pscustomobject]@{
+        TurnNumber        = $turnResult.TurnNumber
+        AssistantResponse = $de.data.assistantResponse
+        Chips             = $chipLabels
+      }
+    }
   }
 }
 
@@ -138,18 +145,20 @@ $failed = $false
 
 if ($mismatches.Count -gt 0) {
   Write-Host ""
-  Write-Host "FAIL: found quickReply turn asking for date/time but chips are quantity chips:" -ForegroundColor Red
+  Write-Host "FAIL: quantity chips reappeared after ord_qty was already resolved:" -ForegroundColor Red
   foreach ($m in $mismatches) {
-    Write-Host "  assistantResponse: $($m.data.assistantResponse)"
-    Write-Host "  chips: $(($m.data.quickReplies | ForEach-Object { $_.label }) -join ',')"
+    Write-Host "  turn $($m.TurnNumber): $($m.AssistantResponse)"
+    Write-Host "  chips: $($m.Chips -join ',')"
   }
   $failed = $true
 } else {
-  Write-Host "OK: no date/time-ask turn carried quantity chips." -ForegroundColor Green
+  Write-Host "OK: no quickReply turn after qty resolution carried quantity chips." -ForegroundColor Green
 }
 
-# Bonus signal: a correctly-fixed schedule step should render as `datepick`,
-# not a generic quickReply, whenever real schedule data was available.
+# Bonus signal: a correctly-handled schedule step should render as `datepick`
+# (chat_v3/templates.py _TOOL_TEMPLATES maps get_store_schedule_tool -> datepick)
+# rather than falling back to a generic quickReply.
+$allDataEvents = @($allTurnResults | ForEach-Object { $_.DataEvents })
 $hasDatepick = @($allDataEvents | Where-Object { $_.template -eq "datepick" }).Count -gt 0
 Write-Host "has_datepick_template=$hasDatepick"
 

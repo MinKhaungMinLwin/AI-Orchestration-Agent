@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$BaseUrl = "https://localhost:8001",
   [string]$Jwt = $env:JWT_TOKEN,
   [string]$Origin = "https://wwwqa.tstation.com",
@@ -11,6 +11,7 @@ param(
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Web
 
 if (-not $Jwt) {
   # Fall back to repo-root .env (JWT_TOKEN=...) when the shell doesn't have
@@ -106,11 +107,19 @@ if ($messages.Count -gt 0) {
   Write-Host "(none)"
 }
 
+$qnaEvent = $dataEvents | Where-Object { $_.template -eq "qnaComplete" } | Select-Object -First 1
+$redictLink = $qnaEvent.data.redictLink
+$cnslType = [string]$qnaEvent.data.cnslType
+$expectedHost = ([uri]$Origin).Host
+
 foreach ($de in $dataEvents) {
   Write-Host ""
   Write-Host "data template=$($de.template)"
   if ($de.data.assistantResponse) {
     Write-Host "assistantResponse=$($de.data.assistantResponse)"
+  }
+  if ($de.data.cnslType) {
+    Write-Host "cnslType=$($de.data.cnslType)"
   }
   if ($de.data.redictLink) {
     Write-Host "redictLink.pc=$($de.data.redictLink.pc)"
@@ -119,7 +128,8 @@ foreach ($de in $dataEvents) {
 }
 
 Write-Host ""
-Write-Host "--- Checking for qna handoff URL leak bug ---"
+Write-Host "--- Checking against common/qna_payload.py contract ---"
+Write-Host "expected_origin_host=$expectedHost"
 
 $failed = $false
 
@@ -148,13 +158,67 @@ if ($rawHasFakeUrl) {
   $failed = $true
 }
 
+if (-not $cnslType) {
+  Write-Host "FAIL: qnaComplete.data.cnslType is missing." -ForegroundColor Red
+  $failed = $true
+} elseif ($cnslType -match '^\d+$') {
+  Write-Host "FAIL: qnaComplete.data.cnslType is a raw category code ('$cnslType'); expected the display label." -ForegroundColor Red
+  $failed = $true
+} elseif ($cnslType -eq "1:1") {
+  Write-Host "FAIL: qnaComplete.data.cnslType is a placeholder ('$cnslType'); expected a consultation category label." -ForegroundColor Red
+  $failed = $true
+}
+
+# make_qna_payload_urls() (common/qna_payload.py) builds:
+#   {origin_base}/customer-service/qna.do?mode=write&payload=<url-safe-b64, no +/=>
+# where origin_base is derived from the request Origin header via
+# get_tstation_origin_host(). Validate the emitted links actually match that
+# contract instead of only smoke-checking for one known-bad fake domain.
+if (-not $redictLink -or -not $redictLink.pc -or -not $redictLink.mobile) {
+  Write-Host "FAIL: qnaComplete.data.redictLink is missing pc/mobile." -ForegroundColor Red
+  $failed = $true
+} else {
+  foreach ($key in @("pc", "mobile")) {
+    $urlStr = $redictLink.$key
+    try {
+      $uri = [uri]$urlStr
+    } catch {
+      Write-Host "FAIL: redictLink.$key is not a valid URL: $urlStr" -ForegroundColor Red
+      $failed = $true
+      continue
+    }
+
+    if ($uri.Host -ne $expectedHost) {
+      Write-Host "FAIL: redictLink.$key host '$($uri.Host)' does not match request Origin host '$expectedHost'." -ForegroundColor Red
+      $failed = $true
+    }
+    if ($uri.AbsolutePath -ne "/customer-service/qna.do") {
+      Write-Host "FAIL: redictLink.$key path is '$($uri.AbsolutePath)', expected '/customer-service/qna.do'." -ForegroundColor Red
+      $failed = $true
+    }
+    $query = [System.Web.HttpUtility]::ParseQueryString($uri.Query)
+    if ($query["mode"] -ne "write") {
+      Write-Host "FAIL: redictLink.$key missing mode=write query param." -ForegroundColor Red
+      $failed = $true
+    }
+    $payload = $query["payload"]
+    if (-not $payload) {
+      Write-Host "FAIL: redictLink.$key missing payload query param." -ForegroundColor Red
+      $failed = $true
+    } elseif ($payload -match "[+/=]") {
+      Write-Host "FAIL: redictLink.$key payload contains non-url-safe base64 chars (+/=) — _build_payload() should have replaced them." -ForegroundColor Red
+      $failed = $true
+    }
+  }
+}
+
 if ($failed) {
   Write-Host ""
   Write-Host "LIVE TEST FAILED" -ForegroundColor Red
   exit 1
 }
 
-Write-Host "OK: qnaComplete emitted with no fake/raw URL in visible text." -ForegroundColor Green
+Write-Host "OK: qnaComplete emitted with valid redictLink URLs and no fake/raw URL in visible text." -ForegroundColor Green
 Write-Host ""
 Write-Host "LIVE TEST PASSED" -ForegroundColor Green
 exit 0

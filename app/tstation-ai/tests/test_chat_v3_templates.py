@@ -261,3 +261,38 @@ def test_v3_support_tools_use_qna_handoff_instead_of_legacy_escalation():
 
     assert "transfer_to_qna_tool" in tool_names
     assert "escalate_tool" not in tool_names
+
+
+def test_transfer_to_qna_tool_defaults_missing_consultation_category_to_etc(monkeypatch):
+    from services.tstation.agents.e_support_agent import tools as support_tools
+
+    captured = {}
+
+    def fake_make_qna_payload_urls(cnsl_clss_seq=None, inq_tit_nm=None, ai_summary=None):
+        captured["cnsl_clss_seq"] = cnsl_clss_seq
+        captured["inq_tit_nm"] = inq_tit_nm
+        captured["ai_summary"] = ai_summary
+        return {
+            "pc": "https://www.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+            "mobile": "https://m.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+        }
+
+    monkeypatch.setattr(support_tools, "make_qna_payload_urls", fake_make_qna_payload_urls)
+
+    result = support_tools.transfer_to_qna_tool.func(
+        cnsl_clss_seq=None,
+        inq_tit_nm="1:1 inquiry",
+        ai_summary="Generic handoff request",
+    )
+
+    assert captured["cnsl_clss_seq"] == "10019"
+    assert result["cnsl_clss_seq"] == "10019"
+
+    result = support_tools.transfer_to_qna_tool.func(
+        cnsl_clss_seq="99999",
+        inq_tit_nm="1:1 inquiry",
+        ai_summary="Generic handoff request",
+    )
+
+    assert captured["cnsl_clss_seq"] == "10019"
+    assert result["cnsl_clss_seq"] == "10019"

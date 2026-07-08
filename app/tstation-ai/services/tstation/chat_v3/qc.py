@@ -27,7 +27,7 @@ class QCVerdict(BaseModel):
     corrected_response: str = Field(default="", description="passed=false일 때 수정된 답변")
 
 
-async def verify_answer(answer: str, tool_calls: list[dict]) -> str:
+async def verify_answer(answer: str, tool_calls: list[dict], trace_config: dict | None = None) -> str:
     """Return the (possibly corrected) answer. No-op unless AI_QC_ENABLED."""
     if not settings.AI_QC_ENABLED or not tool_calls or not answer:
         return answer
@@ -36,9 +36,8 @@ async def verify_answer(answer: str, tool_calls: list[dict]) -> str:
     )
     try:
         llm = get_router_llm().with_structured_output(QCVerdict, method="function_calling")
-        verdict = await llm.ainvoke(
-            [("system", _QC_PROMPT), ("user", f"## 도구 결과\n{facts[:12000]}\n\n## 챗봇 답변\n{answer}")]
-        )
+        messages = [("system", _QC_PROMPT), ("user", f"## 도구 결과\n{facts[:12000]}\n\n## 챗봇 답변\n{answer}")]
+        verdict = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         if not verdict.passed and verdict.corrected_response.strip():
             logger.info("[CHAT_V3] QC corrected the answer")
             return verdict.corrected_response.strip()
