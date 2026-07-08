@@ -68,6 +68,7 @@ from services.tstation.chat_v3.templates import (  # noqa: E402
     _normalize_location_payload,
     _normalize_product_selection_payload,
     _pick_source,
+    _should_gate_info_product_source,
     harvest_order_slots,
 )
 
@@ -262,6 +263,44 @@ def test_harvest_order_slots_resolves_goods_no_from_product_name_and_size() -> N
 
     assert updated.goods_no == "G000000309783"
     assert updated.pending_product_name == "Ventus S2 AS"
+
+
+def test_single_product_lookup_can_feed_card_when_goods_no_resolved_this_turn() -> None:
+    previous_slots = ConversationSlots(
+        pending_product_name="Ventus S2 AS",
+        tire_size="245/45R19",
+        ord_qty=4,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    tool_call = {
+        "name": "search_product_tool",
+        "args": {"keyword": "Ventus S2 AS", "size": "245/45R19"},
+        "output": json.dumps({
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "Ventus S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        }),
+    }
+
+    slots = harvest_order_slots(previous_slots.model_copy(), [tool_call])
+    source = _pick_source([tool_call], slots, previous_slots)
+
+    assert slots.goods_no == "G000000310126"
+    assert source is not None
+    assert source[0] == "product"
+    assert _should_gate_info_product_source(
+        tool_call,
+        allow_selection_cards=True,
+        slots=slots,
+        previous_slots=previous_slots,
+    ) is False
 
 
 def test_product_label_patch_preserves_confirmed_goods_no() -> None:
