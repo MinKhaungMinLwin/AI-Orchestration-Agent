@@ -16,6 +16,9 @@ def _get_kwargs(
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
     three_pmsf_yn: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
@@ -48,6 +51,27 @@ def _get_kwargs(
     else:
         json_three_pmsf_yn = three_pmsf_yn
     params["three_pmsf_yn"] = json_three_pmsf_yn
+
+    json_min_price: int | None | Unset
+    if isinstance(min_price, Unset):
+        json_min_price = UNSET
+    else:
+        json_min_price = min_price
+    params["min_price"] = json_min_price
+
+    json_max_price: int | None | Unset
+    if isinstance(max_price, Unset):
+        json_max_price = UNSET
+    else:
+        json_max_price = max_price
+    params["max_price"] = json_max_price
+
+    json_sort_by: None | str | Unset
+    if isinstance(sort_by, Unset):
+        json_sort_by = UNSET
+    else:
+        json_sort_by = sort_by
+    params["sort_by"] = json_sort_by
 
     params["limit"] = limit
 
@@ -99,6 +123,9 @@ def sync_detailed(
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
     three_pmsf_yn: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
@@ -112,6 +139,9 @@ def sync_detailed(
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어). 미지정 시 전 브랜드 검색
         three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
+        min_price (int | None | Unset): 최소 가격 필터 (원). max_price가 있으면 예산 검색으로 보고 무시합니다.
+        max_price (int | None | Unset): 최대 가격 필터 (원). 지정 시 0~max_price 범위에서 가격 내림차순으로 반환합니다.
+        sort_by (None | str | Unset): 가격 정렬. max_price 지정 시 price_desc로 강제됩니다.
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -127,6 +157,9 @@ def sync_detailed(
         size=size,
         brand_cd=brand_cd,
         three_pmsf_yn=three_pmsf_yn,
+        min_price=min_price,
+        max_price=max_price,
+        sort_by=sort_by,
         limit=limit,
     )
 
@@ -144,6 +177,9 @@ def sync(
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
     three_pmsf_yn: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
@@ -157,6 +193,9 @@ def sync(
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어). 미지정 시 전 브랜드 검색
         three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
+        min_price (int | None | Unset): 최소 가격 필터 (원). max_price가 있으면 예산 검색으로 보고 무시합니다.
+        max_price (int | None | Unset): 최대 가격 필터 (원). 지정 시 0~max_price 범위에서 가격 내림차순으로 반환합니다.
+        sort_by (None | str | Unset): 가격 정렬. max_price 지정 시 price_desc로 강제됩니다.
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -173,6 +212,9 @@ def sync(
         size=size,
         brand_cd=brand_cd,
         three_pmsf_yn=three_pmsf_yn,
+        min_price=min_price,
+        max_price=max_price,
+        sort_by=sort_by,
         limit=limit,
     ).parsed
 
@@ -184,6 +226,9 @@ async def asyncio_detailed(
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
     three_pmsf_yn: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | ProductSearchResponse]:
     """상품 검색
@@ -197,6 +242,9 @@ async def asyncio_detailed(
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어). 미지정 시 전 브랜드 검색
         three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
+        min_price (int | None | Unset): 최소 가격 필터 (원). max_price가 있으면 예산 검색으로 보고 무시합니다.
+        max_price (int | None | Unset): 최대 가격 필터 (원). 지정 시 0~max_price 범위에서 가격 내림차순으로 반환합니다.
+        sort_by (None | str | Unset): 가격 정렬. max_price 지정 시 price_desc로 강제됩니다.
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -212,6 +260,9 @@ async def asyncio_detailed(
         size=size,
         brand_cd=brand_cd,
         three_pmsf_yn=three_pmsf_yn,
+        min_price=min_price,
+        max_price=max_price,
+        sort_by=sort_by,
         limit=limit,
     )
 
@@ -227,6 +278,9 @@ async def asyncio(
     size: None | str | Unset = UNSET,
     brand_cd: None | str | Unset = UNSET,
     three_pmsf_yn: None | str | Unset = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | ProductSearchResponse | None:
     """상품 검색
@@ -240,6 +294,9 @@ async def asyncio(
         brand_cd (None | str | Unset): 브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤,
             CT=콘티넨탈, GY=굿이어). 미지정 시 전 브랜드 검색
         three_pmsf_yn (None | str | Unset): 3PMSF/삼봉마크 인증 타이어만 검색하려면 Y
+        min_price (int | None | Unset): 최소 가격 필터 (원). max_price가 있으면 예산 검색으로 보고 무시합니다.
+        max_price (int | None | Unset): 최대 가격 필터 (원). 지정 시 0~max_price 범위에서 가격 내림차순으로 반환합니다.
+        sort_by (None | str | Unset): 가격 정렬. max_price 지정 시 price_desc로 강제됩니다.
         limit (int | Unset): 반환할 최대 상품 수 Default: 20.
 
     Raises:
@@ -257,6 +314,9 @@ async def asyncio(
             size=size,
             brand_cd=brand_cd,
             three_pmsf_yn=three_pmsf_yn,
+            min_price=min_price,
+            max_price=max_price,
+            sort_by=sort_by,
             limit=limit,
         )
     ).parsed

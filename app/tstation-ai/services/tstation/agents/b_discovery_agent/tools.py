@@ -399,6 +399,21 @@ def _filter_by_price(
     return result
 
 
+def _normalize_search_price_args(
+    min_price: int | None,
+    max_price: int | None,
+    sort_by: str | None,
+) -> tuple[int | None, int | None, str | None]:
+    """Align search-product price behavior with BE budget search.
+
+    When max_price is present, BE treats it as a budget ceiling: min_price is
+    ignored, the range starts at 0, and results are returned price-desc.
+    """
+    if max_price is not None:
+        return None, max_price, "price_desc"
+    return min_price, max_price, sort_by
+
+
 def _price_filter_basis(item: dict) -> int:
     """Visible price basis for min_price/max_price filters."""
     for key in ("cheapest_final_prc", "extra_fvr_sale_prc"):
@@ -719,8 +734,9 @@ def search_product_tool(
             예: 300_000 ("30만원 이하")
 
     Notes:
-        - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
-        - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
+        - 가격 필터는 BE /api/compatibility/product/search 에 전달한다.
+        - max_price 가 있으면 BE와 동일하게 min_price 를 무시하고 0~max_price 가격 내림차순으로 조회한다.
+        - BE 응답 후에도 표시 가격 기준으로 한 번 더 방어 필터링한다.
         - 가격 정보 없는 상품은 필터 적용 시 제외됨.
 
     Examples:
@@ -784,9 +800,14 @@ def search_product_tool(
             "[TOOL][search_product_tool] Stripped brand-only keyword: %r → None (brand_cd=%s)",
             keyword, brand_cd,
         )
-    has_price_filter = bool(min_price or max_price)
+    effective_min_price, effective_max_price, effective_sort_by = _normalize_search_price_args(
+        min_price,
+        max_price,
+        sort_by,
+    )
+    has_price_filter = bool(effective_min_price or effective_max_price)
     has_newest_sort = sort_by == "newest_desc"
-    fetch_limit = limit * 4 if has_price_filter else limit
+    fetch_limit = limit
     if has_newest_sort:
         fetch_limit = max(fetch_limit, 100)
     normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
@@ -794,7 +815,14 @@ def search_product_tool(
     three_pmsf_arg = str(three_pmsf_yn).strip().upper() if three_pmsf_yn else UNSET
     logger.debug(
         "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, three_pmsf_yn=%s, sort_by=%s, min_price=%s, max_price=%s",
-        normalized_keyword, limit, size, normalized_brand_cd, three_pmsf_arg, sort_by, min_price, max_price,
+        normalized_keyword,
+        limit,
+        size,
+        normalized_brand_cd,
+        three_pmsf_arg,
+        effective_sort_by,
+        effective_min_price,
+        effective_max_price,
     )
 
     try:
@@ -805,6 +833,9 @@ def search_product_tool(
             size=size,
             brand_cd=brand_arg,
             three_pmsf_yn=three_pmsf_arg,
+            min_price=effective_min_price,
+            max_price=effective_max_price,
+            sort_by=effective_sort_by,
         )
         if response.parsed is None:
             return _error_response(
@@ -816,11 +847,16 @@ def search_product_tool(
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             if has_price_filter:
-                data["items"] = _filter_by_price(data["items"], min_price, max_price)
+                data["items"] = _filter_by_price(data["items"], effective_min_price, effective_max_price)
                 if not data["items"]:
-                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
+                    return {
+                        "status": "no_results",
+                        "reason": "no_products_in_price_range",
+                        "min_price": effective_min_price,
+                        "max_price": effective_max_price,
+                    }
             data["items"] = _enrich_items_with_descriptions(data["items"])
-            data["items"] = _sort_items(data["items"], sort_by)
+            data["items"] = _sort_items(data["items"], effective_sort_by)
             if has_price_filter or has_newest_sort:
                 data["items"] = data["items"][:limit]
         return _success_response(response.status_code, data)

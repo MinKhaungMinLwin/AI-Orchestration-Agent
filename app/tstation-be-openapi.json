@@ -1611,6 +1611,63 @@
                         "description": "3PMSF/\uc0bc\ubd09\ub9c8\ud06c \uc778\uc99d \ud0c0\uc774\uc5b4\ub9cc \uac80\uc0c9\ud558\ub824\uba74 Y"
                     },
                     {
+                        "name": "min_price",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "integer",
+                                    "minimum": 0
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "\ucd5c\uc18c \uac00\uaca9 \ud544\ud130 (\uc6d0). max_price\uac00 \uc788\uc73c\uba74 \uc608\uc0b0 \uac80\uc0c9\uc73c\ub85c \ubcf4\uace0 \ubb34\uc2dc\ud569\ub2c8\ub2e4.",
+                            "title": "Min Price"
+                        },
+                        "description": "\ucd5c\uc18c \uac00\uaca9 \ud544\ud130 (\uc6d0). max_price\uac00 \uc788\uc73c\uba74 \uc608\uc0b0 \uac80\uc0c9\uc73c\ub85c \ubcf4\uace0 \ubb34\uc2dc\ud569\ub2c8\ub2e4."
+                    },
+                    {
+                        "name": "max_price",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "integer",
+                                    "minimum": 0
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "\ucd5c\ub300 \uac00\uaca9 \ud544\ud130 (\uc6d0). \uc9c0\uc815 \uc2dc 0~max_price \ubc94\uc704\uc5d0\uc11c \uac00\uaca9 \ub0b4\ub9bc\ucc28\uc21c\uc73c\ub85c \ubc18\ud658\ud569\ub2c8\ub2e4.",
+                            "title": "Max Price"
+                        },
+                        "description": "\ucd5c\ub300 \uac00\uaca9 \ud544\ud130 (\uc6d0). \uc9c0\uc815 \uc2dc 0~max_price \ubc94\uc704\uc5d0\uc11c \uac00\uaca9 \ub0b4\ub9bc\ucc28\uc21c\uc73c\ub85c \ubc18\ud658\ud569\ub2c8\ub2e4."
+                    },
+                    {
+                        "name": "sort_by",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "anyOf": [
+                                {
+                                    "type": "string",
+                                    "pattern": "^(price_asc|price_desc)$"
+                                },
+                                {
+                                    "type": "null"
+                                }
+                            ],
+                            "description": "\uac00\uaca9 \uc815\ub82c. max_price \uc9c0\uc815 \uc2dc price_desc\ub85c \uac15\uc81c\ub429\ub2c8\ub2e4.",
+                            "title": "Sort By"
+                        },
+                        "description": "\uac00\uaca9 \uc815\ub82c. max_price \uc9c0\uc815 \uc2dc price_desc\ub85c \uac15\uc81c\ub429\ub2c8\ub2e4."
+                    },
+                    {
                         "name": "limit",
                         "in": "query",
                         "required": false,
