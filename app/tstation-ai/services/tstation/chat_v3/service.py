@@ -31,6 +31,7 @@ from services.tstation.chat_v3.slots.derive import apply_fe_slots, derive_slots_
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
+from services.tstation.policies.cta_registry import normalize_quickreply_ctas
 
 logger = logging.getLogger(__name__)
 
@@ -254,15 +255,22 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 ),
                 flow_hint=templates.booking_flow_hint(slots),
             )
+        quick_reply_event = {
+            "type": "data",
+            "template": "quickReply",
+            "data": {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": []},
+            "source_domain": domain,
+        }
+        # V2 parity: only registered CTAs (URL/dynamic-pattern match) survive as clickable
+        # actions — label-only chips with no executable action are dropped (cta_registry.py).
+        normalize_quickreply_ctas(quick_reply_event, source_intent=domain)
+        chips = quick_reply_event["data"]["quickReplies"]
         # V2 semantics: predictedDomains = likely domains of the user's NEXT turn.
         # The chips are exactly the next actions we offer, so their domains are
         # the prediction; fall back to the current domain when there are no chips.
         predicted_domains = list(dict.fromkeys(chip["domain"] for chip in chips)) or [domain]
-        yield sse.data_event(
-            "quickReply",
-            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": predicted_domains},
-            source_domain=domain,
-        )
+        quick_reply_event["data"]["predictedDomains"] = predicted_domains
+        yield sse.sse(quick_reply_event)
     yield sse.agent_flow("[DONE]", "success")
     for event in sse.done():
         yield event
