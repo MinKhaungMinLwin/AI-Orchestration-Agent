@@ -1029,3 +1029,57 @@ def test_booking_flow_with_store_selected_prioritizes_schedule_template(monkeypa
     assert event["template"] == "datepick"
     assert event["source_tool"] == "get_multi_store_schedule_tool"
     assert event["data"]["metadata"]["slots"]["shop_id"] == "F00721"
+
+
+def test_get_store_schedule_tool_builds_datepick_without_llm(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("get_store_schedule_tool datepick should be built without LLM")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_name="티스테이션 정발산점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    schedule_output = {
+        "status": "success",
+        "data": {
+            "shop_id": "F00721",
+            "shop_nm": "티스테이션 정발산점",
+            "slots": [
+                {"cal_day": "20260709", "tm": "0900"},
+                {"cal_day": "20260709", "tm": "1000"},
+                {"cal_day": "20260709", "tm": "1200"},
+                {"cal_day": "20260710", "tm": "13"},
+            ],
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정발산점 예약 가능한 일정을 확인했어요.",
+            [
+                {
+                    "name": "get_store_schedule_tool",
+                    "args": {"shop_id": "F00721", "mode": "general"},
+                    "output": json.dumps(schedule_output, ensure_ascii=False),
+                }
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["source_tool"] == "get_store_schedule_tool"
+    assert event["assistant_response_source"] == "code_chat_v3_get_store_schedule"
+    assert event["data"]["dates"][0]["date"] == "2026년 07월 09일"
+    assert event["data"]["dates"][0]["availableTimes"] == [9, 10]
+    assert event["data"]["dates"][1]["availableTimes"] == [13]
+    assert event["data"]["selectedDate"] == 0
+    assert event["data"]["metadata"]["slots"]["shop_id"] == "F00721"
+    assert event["data"]["metadata"]["ui_action"]["fills_slot"] == "requested_cal_day,rsv_hour"
