@@ -836,9 +836,16 @@ def _is_booking_location_context(slots: ConversationSlots | None) -> bool:
 
 
 def booking_flow_hint(slots: ConversationSlots | None) -> str | None:
-    """Guidance for the quick-reply composer when the user is mid order/booking flow."""
+    """Guidance for the quick-reply composer when the user is mid order/booking flow.
+
+    Steps must not skip ahead: store first, then schedule, then order. Without a store
+    yet, hinting date/time makes the composer offer 날짜/시간 chips while the answer is
+    still asking for a region/store (issue 4).
+    """
     if not _is_booking_location_context(slots):
         return None
+    if not slots.shop_id:
+        return "사용자는 상품·수량은 정했지만 아직 장착 매장을 정하지 않았습니다. 다음 행동으로 지역/매장 선택을 제안하세요. 날짜/시간 선택은 제안하지 마세요."
     if not (slots.requested_cal_day and slots.rsv_hour):
         return "사용자는 상품과 매장까지 정했고 아직 예약 일정(날짜/시간)을 정하지 않았습니다. 다음 행동으로 예약 가능한 일정 확인을 제안하세요."
     return "사용자는 주문/예약을 진행하는 중입니다. 다음 행동으로 주문 진행을 제안하세요."
