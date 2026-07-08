@@ -631,6 +631,21 @@ class ProductMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     goodsId: str = Field(..., min_length=1)
+    goodsNo: str | None = None
+    goods_no: str | None = None
+    productName: str | None = None
+    product_name: str | None = None
+    tireSize: str | None = None
+    tire_size: str | None = None
+    domain: str | None = None
+    cta_action: str | None = None
+    fills_slot: str | None = None
+    entity_id: str | None = None
+    source_intent: str | None = None
+    expected_contract_intent: str | None = None
+    expected_behavior: str | None = None
+    slots: dict | None = None
+    ui_action: dict | None = None
 
 
 class ProductTag(BaseModel):
