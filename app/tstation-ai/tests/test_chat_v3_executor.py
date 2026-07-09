@@ -133,6 +133,50 @@ def test_schedule_call_keeps_today_shop_combined_mode_from_prior_inventory_resul
     assert normalized is call
 
 
+def test_schedule_call_rewrites_logistics_only_shop_from_prior_inventory_result() -> None:
+    call = {
+        "name": "get_store_schedule_tool",
+        "args": {"shop_id": "F09999", "mode": "in_store_logistics_combined"},
+    }
+    normalized = _normalize_schedule_tool_call_with_inventory(
+        call,
+        [
+            {
+                "name": "get_store_inventory_tool",
+                "output": '{"status":"success","data":{"todayShopArray":[],"tnaShopArray":[]}}',
+            },
+            {
+                "name": "get_logistics_inventory_tool",
+                "output": '{"status":"success","data":{"logistics_qty":7391,"rsv_sale_yn":"Y"}}',
+            },
+        ],
+    )
+
+    assert normalized["args"] == {"shop_id": "F09999", "mode": "logistics_only"}
+
+
+def test_schedule_call_keeps_mode_when_no_stock_anywhere() -> None:
+    call = {
+        "name": "get_store_schedule_tool",
+        "args": {"shop_id": "F09999", "mode": "general"},
+    }
+    normalized = _normalize_schedule_tool_call_with_inventory(
+        call,
+        [
+            {
+                "name": "get_store_inventory_tool",
+                "output": '{"status":"success","data":{"todayShopArray":[],"tnaShopArray":[]}}',
+            },
+            {
+                "name": "get_logistics_inventory_tool",
+                "output": '{"status":"success","data":{"logistics_qty":0}}',
+            },
+        ],
+    )
+
+    assert normalized is call
+
+
 def test_inventory_tool_output_is_redacted_only_for_model_visible_observation() -> None:
     output = '{"status":"success","data":{"todayShopArray":[{"shopId":"F00071","stock_qty":8}]}}'
 
