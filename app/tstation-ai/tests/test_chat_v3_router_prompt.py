@@ -39,6 +39,14 @@ def test_router_prompt_does_not_absorb_neighboring_payment_intents_as_installmen
     assert "쿠폰 적용/최종 혜택가" in ROUTER_PROMPT
 
 
+def test_router_prompt_routes_imported_vehicle_experience_store_requests_to_transaction():
+    assert "store_recommendation_by_vehicle_experience" in ROUTER_PROMPT
+    assert "bmw 5시리즈 정비 경험 많은 매장으로 추천해줘" in ROUTER_PROMPT
+    assert "TRANSACTION 매장 검색" in ROUTER_PROMPT
+    assert "수입차 특화점 조건" in ROUTER_PROMPT
+    assert "SUPPORT FAQ가 아니라" in ROUTER_PROMPT
+
+
 def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
     guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
     static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]

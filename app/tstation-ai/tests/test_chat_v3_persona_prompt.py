@@ -18,6 +18,8 @@ def test_system_prompt_limits_store_recommendations_to_tool_verifiable_condition
     assert "가능한 것처럼 찾아주겠다고 말하지 마세요" in SYSTEM_PROMPT
     assert "평점순·리뷰 많은 순·후기 좋은 순" in SYSTEM_PROMPT
     assert "방문 예정 매장에 직접 문의" in SYSTEM_PROMPT
+    assert "수입차 특화점 검색 의도" in SYSTEM_PROMPT
+    assert "실제 BMW 5시리즈 정비 경험이 많다고 단정하지 말고" in SYSTEM_PROMPT
 
 
 def test_system_prompt_locks_user_facing_price_labels():
@@ -56,6 +58,13 @@ def test_store_flow_prompt_uses_unified_install_availability_tool():
     assert "get_logistics_inventory_tool" not in STORE_SEARCH_FLOW_GUIDANCE
     assert "get_store_inventory_tool" not in STORE_SEARCH_FLOW_GUIDANCE
     assert "get_store_schedule_tool" not in STORE_SEARCH_FLOW_GUIDANCE
+
+
+def test_store_flow_prompt_maps_imported_vehicle_experience_to_imported_specialty_search():
+    assert "BMW 5시리즈" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "수입차 특화점 검색 의도" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "차종별 정비 경험 수" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "수입차 특화점 기준으로 확인" in STORE_SEARCH_FLOW_GUIDANCE
 
 
 def test_confirmed_order_recheck_uses_unified_install_availability_tool():
