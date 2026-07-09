@@ -99,6 +99,9 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
 - 예: "09조8765 홍길동" (차량번호+소유주명만) → domain=DISCOVERY (내 차량 조회 의도)
 
 ## 3. intents — 세부 의도 1~3개 (자유 서술 키워드, 예: "tire_recommend", "store_search")
+- 사용자가 현재 확인된 상품 또는 이번 발화에서 특정한 상품을 장바구니에 담아 달라는 목적이라면
+  domain=TRANSACTION, intents 에 "add_to_cart" 를 포함하고 slots_patch.goal_type="add_to_cart", slots_patch.pending_intent="cart" 를 채우세요.
+  수량을 함께 말했으면 slots_patch.ord_qty 도 채우세요. 장바구니 담기는 실행 전 확인 카드가 필요한 거래 흐름입니다.
 - 직전 응답이 주문/장바구니 확인 카드(preOrder)였고, 현재 확인된 대화 슬롯에 장바구니 실행에 필요한 상품·수량과
   장바구니 목적이 이미 있으며, 사용자의 마지막 발화가 그 카드의 장바구니 담기를 승인하는 의미라면
   domain=TRANSACTION, intents 에 "cart_confirmation" 을 포함하세요. 표현은 고정 문구가 아니라 승인/동의/진행 의도 기준으로 판단합니다.

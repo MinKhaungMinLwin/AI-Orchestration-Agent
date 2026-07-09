@@ -75,12 +75,86 @@ def test_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch: pytest.Mo
     asyncio.run(_assert_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch))
 
 
+def test_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch))
+
+
+async def _assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="225/45R17",
+        pending_product_name="Ventus V12 Evo2 225/45R17",
+    )
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["add_to_cart"],
+        slots_patch=SlotsPatch(ord_qty=4),
+    )
+    saved_slots = []
+
+    class FakeExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.final_text = "I cannot add this to cart from chat."
+            self.tool_calls = []
+
+        async def stream(self):
+            yield service.sse.token("I cannot add this to cart from chat.")
+
+    async def fake_route_request(*args, **kwargs):
+        assert kwargs["known_slots"].goods_no == "G0001"
+        return decision
+
+    async def fake_load_slots(session_id):
+        return slots
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        saved_slots.append(next_slots)
+
+    async def fake_verify_answer(answer, tool_calls, trace_config):
+        return answer
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
+    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[
+            {"role": "assistant", "content": "Ventus V12 Evo2 225/45R17"},
+            {"role": "user", "content": "4개 장바구니에 담아줘"},
+        ],
+        stream=True,
+        user_id="test-user",
+        session_id="cart-preorder-stream-test",
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    assert not [event for event in events if event.get("type") in {"message", "token"}]
+    pre_order = next(event for event in events if event.get("template") == "preOrder")
+    assert pre_order["data"]["isReadyToAddToCart"] is True
+    assert pre_order["data"]["metadata"]["goodsNo"] == "G0001"
+    assert pre_order["data"]["metadata"]["ordQty"] == 4
+    assert saved_slots[0].pending_intent == "cart"
+    assert saved_slots[0].goal_type == "add_to_cart"
+
+
 async def _assert_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     slots = ConversationSlots(
         goods_no="G0001",
         ord_qty=4,
-        pending_intent="cart",
-        goal_type="add_to_cart",
         pending_product_name="Ventus S2 AS 225/45R17",
     )
     decision = RouteDecision(

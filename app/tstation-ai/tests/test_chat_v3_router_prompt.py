@@ -92,6 +92,8 @@ def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():
 
 
 def test_router_prompt_defines_cart_confirmation_intent():
+    assert "add_to_cart" in ROUTER_PROMPT
+    assert "pending_intent=\"cart\"" in ROUTER_PROMPT
     assert "cart_confirmation" in ROUTER_PROMPT
     assert "preOrder" in ROUTER_PROMPT
     assert "고정 문구가 아니라 승인/동의/진행 의도 기준" in ROUTER_PROMPT
