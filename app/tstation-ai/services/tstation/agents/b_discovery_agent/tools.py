@@ -1465,7 +1465,12 @@ def get_products_recommendations_tool(
                 tire_size,
             )
 
-    has_price_filter = bool(min_price or max_price)
+    effective_min_price, effective_max_price, effective_sort_by = _normalize_search_price_args(
+        min_price,
+        max_price,
+        sort_by,
+    )
+    has_price_filter = bool(effective_min_price or effective_max_price)
     requested_limit = limit
     effective_limit = min(max(int(limit or 3), 1), _RECOMMENDATION_LIMIT_CAP)
     if has_price_filter:
@@ -1473,13 +1478,13 @@ def get_products_recommendations_tool(
     limit_capped = requested_limit > effective_limit
 
     # Price filtering is now SQL-side on BE — no client-side post-filter.
-    has_newest_sort = sort_by == "newest_desc"
+    has_newest_sort = effective_sort_by == "newest_desc"
     fetch_limit = effective_limit
     requested_rcmd_type = rcmd_type.value if isinstance(rcmd_type, RcmdType) else str(rcmd_type)
     requested_season_nm = season_nm
     logger.debug(
         "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, prc_grd=%s, vehicle_type=%s, min_price=%s, max_price=%s",
-        rcmd_type, effective_limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price,
+        rcmd_type, effective_limit, brand_cd, car_lnc_cd, tire_size, effective_sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, effective_min_price, effective_max_price,
     )
 
     def _fetch_recommendation_once(
@@ -1509,8 +1514,8 @@ def get_products_recommendations_tool(
             pfm_nm=pfm_nm,
             prc_grd=prc_grd,
             vehicle_type=vehicle_type_param,
-            min_price=min_price,
-            max_price=max_price,
+            min_price=effective_min_price,
+            max_price=effective_max_price,
         )
         if response.parsed is None:
             return _error_response(
@@ -1525,13 +1530,13 @@ def get_products_recommendations_tool(
                 return {
                     "status": "no_results",
                     "reason": "no_products_in_price_range",
-                    "min_price": min_price,
-                    "max_price": max_price,
+                    "min_price": effective_min_price,
+                    "max_price": effective_max_price,
                 }
             if str(call_rcmd_type) == "discount":
                 data["items"] = _enrich_items_with_price_fields(data["items"])
             data["items"] = _enrich_items_with_descriptions(data["items"])
-            data["items"] = _sort_items(data["items"], sort_by)
+            data["items"] = _sort_items(data["items"], effective_sort_by)
             if has_newest_sort:
                 data["items"] = data["items"][:effective_limit]
             data["requested_limit"] = requested_limit

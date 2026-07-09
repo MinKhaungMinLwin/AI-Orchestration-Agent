@@ -117,6 +117,37 @@ def test_price_filter_overrides_default_recommendation_limit(monkeypatch):
     assert result["data"]["effective_limit"] == 10
 
 
+def test_recommendation_budget_search_uses_be_price_desc_order(monkeypatch):
+    be = _patch(monkeypatch, [_Resp([
+        {"goods_no": "G1", "goods_nm": "Upper budget tire", "extra_fvr_sale_prc": 399_000},
+        {"goods_no": "G2", "goods_nm": "Lower budget tire", "extra_fvr_sale_prc": 301_000},
+    ])])
+    sort_calls = []
+
+    def spy_sort(items, sort_by):
+        sort_calls.append(sort_by)
+        return items
+
+    monkeypatch.setattr(t, "_sort_items", spy_sort)
+
+    result = _call(
+        rcmd_type="urban",
+        limit=5,
+        brand_cd="HK",
+        tire_size="2355519",
+        pfm_nm="COMFORT",
+        min_price=300_000,
+        max_price=399_999,
+        sort_by="price_asc",
+    )
+
+    assert result["status"] == "success"
+    assert be.calls[0]["limit"] == 10
+    assert be.calls[0]["min_price"] is None
+    assert be.calls[0]["max_price"] == 399_999
+    assert sort_calls == ["price_desc"]
+
+
 def test_winter_fallback_keeps_vehicle_type_filter(monkeypatch):
     be = _patch(monkeypatch, [_Resp([]), _Resp([ITEM])])
 
