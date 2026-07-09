@@ -200,6 +200,98 @@ def test_transaction_store_preview_falls_back_to_place_coordinates_for_landmark_
     assert [call.get("region_code") for call in store_calls] == ["강남구청", None]
 
 
+def test_transaction_store_preview_uses_current_location_coordinates_for_availability(monkeypatch):
+    store_calls: list[dict] = []
+    availability_calls: list[dict] = []
+
+    def fake_get_client():
+        return "client"
+
+    def fake_get_store_list(**kwargs):
+        store_calls.append(kwargs)
+        return _Response({
+            "stores": [
+                {
+                    "shop_id": "F00012",
+                    "shop_nm": "티스테이션 역삼점",
+                    "is_installable": True,
+                    "distance_km": 0.4,
+                },
+                {
+                    "shop_id": "F00013",
+                    "shop_nm": "티스테이션 삼성점",
+                    "is_installable": True,
+                    "distance_km": 1.2,
+                },
+            ]
+        })
+
+    def fake_get_store_install_availability(*, client, body):
+        availability_calls.append({"client": client, "body": body.to_dict()})
+        return _Response({
+            "items": [
+                {
+                    "shop_id": "F00012",
+                    "shop_nm": "티스테이션 역삼점",
+                    "status": "available",
+                    "mode": "in_store_only",
+                    "has_today_stock": True,
+                    "has_tna_stock": False,
+                    "has_logistics_stock": False,
+                    "slots": [{"cal_day": "20260617", "tm": "1000"}],
+                },
+                {
+                    "shop_id": "F00013",
+                    "shop_nm": "티스테이션 삼성점",
+                    "status": "available",
+                    "mode": "logistics_only",
+                    "has_today_stock": False,
+                    "has_tna_stock": False,
+                    "has_logistics_stock": True,
+                    "slots": [{"cal_day": "20260618", "tm": "1100"}],
+                },
+            ]
+        })
+
+    monkeypatch.setattr(tools, "get_client", fake_get_client)
+    monkeypatch.setattr(tools, "get_store_list", fake_get_store_list)
+    monkeypatch.setattr(tools, "get_store_install_availability", fake_get_store_install_availability)
+    monkeypatch.setattr(tools, "get_price", lambda **kwargs: _Response({"final_price": 120800}))
+
+    result = tools.transaction_store_preview_tool.func(
+        goods_no="G000000309780",
+        ord_qty=4,
+        user_xpos=127.0276,
+        user_ypos=37.4979,
+        radius_km=3,
+        include_price=True,
+    )
+
+    assert result["status"] == "success"
+    assert store_calls == [{
+        "client": "client",
+        "xpos": 127.0276,
+        "ypos": 37.4979,
+        "radius_km": 3.0,
+        "svc_codes": None,
+        "all_my_t_only": False,
+        "imported_car_only": False,
+        "installable_only": True,
+        "chl_sct_cd": None,
+    }]
+    assert availability_calls == [{
+        "client": "client",
+        "body": {
+            "shop_ids": ["F00012", "F00013"],
+            "goods_no": "G000000309780",
+            "qty": 4,
+        },
+    }]
+    assert result["data"]["candidate_shop_ids"] == ["F00012", "F00013"]
+    assert result["data"]["inventory"]["todayShopArray"] == [{"shopId": "F00012"}]
+    assert result["data"]["logistics"]["has_logistics_stock"] is True
+
+
 def test_transaction_store_preview_filters_schedule_by_requested_cal_day(monkeypatch):
     def fake_get_client():
         return "client"
