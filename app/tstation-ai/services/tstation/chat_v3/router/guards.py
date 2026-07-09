@@ -163,9 +163,9 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         chips=[
             {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
             {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "진행 중인 혜택", "domain": "DISCOVERY"},
         ],
-        predicted_domains=["DISCOVERY", "TRANSACTION", "SUPPORT"],
+        predicted_domains=["DISCOVERY", "TRANSACTION"],
     ),
 }
 

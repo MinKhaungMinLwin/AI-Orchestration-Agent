@@ -179,6 +179,15 @@ def test_product_code_request_guard_refuses_internal_identifier() -> None:
     assert guard.predicted_domains == ["DISCOVERY", "TRANSACTION"]
 
 
+def test_out_of_scope_guard_does_not_offer_qna_handoff() -> None:
+    guard = get_guard(GuardId.OUT_OF_SCOPE)
+
+    assert guard is not None
+    assert "답변드리기 어려운 주제" in guard.text
+    assert [chip["label"] for chip in guard.chips] == ["타이어 추천 받기", "가까운 매장 찾기", "진행 중인 혜택"]
+    assert guard.predicted_domains == ["DISCOVERY", "TRANSACTION"]
+
+
 def test_runflat_mixed_install_policy_overrides_vehicle_type_compatibility() -> None:
     decision = RouteDecision(
         guard_id=GuardId.NONE,
