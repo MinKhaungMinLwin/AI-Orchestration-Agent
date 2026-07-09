@@ -12,6 +12,7 @@ from typing import Any
 
 from common.curr_time import get_current_time
 from schemas.tstation.chat import TStationChatRequest
+from schemas.tstation.slots import ConversationSlots
 from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.router import ROUTER_PROMPT
 from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision
@@ -55,7 +56,7 @@ _RUNFLAT_MIXED_INSTALL_TERMS = (
 )
 
 
-def _router_input(request: TStationChatRequest) -> str:
+def _router_input(request: TStationChatRequest, known_slots: ConversationSlots | None = None) -> str:
     lines = [f"오늘 날짜/시간: {get_current_time()}", "## 최근 대화"]
     for msg in request.messages[-_HISTORY_TURNS:]:
         role = "사용자" if msg.get("role") == "user" else "챗봇"
@@ -66,6 +67,11 @@ def _router_input(request: TStationChatRequest) -> str:
     if request.ui_action:
         lines.append("## UI 액션 (ui_action)")
         lines.append(json.dumps(request.ui_action, ensure_ascii=False)[:_MAX_CHARS_PER_MESSAGE])
+    if known_slots is not None:
+        slot_values = {k: v for k, v in known_slots.model_dump(mode="json").items() if v is not None}
+        if slot_values:
+            lines.append("## 현재 확인된 대화 슬롯")
+            lines.append(json.dumps(slot_values, ensure_ascii=False)[:_MAX_CHARS_PER_MESSAGE])
     return "\n".join(lines)
 
 
@@ -238,12 +244,16 @@ def _apply_runflat_mixed_install_policy(decision: RouteDecision, request: TStati
     return decision
 
 
-async def route_request(request: TStationChatRequest, trace_config: dict | None = None) -> RouteDecision | None:
+async def route_request(
+    request: TStationChatRequest,
+    trace_config: dict | None = None,
+    known_slots: ConversationSlots | None = None,
+) -> RouteDecision | None:
     try:
         # json_schema (default) requires every field in `required` (OpenAI strict
         # mode), which optional-field models fail — function_calling does not.
         llm = get_router_llm().with_structured_output(RouteDecision, method="function_calling")
-        messages = [("system", ROUTER_PROMPT), ("user", _router_input(request))]
+        messages = [("system", ROUTER_PROMPT), ("user", _router_input(request, known_slots))]
         decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         decision = _clear_in_range_reservation_date_guard(decision, request)
         decision = _move_static_faq_guard_to_intent(decision)
