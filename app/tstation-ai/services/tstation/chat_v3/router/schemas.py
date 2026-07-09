@@ -27,6 +27,7 @@ class GuardId(str, Enum):
     ONLINE_STORE_PRICE_POLICY = "online_store_price_policy"
     REGIONAL_PRICE_POLICY = "regional_price_policy"
     PRODUCT_CODE_REQUEST = "product_code_request"
+    OUT_OF_SCOPE = "out_of_scope"
 
 
 class Domain(str, Enum):
