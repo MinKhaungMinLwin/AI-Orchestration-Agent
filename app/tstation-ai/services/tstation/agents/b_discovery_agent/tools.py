@@ -793,7 +793,7 @@ def search_product_tool(
         - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn, three_pmsf_yn
         - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
         - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
-        - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심보험)
+        - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심서비스)
     """
     policy_patch = current_discovery_search_tool_patch.get()
     if policy_patch:

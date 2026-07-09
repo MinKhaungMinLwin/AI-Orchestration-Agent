@@ -2826,8 +2826,8 @@ def _comparison_warranty_summary(row: dict) -> str:
 
     if _get_str(warranty, "free_guarantee_yn").upper() == "Y" and "무상교환보증" not in labels:
         labels.append("무상교환보증")
-    if _get_str(warranty, "t_rlx_isn_yn").upper() == "Y" and "안심보험" not in labels:
-        labels.append("안심보험")
+    if _get_str(warranty, "t_rlx_isn_yn").upper() == "Y" and "안심서비스" not in labels:
+        labels.append("안심서비스")
 
     return ", ".join(labels) if labels else "워런티 정보 확인되지 않음"
 
