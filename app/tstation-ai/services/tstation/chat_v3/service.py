@@ -50,7 +50,6 @@ _ADD_TO_CART_INTENT = "add_to_cart"
 _CART_CONFIRMATION_INTENT = "cart_confirmation"
 _ORDER_PREVIEW_TOOL = "present_order_preview_tool"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
-_CART_PREVIEW_SLOT_KEYS = {"ord_qty", "tire_model", "tire_size", "shop_name", "requested_cal_day", "rsv_hour"}
 
 
 def _tool_display_names() -> dict[str, str]:
@@ -63,22 +62,9 @@ def _tokens_enabled() -> bool:
     return bool(getattr(settings, "AI_CHAT_V3_STREAM_TOKENS", True))
 
 
-def _patch_changes_cart_preview_slots(decision: RouteDecision, previous_slots: ConversationSlots) -> bool:
-    patch = decision.slots_patch.non_empty()
-    for key in _CART_PREVIEW_SLOT_KEYS:
-        if key not in patch:
-            continue
-        old_value = getattr(previous_slots, key, None)
-        new_value = patch[key]
-        if old_value in (None, "") or str(old_value) != str(new_value):
-            return True
-    return False
-
-
 def _is_confirmed_cart_turn(
     decision: RouteDecision | None,
     slots: ConversationSlots,
-    previous_slots: ConversationSlots,
 ) -> bool:
     if decision is None:
         return False
@@ -87,7 +73,6 @@ def _is_confirmed_cart_turn(
         _ADD_TO_CART_INTENT in decision.intents
         and slots.goods_no
         and slots.ord_qty
-        and not _patch_changes_cart_preview_slots(decision, previous_slots)
     )
     return bool(
         (cart_confirmation_intent or ready_cart_reaffirmed)
@@ -113,6 +98,18 @@ def _cart_tool_args(slots: ConversationSlots) -> dict:
     return args
 
 
+def _cart_tool_args_from_mapping(args: dict, slots: ConversationSlots) -> dict | None:
+    goods_no = str(args.get("goods_no") or slots.goods_no or "").strip()
+    ord_qty = _as_int(args.get("ord_qty") or slots.ord_qty)
+    if not goods_no or ord_qty is None:
+        return None
+    cart_args: dict[str, object] = {"goods_no": goods_no, "ord_qty": ord_qty}
+    car_lnc_cd = str(args.get("car_lnc_cd") or slots.car_lnc_cd or "").strip()
+    if car_lnc_cd:
+        cart_args["car_lnc_cd"] = car_lnc_cd
+    return cart_args
+
+
 def _as_int(value: object) -> int | None:
     try:
         return int(value)
@@ -128,23 +125,18 @@ def _ready_cart_slots(slots: ConversationSlots) -> bool:
     )
 
 
-def _same_cart_preview_args(args: dict, slots: ConversationSlots) -> bool:
-    goods_no = str(args.get("goods_no") or "").strip()
-    ord_qty = _as_int(args.get("ord_qty"))
-    return goods_no == str(slots.goods_no or "").strip() and ord_qty == slots.ord_qty
-
-
-def _duplicate_cart_preview_tool_normalizer(slots: ConversationSlots, *, enabled: bool) -> Callable[[dict], dict]:
+def _add_to_cart_tool_normalizer(slots: ConversationSlots, *, enabled: bool) -> Callable[[dict], dict]:
     def normalize(call: dict) -> dict:
         if not enabled or (call.get("name") or "") != _ORDER_PREVIEW_TOOL:
             return call
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        if not _ready_cart_slots(slots) or not _same_cart_preview_args(args, slots):
+        cart_args = _cart_tool_args_from_mapping(args, slots)
+        if cart_args is None:
             return call
 
         normalized = dict(call)
         normalized["name"] = _SAVE_TO_CART_TOOL
-        normalized["args"] = _cart_tool_args(slots)
+        normalized["args"] = cart_args
         return normalized
 
     return normalize
@@ -396,13 +388,12 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             yield event
         return
 
-    slots_before_patch = slots
     slots = apply_patch(slots, decision.slots_patch if decision else None)
     slots = _normalize_add_to_cart_slots(decision, slots)
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
 
-    if _is_confirmed_cart_turn(decision, slots, slots_before_patch):
+    if _is_confirmed_cart_turn(decision, slots):
         tool = next((candidate for candidate in tools_for_domains(["TRANSACTION"]) if candidate.name == _SAVE_TO_CART_TOOL), None)
         args = _cart_tool_args(slots)
         display = _tool_display_names().get(_SAVE_TO_CART_TOOL, _SAVE_TO_CART_TOOL)
@@ -510,10 +501,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             tags=["tool_loop"],
             parent_span_id=parent_span_id,
         ),
-        tool_call_normalizer=_duplicate_cart_preview_tool_normalizer(
+        tool_call_normalizer=_add_to_cart_tool_normalizer(
             slots,
-            enabled=_ready_cart_slots(slots)
-            and (decision is None or not _patch_changes_cart_preview_slots(decision, slots_before_patch)),
+            enabled=bool(decision and {_ADD_TO_CART_INTENT, _CART_CONFIRMATION_INTENT}.intersection(decision.intents)),
         ),
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")

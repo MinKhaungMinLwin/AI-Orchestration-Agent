@@ -992,6 +992,23 @@ def test_preorder_fallback_skips_irrelevant_followup_even_with_ready_slots():
     assert event is None
 
 
+def test_preorder_fallback_skips_ready_add_to_cart_flow():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        ord_qty=4,
+        pending_intent="cart",
+        goal_type="add_to_cart",
+    )
+
+    event = templates.build_preorder_fallback(
+        "장바구니에 담아줘",
+        slots,
+        RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"], slots_patch={"ord_qty": 4}),
+    )
+
+    assert event is None
+
+
 def test_transaction_preview_source_maps_to_location_not_preorder():
     source = templates._pick_source(  # noqa: SLF001
         [{"name": "transaction_store_preview_tool", "args": {}, "output": json.dumps({"data": {"stores": [{}]}})}]
