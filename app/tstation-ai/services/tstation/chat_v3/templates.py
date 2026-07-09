@@ -1651,6 +1651,87 @@ def _normalize_datepick_payload(
     }
 
 
+async def _build_product_via_llm(
+    answer: str,
+    call: dict,
+    slots: ConversationSlots | None,
+    trace_config: dict | None,
+) -> dict | None:
+    """Fallback for the rare case where tool output can't be parsed into rows with a
+    goods_no (malformed/nonstandard shape) — the only place this template still calls
+    an LLM. No try/except here: errors bubble up to the caller's try/except."""
+    wrapper_model = _relevance_wrapper(ProductTemplate)
+    llm = get_router_llm().with_structured_output(wrapper_model, method="function_calling")
+    messages = [
+        ("system", TEMPLATE_BUILDER_PROMPT),
+        (
+            "user",
+            f"## 도구: {call['name']}\n## 도구 결과\n{str(call['output'])[:_MAX_TOOL_OUTPUT_CHARS]}\n\n"
+            f"## 챗봇 답변\n{answer[:2000]}",
+        ),
+    ]
+    relevance = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
+    if not relevance.applicable or relevance.payload is None:
+        logger.info(
+            "[CHAT_V3] rich template 'product' skipped (tool=%s) — answer moved to a different topic",
+            call["name"],
+        )
+        return None
+    payload = relevance.payload
+    if not getattr(payload, "assistantResponse", ""):
+        payload.assistantResponse = answer
+    _normalize_product_payload(payload, str(call["output"]))
+    _normalize_product_selection_payload(payload, slots)
+    return {
+        "type": "data",
+        "template": "product",
+        "data": payload.model_dump(mode="json", exclude_none=True),
+        "source_tool": call["name"],
+    }
+
+
+async def build_product_data_event(
+    answer: str,
+    call: dict,
+    slots: ConversationSlots | None,
+    trace_config: dict | None = None,
+) -> dict | None:
+    """Deterministic product-card builder — no LLM call in the common case.
+
+    Template selection already happened in `_pick_source`; this only renders the
+    chosen tool result. Mirrors `build_location_data_event`'s direct-construction
+    pattern, reusing the same row->field mapping `_normalize_product_payload`
+    already relies on in production. Falls back to `_build_product_via_llm` only
+    when the raw rows can't be parsed at all (malformed tool output) — the sole
+    remaining LLM call for this template.
+    """
+    try:
+        raw_rows = _product_rows_from_output(str(call.get("output") or ""))
+        parseable_rows = [
+            row for row in raw_rows if _get_str(row, "goods_no", "goodsNo", "goods_id", "goodsId")
+        ]
+        if not parseable_rows:
+            return await _build_product_via_llm(answer, call, slots, trace_config)
+
+        source_rows = parseable_rows[:10]
+        products = [_product_item_from_row(row) for row in source_rows]
+        metadata = [
+            ProductMeta(goodsId=_get_str(row, "goods_no", "goodsNo", "goods_id", "goodsId"))
+            for row in source_rows
+        ]
+        payload = ProductTemplate(assistantResponse=answer, products=products, metadata=metadata)
+        _normalize_product_selection_payload(payload, slots)
+        return {
+            "type": "data",
+            "template": "product",
+            "data": payload.model_dump(mode="json", exclude_none=True),
+            "source_tool": call["name"],
+        }
+    except Exception:
+        logger.exception("[CHAT_V3] rich template build failed (product) — falling back to quickReply")
+        return None
+
+
 async def build_rich_data_event(
     answer: str,
     tool_calls: list[dict],
@@ -1712,6 +1793,10 @@ async def build_rich_data_event(
         previous_slots=previous_slots,
     ):
         return None
+
+    if template_name == "product":
+        return await build_product_data_event(answer, call, slots, trace_config)
+
     try:
         wrapper_model = _relevance_wrapper(template_model)
         llm = get_router_llm().with_structured_output(wrapper_model, method="function_calling")
@@ -1734,9 +1819,6 @@ async def build_rich_data_event(
         payload = relevance.payload
         if not getattr(payload, "assistantResponse", ""):
             payload.assistantResponse = answer
-        if template_name == "product":
-            _normalize_product_payload(payload, str(call["output"]))
-            _normalize_product_selection_payload(payload, slots)
         if template_name == "location":
             _normalize_location_payload(payload, str(call["output"]), slots)
             payload.isBookingFlow = _is_booking_location_context(slots)
