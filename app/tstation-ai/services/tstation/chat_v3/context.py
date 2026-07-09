@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from common.curr_time import get_current_time
 from common.jwt_utils import get_user_info_from_token
+from config.prompts import load_client_injection
 from schemas.tstation.chat import TStationChatRequest
 
 _SAFE_USER_FIELDS = {"mbr_nm", "location", "user_id"}
@@ -56,6 +57,9 @@ def _user_context_block(user_info: dict) -> str | None:
 def build_messages(request: TStationChatRequest, *, system_prompt: str, extra_context: list[str] | None = None) -> list[BaseMessage]:
     """History → LangChain messages, with user context injected before the last user turn."""
     system_parts = [system_prompt]
+    client_injection = load_client_injection()
+    if client_injection:
+        system_parts.append(f"## CLIENT INSTRUCTIONS\n{client_injection}")
     user_info = merged_user_info(request)
     if user_info:
         context_block = _user_context_block(user_info)
