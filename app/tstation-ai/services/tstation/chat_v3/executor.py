@@ -22,6 +22,7 @@ _TOOL_OUTPUT_PREVIEW_CHARS = 4000
 _CAR_MODEL_GROUP_TOOL = "search_car_model_groups_tool"
 _RECOMMENDATION_TOOL = "get_products_recommendations_tool"
 _STORE_INVENTORY_TOOL = "get_store_inventory_tool"
+_LOGISTICS_INVENTORY_TOOL = "get_logistics_inventory_tool"
 _STORE_SCHEDULE_TOOL = "get_store_schedule_tool"
 
 
@@ -96,6 +97,22 @@ def _inventory_arrays_from_tool_output(output_text: str) -> tuple[set[str], set[
     )
 
 
+def _logistics_qty_from_tool_output(output_text: str) -> int:
+    try:
+        payload = json.loads(output_text)
+    except (TypeError, ValueError):
+        return 0
+    if not isinstance(payload, dict):
+        return 0
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict):
+        return 0
+    try:
+        return int(data.get("logistics_qty") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _normalize_schedule_tool_call_with_inventory(call: dict, previous_tool_calls: list[dict]) -> dict:
     """Keep single-store schedule mode aligned with proven inventory tier."""
 
@@ -110,25 +127,34 @@ def _normalize_schedule_tool_call_with_inventory(call: dict, previous_tool_calls
 
     today_ids: set[str] = set()
     tna_ids: set[str] = set()
+    logistics_qty = 0
     for previous in previous_tool_calls:
-        if previous.get("name") != _STORE_INVENTORY_TOOL:
-            continue
-        prev_today, prev_tna = _inventory_arrays_from_tool_output(str(previous.get("output") or ""))
-        today_ids |= prev_today
-        tna_ids |= prev_tna
+        prev_name = previous.get("name")
+        if prev_name == _STORE_INVENTORY_TOOL:
+            prev_today, prev_tna = _inventory_arrays_from_tool_output(str(previous.get("output") or ""))
+            today_ids |= prev_today
+            tna_ids |= prev_tna
+        elif prev_name == _LOGISTICS_INVENTORY_TOOL:
+            logistics_qty = max(logistics_qty, _logistics_qty_from_tool_output(str(previous.get("output") or "")))
 
     if shop_id in tna_ids and shop_id not in today_ids:
-        normalized = dict(call)
-        normalized_args = dict(args)
-        normalized_args["mode"] = "tna_only"
-        normalized["args"] = normalized_args
-        logger.info(
-            "[CHAT_V3] corrected %s mode to tna_only for TNA-only shop_id=%s",
-            _STORE_SCHEDULE_TOOL,
-            shop_id,
-        )
-        return normalized
-    return call
+        corrected_mode = "tna_only"
+    elif shop_id not in today_ids and shop_id not in tna_ids and logistics_qty > 0:
+        corrected_mode = "logistics_only"
+    else:
+        return call
+
+    normalized = dict(call)
+    normalized_args = dict(args)
+    normalized_args["mode"] = corrected_mode
+    normalized["args"] = normalized_args
+    logger.info(
+        "[CHAT_V3] corrected %s mode to %s for shop_id=%s",
+        _STORE_SCHEDULE_TOOL,
+        corrected_mode,
+        shop_id,
+    )
+    return normalized
 
 
 def _model_visible_tool_output(name: str, output_text: str) -> str:
