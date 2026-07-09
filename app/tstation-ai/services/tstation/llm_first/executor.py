@@ -532,7 +532,9 @@ class AFExecutor:
             elif selected.af == AgentFlow.QUICK_SHOPPING:
                 working_state = await self._quick_shopping(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.FAQ:
-                if selected.known_inputs.get("account_lookup") == "warranties":
+                if selected.known_inputs.get("account_lookup") == "relief_services":
+                    working_state = await self._relief_services(user_text, working_state, selected.known_inputs, bundle)
+                elif selected.known_inputs.get("account_lookup") == "warranties":
                     working_state = await self._warranties(user_text, working_state, selected.known_inputs, bundle)
                 else:
                     working_state = await self._faq(user_text, working_state, selected.known_inputs, bundle)
@@ -932,6 +934,10 @@ class AFExecutor:
 
     async def _warranties(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         await self._call(bundle, AgentFlow.FAQ, "get_my_warranties_tool", {})
+        return state
+
+    async def _relief_services(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        await self._call(bundle, AgentFlow.FAQ, "get_my_relief_services_tool", {})
         return state
 
     async def _compatibility(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
