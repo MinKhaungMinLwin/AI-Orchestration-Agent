@@ -1,7 +1,7 @@
 """API client for communicating with the backend using new chat API."""
 import json
 import uuid
-from typing import Dict, Generator, List, Union
+from typing import Generator, Union
 
 import requests
 import streamlit as st
@@ -60,7 +60,6 @@ def send_chat_message(
     # Get or create session_id
     session_id = _get_or_create_session_id(session_id)
 
-    headers = {"Authorization": f"Bearer {access_token}"}
     payload = {
         "content": content,
         "session_id": session_id,
@@ -113,42 +112,78 @@ def _handle_stream_response(payload: dict, session_id: str, access_token: str) -
         response.raise_for_status()
         response.encoding = "utf-8"
 
-        buffer = ""
-        first_chunk = True
-
-        for chunk in response.iter_content(chunk_size=1, decode_unicode=True):
-
-            if not chunk:
-                continue
-
-            buffer += chunk
-
-            # process full SSE event
-            while "\n\n" in buffer:
-
-                event, buffer = buffer.split("\n\n", 1)
-
-                if event.startswith("data: "):
-
-                    data_content = event[6:]
-
-                    if data_content.strip() == "[DONE]":
-                        return
-
-                    try:
-                        data = json.loads(data_content)
-
-                        # First chunk contains session info - just yield it
-                        if first_chunk and data.get("stream_started"):
-                            first_chunk = False
-                            # Yield session info, continue to get content
-                            yield {"type": "session_info", "session_id": data.get("session_id")}
-                            continue
-
-                        yield data
-
-                    except json.JSONDecodeError:
-                        pass
+        yield from _iter_sse_events(response)
 
     except Exception as e:
         yield {"type": "error", "content": str(e)}
+
+
+def send_quick_order_action(
+    session_id: str,
+    payload: dict,
+    access_token: str | None = None,
+) -> Generator[dict, None, None]:
+    """Execute the structured preOrder action endpoint and stream its SSE events."""
+    if not access_token:
+        yield {"type": "error", "content": "Access token is required."}
+        return
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+        response = requests.post(
+            f"{BASE_URL}/tstation/messages/actions/quick-order",
+            json={
+                "session_id": session_id,
+                "action": "quick_order_execute",
+                "payload": payload,
+                "stream": True,
+            },
+            stream=True,
+            headers=headers,
+        )
+        response.raise_for_status()
+        response.encoding = "utf-8"
+        yield from _iter_sse_events(response)
+    except Exception as e:
+        yield {"type": "error", "content": str(e)}
+
+
+def _iter_sse_events(response) -> Generator[dict, None, None]:
+    buffer = ""
+    first_chunk = True
+
+    for chunk in response.iter_content(chunk_size=1, decode_unicode=True):
+        if not chunk:
+            continue
+
+        buffer += chunk
+
+        # process full SSE event
+        while "\n\n" in buffer:
+            event, buffer = buffer.split("\n\n", 1)
+
+            if not event.startswith("data: "):
+                continue
+
+            data_content = event[6:]
+
+            if data_content.strip() == "[DONE]":
+                return
+
+            try:
+                data = json.loads(data_content)
+            except json.JSONDecodeError:
+                continue
+
+            # First chunk contains session info - just yield it
+            if first_chunk and data.get("stream_started"):
+                first_chunk = False
+                yield {"type": "session_info", "session_id": data.get("session_id")}
+                continue
+
+            yield data
