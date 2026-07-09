@@ -504,6 +504,8 @@ class PreOrderMeta(BaseModel):
     goodsNo: str | None = None
     goods_no: str | None = None
     productName: str | None = None
+    tireSize: str | None = None
+    tire_size: str | None = None
     quantity: int | None = None
     ordQty: int | None = None
     ord_qty: int | None = None
