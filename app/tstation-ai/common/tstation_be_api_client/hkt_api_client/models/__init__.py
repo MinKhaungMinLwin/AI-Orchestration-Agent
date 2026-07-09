@@ -76,6 +76,8 @@ from .maintenance_history_item import MaintenanceHistoryItem
 from .maintenance_history_response import MaintenanceHistoryResponse
 from .member_car_info import MemberCarInfo
 from .member_car_list_response import MemberCarListResponse
+from .member_relief_service_item import MemberReliefServiceItem
+from .member_relief_service_list_response import MemberReliefServiceListResponse
 from .member_warranty_item import MemberWarrantyItem
 from .member_warranty_list_response import MemberWarrantyListResponse
 from .message_create import MessageCreate
@@ -209,6 +211,8 @@ __all__ = (
     "MaintenanceHistoryResponse",
     "MemberCarInfo",
     "MemberCarListResponse",
+    "MemberReliefServiceItem",
+    "MemberReliefServiceListResponse",
     "MemberWarrantyItem",
     "MemberWarrantyListResponse",
     "MessageCreate",

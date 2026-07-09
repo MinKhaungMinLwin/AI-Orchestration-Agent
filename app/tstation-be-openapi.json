@@ -3474,6 +3474,33 @@
                 ]
             }
         },
+        "/api/member/relief-services": {
+            "get": {
+                "tags": [
+                    "Warranty AF - 워런티 조회"
+                ],
+                "summary": "회원 안심서비스 목록 조회",
+                "description": "JWT 토큰의 회원번호(MBR_NO) 로 VW_ET_MBR_RELIEF_MAST_INFO 의 안심서비스 가입/보상 이력을 조회합니다. JOIN_DTIME 이 있는 이력만 가입일자시간 내림차순으로 반환합니다.",
+                "operationId": "get_my_relief_services_api_member_relief_services_get",
+                "responses": {
+                    "200": {
+                        "description": "Successful Response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/MemberReliefServiceListResponse"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "HTTPBearer": []
+                    }
+                ]
+            }
+        },
         "/api/installments/cards": {
             "get": {
                 "tags": [
@@ -7638,6 +7665,243 @@
                 },
                 "type": "object",
                 "title": "MemberCarListResponse"
+            },
+            "MemberReliefServiceItem": {
+                "properties": {
+                    "relief_join_seq": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Relief Join Seq",
+                        "description": "안심서비스 가입 시퀀스"
+                    },
+                    "ord_no": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Ord No",
+                        "description": "주문번호"
+                    },
+                    "mbr_no": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Mbr No",
+                        "description": "회원번호"
+                    },
+                    "car_no": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Car No",
+                        "description": "차량번호 (뷰에서 마스킹 처리될 수 있음)"
+                    },
+                    "car_model": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Car Model",
+                        "description": "차량모델"
+                    },
+                    "car_model_det": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Car Model Det",
+                        "description": "차량모델상세"
+                    },
+                    "equp_conf_dtime": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Equp Conf Dtime",
+                        "description": "정비완료시간 (YYYY-MM-DD HH24:MI:SS)"
+                    },
+                    "join_state": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Join State",
+                        "description": "안심서비스 가입상태 코드. '100'=정상 / '900'=취소 또는 거절"
+                    },
+                    "join_state_nm": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Join State Nm",
+                        "description": "안심서비스 가입상태 한글명"
+                    },
+                    "join_dtime": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Join Dtime",
+                        "description": "가입일자시간 (YYYY-MM-DD HH24:MI:SS)"
+                    },
+                    "join_cncl_reason": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Join Cncl Reason",
+                        "description": "가입 취소/거절 사유"
+                    },
+                    "relief_state": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Relief State",
+                        "description": "안심서비스 상태 코드. '100'=가입완료 / '200'=서비스만료(보상처리) / '300'=서비스만료(신규가입) / '400'=서비스만료(기간종료) / '900'=정비/결제 취소 / '910'=승인취소(고객요청) / '920'=승인취소(가입불가차량)"
+                    },
+                    "relief_state_nm": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Relief State Nm",
+                        "description": "안심서비스 상태 한글명"
+                    },
+                    "relief_svc_distance": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Relief Svc Distance",
+                        "description": "안심서비스 적용 시 주행거리"
+                    },
+                    "relief_svc_dtime": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Relief Svc Dtime",
+                        "description": "안심서비스 보상 실행 시간 (YYYY-MM-DD HH24:MI:SS)"
+                    },
+                    "relief_end_dtime": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Relief End Dtime",
+                        "description": "안심서비스 마감 시간 (YYYY-MM-DD HH24:MI:SS)"
+                    },
+                    "relief_end_reason": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Relief End Reason",
+                        "description": "안심서비스 마감 사유"
+                    },
+                    "plus_yn": {
+                        "anyOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "null"
+                            }
+                        ],
+                        "title": "Plus Yn",
+                        "description": "안심플러스 여부 Y/N"
+                    }
+                },
+                "type": "object",
+                "title": "MemberReliefServiceItem",
+                "description": "회원 안심서비스 가입/보상 이력 1건 (VW_ET_MBR_RELIEF_MAST_INFO)."
+            },
+            "MemberReliefServiceListResponse": {
+                "properties": {
+                    "relief_services": {
+                        "items": {
+                            "$ref": "#/components/schemas/MemberReliefServiceItem"
+                        },
+                        "type": "array",
+                        "title": "Relief Services",
+                        "description": "회원 안심서비스 가입/보상 이력. JOIN_DTIME 내림차순."
+                    }
+                },
+                "type": "object",
+                "title": "MemberReliefServiceListResponse"
             },
             "MemberWarrantyItem": {
                 "properties": {
