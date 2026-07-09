@@ -61,16 +61,31 @@ def _tokens_enabled() -> bool:
     return bool(getattr(settings, "AI_CHAT_V3_STREAM_TOKENS", True))
 
 
-def _is_confirmed_cart_turn(decision: RouteDecision | None, slots: ConversationSlots) -> bool:
+def _patch_changes_cart_preview_slots(decision: RouteDecision, previous_slots: ConversationSlots) -> bool:
+    patch = decision.slots_patch.non_empty()
+    for key in _CART_PREVIEW_SLOT_KEYS:
+        if key not in patch:
+            continue
+        old_value = getattr(previous_slots, key, None)
+        new_value = patch[key]
+        if old_value in (None, "") or str(old_value) != str(new_value):
+            return True
+    return False
+
+
+def _is_confirmed_cart_turn(
+    decision: RouteDecision | None,
+    slots: ConversationSlots,
+    previous_slots: ConversationSlots,
+) -> bool:
     if decision is None:
         return False
-    patch = decision.slots_patch.non_empty()
     cart_confirmation_intent = _CART_CONFIRMATION_INTENT in decision.intents
     ready_cart_reaffirmed = (
         _ADD_TO_CART_INTENT in decision.intents
         and slots.goods_no
         and slots.ord_qty
-        and not any(key in patch for key in _CART_PREVIEW_SLOT_KEYS)
+        and not _patch_changes_cart_preview_slots(decision, previous_slots)
     )
     return bool(
         (cart_confirmation_intent or ready_cart_reaffirmed)
@@ -342,12 +357,13 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             yield event
         return
 
+    slots_before_patch = slots
     slots = apply_patch(slots, decision.slots_patch if decision else None)
     slots = _normalize_add_to_cart_slots(decision, slots)
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
 
-    if _is_confirmed_cart_turn(decision, slots):
+    if _is_confirmed_cart_turn(decision, slots, slots_before_patch):
         tool = next((candidate for candidate in tools_for_domains(["TRANSACTION"]) if candidate.name == _SAVE_TO_CART_TOOL), None)
         args = _cart_tool_args(slots)
         display = _tool_display_names().get(_SAVE_TO_CART_TOOL, _SAVE_TO_CART_TOOL)

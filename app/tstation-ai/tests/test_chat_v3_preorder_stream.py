@@ -79,6 +79,18 @@ def test_reaffirmed_add_to_cart_stream_executes_save_to_cart_tool(monkeypatch: p
     asyncio.run(_assert_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch, intent="add_to_cart"))
 
 
+def test_reaffirmed_add_to_cart_with_same_quantity_executes_save_to_cart_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asyncio.run(
+        _assert_confirmed_cart_stream_executes_save_to_cart_tool(
+            monkeypatch,
+            intent="add_to_cart",
+            slots_patch=SlotsPatch(ord_qty=4),
+        )
+    )
+
+
 def test_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch))
 
@@ -159,6 +171,7 @@ async def _assert_confirmed_cart_stream_executes_save_to_cart_tool(
     monkeypatch: pytest.MonkeyPatch,
     *,
     intent: str = "cart_confirmation",
+    slots_patch: SlotsPatch | None = None,
 ) -> None:
     slots = ConversationSlots(
         goods_no="G0001",
@@ -168,6 +181,7 @@ async def _assert_confirmed_cart_stream_executes_save_to_cart_tool(
     decision = RouteDecision(
         domain=Domain.TRANSACTION,
         intents=[intent],
+        slots_patch=slots_patch or SlotsPatch(),
     )
     saved_slots = []
     persisted_tool_calls = []
