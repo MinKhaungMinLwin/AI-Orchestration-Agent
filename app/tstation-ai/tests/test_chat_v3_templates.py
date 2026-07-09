@@ -215,6 +215,14 @@ class _FakeShortProductRouterLLM:
         return _wrap_relevant(_FakeShortProductStructuredLLM())
 
 
+class _PoisonRouterLLM:
+    """Fails loudly if the LLM is ever reached — used to prove the deterministic
+    product path never calls get_router_llm() when rows carry a goods_no."""
+
+    def with_structured_output(self, model, method):
+        raise AssertionError("get_router_llm() should not be called for the deterministic product path")
+
+
 def test_plain_store_search_does_not_emit_location_template(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
     tool_output = {
@@ -531,6 +539,68 @@ def test_product_template_rebuilds_card_count_from_tool_rows(monkeypatch):
     assert event["data"]["products"][0]["titleProductName"] == "상품1"
     assert event["data"]["products"][5]["titleProductName"] == "상품6"
     assert event["data"]["metadata"] == [{"goodsId": f"G{i:04d}"} for i in range(1, 7)]
+
+
+def test_product_template_builds_without_llm_when_rows_have_goods_no(monkeypatch):
+    """Happy path: rows carry a goods_no, so build_product_data_event() must never
+    reach get_router_llm() — the deterministic row->field mapping owns this case."""
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _PoisonRouterLLM())
+    tool_output = {
+        "status": "success",
+        "items": [
+            {
+                "goods_no": "G0001",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+                "brand_nm": "HANKOOK",
+                "extra_fvr_sale_prc": 180000,
+                "sale_prc": 200000,
+                "rating_avg": 4.5,
+                "total_qty": 7,
+            }
+        ],
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "추천 상품입니다.",
+            [{"name": "get_products_recommendations_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["data"]["products"][0]["titleProductName"] == "벤투스 S2 AS"
+    assert event["data"]["metadata"] == [{"goodsId": "G0001"}]
+
+
+def test_product_template_falls_back_to_llm_when_rows_have_no_goods_no(monkeypatch):
+    """Parse-failure fallback: rows exist but none carry a resolvable goods_no, so
+    build_product_data_event() must fall back to the LLM extraction+relevance call —
+    the one remaining LLM usage for this template."""
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    tool_output = {
+        "status": "success",
+        "items": [
+            {
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+            }
+        ],
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "추천 상품입니다.",
+            [{"name": "get_products_recommendations_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    # Comes from _FakeProductStructuredLLM's fixed payload — proves the LLM fallback ran.
+    assert event["data"]["metadata"] == [{"goodsId": "G0001"}]
+    assert event["data"]["products"][0]["title"] == "벤투스 S2 AS 245/45R19"
 
 
 def test_location_answer_uses_fixed_store_info_labels():
@@ -992,6 +1062,23 @@ def test_preorder_fallback_skips_irrelevant_followup_even_with_ready_slots():
     assert event is None
 
 
+def test_preorder_fallback_skips_ready_add_to_cart_flow():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        ord_qty=4,
+        pending_intent="cart",
+        goal_type="add_to_cart",
+    )
+
+    event = templates.build_preorder_fallback(
+        "장바구니에 담아줘",
+        slots,
+        RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"], slots_patch={"ord_qty": 4}),
+    )
+
+    assert event is None
+
+
 def test_transaction_preview_source_maps_to_location_not_preorder():
     source = templates._pick_source(  # noqa: SLF001
         [{"name": "transaction_store_preview_tool", "args": {}, "output": json.dumps({"data": {"stores": [{}]}})}]
@@ -1141,7 +1228,14 @@ def test_transfer_to_qna_tool_defaults_missing_consultation_category_to_etc(monk
 # ── Issue 3: conditional product cards (needs_selection_card) ──────────────────
 
 _PRODUCT_ROWS = json.dumps(
-    {"data": {"items": [{"goods_no": "G0001", "goods_nm": "벤투스 S2 AS"}]}},
+    {
+        "data": {
+            "items": [
+                {"goods_no": "G0001", "goods_nm": "벤투스 S2 AS"},
+                {"goods_no": "G0002", "goods_nm": "벤투스 S1 evo3"},
+            ]
+        }
+    },
     ensure_ascii=False,
 )
 
