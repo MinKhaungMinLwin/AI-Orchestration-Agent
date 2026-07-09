@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.common.tstation_be_client import set_tstation_origin_host
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
 from services.tstation.policies.turn_contract import TurnContract
 
@@ -81,6 +82,30 @@ def test_legacy_policy_url_ctas_are_registered_for_v3_normalization() -> None:
         assert chip["url"] == expected_url
         assert chip["cta_id"] == expected_cta_id
         assert chip["expected_behavior"] == "open_url"
+
+
+def test_warranty_cta_uses_verified_pc_and_mobile_paths() -> None:
+    assert CTAUrls.WARRANTY_MAIN == "https://www.tstation.com/mypage/tstation/warranty/main"
+
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": "나의 워런티에서 확인해 주세요.",
+            "quickReplies": [
+                {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
+            ],
+        },
+    }
+
+    try:
+        set_tstation_origin_host("m.tstation.com")
+        normalize_quickreply_ctas(event)
+    finally:
+        set_tstation_origin_host(None)
+
+    assert event["data"]["quickReplies"][0]["url"] == "https://m.tstation.com/mypage/tstation/warranty"
 
 
 def test_url_cta_removes_duplicate_markdown_link_from_assistant_response() -> None:

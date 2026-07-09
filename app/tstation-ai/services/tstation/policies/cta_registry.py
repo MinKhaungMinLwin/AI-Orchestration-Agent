@@ -7,7 +7,7 @@ import re
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
-from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.common.cta_urls import CTAUrls, rebase_tstation_url_to_origin
 
 
 @dataclass(frozen=True)
@@ -594,11 +594,14 @@ def _has_preannotated_action(chip: Mapping[str, Any]) -> bool:
 
 
 def _strip_duplicate_cta_links_from_answer(answer: str, chips: list[Any]) -> str:
-    cta_url_paths = {
-        _url_path(str(chip.get("url") or ""))
-        for chip in chips
-        if isinstance(chip, Mapping) and str(chip.get("url") or "").strip()
-    }
+    cta_url_paths: set[str] = set()
+    for chip in chips:
+        if not isinstance(chip, Mapping):
+            continue
+        url_path = _url_path(str(chip.get("url") or ""))
+        if not url_path:
+            continue
+        cta_url_paths.add(url_path)
     cta_url_paths.discard("")
     if not answer or not cta_url_paths:
         return answer
@@ -726,6 +729,24 @@ def normalize_quickreply_ctas(
         if sanitized_response != assistant_response:
             data["assistantResponse"] = sanitized_response
             changed = True
+    rebased_normalized: list[Any] = []
+    rebased_changed = False
+    for chip in normalized:
+        if not isinstance(chip, dict):
+            rebased_normalized.append(chip)
+            continue
+        next_chip = dict(chip)
+        url = str(next_chip.get("url") or "").strip()
+        rebased_url = rebase_tstation_url_to_origin(url)
+        if url and rebased_url != url:
+            next_chip["url"] = rebased_url
+            rebased_changed = True
+        rebased_normalized.append(next_chip)
+    if rebased_changed:
+        normalized = rebased_normalized
+        changed = True
+    if changed:
+        data["quickReplies"] = normalized
     if audit:
         metadata = data.get("metadata")
         if not isinstance(metadata, dict):
