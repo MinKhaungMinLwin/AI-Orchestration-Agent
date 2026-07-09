@@ -20,6 +20,7 @@ from services.tstation.llm_first.templates import (
     build_product_template,
     build_voucher_template,
 )
+from services.tstation.agents.base_agent import TOOL_DISPLAY_NAMES
 from services.tstation.llm_first.adapters import legacy
 from services.tstation.llm_first.tooling.registry import invoke_tool
 
@@ -558,18 +559,32 @@ class AFExecutor:
         *,
         allow_side_effect: bool = False,
     ) -> Any:
+        display_name = TOOL_DISPLAY_NAMES.get(tool_name, tool_name)
         try:
             result = await asyncio.to_thread(invoke_tool, tool_name, args, af=af, allow_side_effect=allow_side_effect)
-            bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
+            bundle.tool_calls.append(
+                ToolCallRecord(af=af, tool_name=tool_name, display_name=display_name, args=args, result=result)
+            )
             bundle.facts[tool_name] = result
             return result
         except PermissionError as exc:
-            bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, blocked=True, reason=str(exc)))
+            bundle.tool_calls.append(
+                ToolCallRecord(
+                    af=af,
+                    tool_name=tool_name,
+                    display_name=display_name,
+                    args=args,
+                    blocked=True,
+                    reason=str(exc),
+                )
+            )
             return None
         except Exception as exc:
             logger.warning("[LLM_FIRST_EXECUTOR] tool failed: %s", tool_name, exc_info=True)
             result = {"status": "error", "message": str(exc)}
-            bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
+            bundle.tool_calls.append(
+                ToolCallRecord(af=af, tool_name=tool_name, display_name=display_name, args=args, result=result)
+            )
             return result
 
     async def _resolve_product(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> tuple[ConversationState, str | None]:

@@ -61,6 +61,7 @@ from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
 from services.tstation.llm_first import schedule_validation as schedule_validation_module  # noqa: E402
 from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules  # noqa: E402
 from services.tstation.llm_first.tools import invoke_tool  # noqa: E402
+from services.tstation.agents.base_agent import TOOL_DISPLAY_NAMES  # noqa: E402
 from services.tstation.agents.templates.schemas import DatepickDataEvent, ListCarDataEvent, LocationDataEvent, PreOrderDataEvent, ProductDataEvent, VoucherDataEvent  # noqa: E402
 
 
@@ -649,7 +650,15 @@ class FakeExecutor(AFExecutor):
             return result
         else:
             result = {"status": "success", "data": []}
-        bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
+        bundle.tool_calls.append(
+            ToolCallRecord(
+                af=af,
+                tool_name=tool_name,
+                display_name=TOOL_DISPLAY_NAMES.get(tool_name, tool_name),
+                args=args,
+                result=result,
+            )
+        )
         bundle.facts[tool_name] = result
         return result
 
@@ -879,6 +888,10 @@ def test_tool_registry_blocks_wrong_af() -> None:
 def test_tool_registry_validates_required_args() -> None:
     with pytest.raises(ValueError):
         invoke_tool("get_final_price_tool", {}, af=AgentFlow.PRICE)
+
+
+def test_llm_first_relief_service_tool_display_name_uses_common_label() -> None:
+    assert TOOL_DISPLAY_NAMES["get_my_relief_services_tool"] == "안심서비스 내역 조회 중..."
 
 
 def test_runtime_recommendation_stream_emits_product_and_done() -> None:
@@ -2637,6 +2650,7 @@ def test_my_relief_services_uses_relief_service_tool_not_warranty_tool() -> None
     assert metadata["planner"]["selected_afs"][0]["af"] == "FAQAF"
     assert metadata["planner"]["selected_afs"][0]["known_inputs"]["account_lookup"] == "relief_services"
     assert metadata["tool_calls"][0]["tool_name"] == "get_my_relief_services_tool"
+    assert metadata["tool_calls"][0]["display_name"] == "안심서비스 내역 조회 중..."
 
 
 def test_product_compatibility_uses_my_cars_tool_and_listcar_template() -> None:

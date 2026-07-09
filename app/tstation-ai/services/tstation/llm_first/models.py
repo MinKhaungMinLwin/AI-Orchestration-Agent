@@ -181,6 +181,7 @@ class ConversationState(BaseModel):
 class ToolCallRecord(BaseModel):
     af: AgentFlow
     tool_name: str
+    display_name: str | None = None
     args: dict[str, Any] = Field(default_factory=dict)
     result: Any = None
     blocked: bool = False
