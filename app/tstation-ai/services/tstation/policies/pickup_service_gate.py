@@ -36,6 +36,19 @@ _PICKUP_CHEAP_TRIGGER_RE = re.compile(
     r"집\s*앞|집앞|데려다|탁송|픽업\s*기사|픽업기사|기사",
     re.IGNORECASE,
 )
+_VISIT_CONSTRAINT_RE = re.compile(
+    r"(?:매장|장착점|지점|방문|직접).{0,16}(?:갈|가기|방문).{0,16}(?:시간|어렵|힘들|못|곤란)|"
+    r"(?:시간|어렵|힘들|못|곤란).{0,16}(?:매장|장착점|지점|방문|직접).{0,16}(?:갈|가기|방문)|"
+    r"(?:차|차량).{0,12}(?:맡기|두고|맡겨|두기).{0,16}(?:어렵|힘들|싫|못|않고|없이)",
+    re.IGNORECASE,
+)
+_TIRE_INSTALL_NEED_RE = re.compile(r"타이어|교체|장착|갈아|바꾸", re.IGNORECASE)
+_DIRECT_HOME_OR_SELF_INSTALL_RE = re.compile(
+    r"(?:타이어|상품).{0,20}(?:집|자택|택배|주소지).{0,20}(?:배송|수령|받)|"
+    r"(?:집|자택|택배|주소지).{0,20}(?:타이어|상품).{0,20}(?:배송|수령|받)|"
+    r"(?:내가|직접|셀프|자가).{0,12}(?:갈아|교체|장착|끼워)",
+    re.IGNORECASE,
+)
 _PICKUP_STATUS_RE = re.compile(
     r"(?:픽업\s*기사|픽업기사|기사님|기사).{0,12}(?:어디|위치|도착|언제|오고|오는|진행|상태)"
     r"|(?:어디|위치|도착|언제|오고|오는|진행|상태).{0,12}(?:픽업\s*기사|픽업기사|기사님|기사)",
@@ -57,6 +70,16 @@ def deterministic_pickup_service_gate_decision(user_text: str) -> PickupServiceG
     text = (user_text or "").strip()
     if not text:
         return None
+    if (
+        _VISIT_CONSTRAINT_RE.search(text)
+        and _TIRE_INSTALL_NEED_RE.search(text)
+        and not _DIRECT_HOME_OR_SELF_INSTALL_RE.search(text)
+    ):
+        return PickupServiceGateDecision(
+            intent="pickup_request_context",
+            is_pickup=True,
+            reason="Customer has store-visit constraint and tire installation need.",
+        )
     if not _PICKUP_CHEAP_TRIGGER_RE.search(text):
         return PickupServiceGateDecision(
             intent="none",
@@ -150,4 +173,3 @@ def decide_pickup_service_gate(
     except Exception as exc:
         logger.warning("[PICKUP_SERVICE_GATE] LLM decision failed; returning none: %s", exc)
         return PickupServiceGateDecision(intent="none", is_pickup=False, reason="LLM gate failed.")
-

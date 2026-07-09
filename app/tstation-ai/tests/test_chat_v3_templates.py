@@ -566,10 +566,12 @@ def test_get_events_tool_builds_deterministic_quickreply_without_new_badges():
     data = event["data"]
     assistant = data["assistantResponse"]
     assert "현재 진행 중인 이벤트는 총 2개입니다." in assistant
+    assert "\n\n진행 중인 이벤트\n" in assistant
     assert "1. **2026 안심서비스 퀴즈 이벤트**" in assistant
     assert "2. **새롭게 바뀐 리뷰이벤트!**" in assistant
     assert "기간: 2024-09-05 ~ 2026-12-31" in assistant
     assert "신규 이벤트" not in assistant
+    assert "\n\n원하시면 특정 이벤트의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요." in assistant
     assert assistant.endswith("원하시면 특정 이벤트의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요.")
     assert data["quickReplies"][0]["label"] == "진행 중인 이벤트"
 
@@ -602,10 +604,12 @@ def test_get_deals_tool_builds_same_deterministic_quickreply_format():
     data = event["data"]
     assistant = data["assistantResponse"]
     assert "현재 진행 중인 기획전은 총 1개입니다." in assistant
+    assert "\n\n진행 중인 기획전\n" in assistant
     assert "1. **여름맞이 기획전**" in assistant
     assert "기간: 2026-06-01 ~ 2026-07-15" in assistant
     assert "신규 이벤트" not in assistant
     assert "신규 기획전" not in assistant
+    assert "\n\n원하시면 특정 기획전의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요." in assistant
     assert data["quickReplies"] == [
         {"label": "진행 중인 기획전", "url": "https://www.tstation.com/promotion/deal-list", "domain": "DISCOVERY"}
     ]
@@ -632,6 +636,10 @@ def test_events_and_deals_emit_both_ctas():
     event = templates.build_current_events_quickreply_event(tool_calls)
 
     assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "\n\n진행 중인 이벤트\n" in assistant
+    assert "\n\n진행 중인 기획전\n" in assistant
+    assert "\n\n원하시면 특정 이벤트나 기획전의 대상 상품과 적용 가능한 혜택도 확인해드릴게요." in assistant
     assert [chip["label"] for chip in event["data"]["quickReplies"]] == ["진행 중인 이벤트", "진행 중인 기획전"]
 
 

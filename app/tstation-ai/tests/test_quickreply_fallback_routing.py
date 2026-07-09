@@ -2085,6 +2085,12 @@ def test_pickup_service_gate_classifies_required_intents() -> None:
         == "pickup_request_context"
     )
     assert deterministic_pickup_service_gate_decision("픽업 기사 어디쯤이야?").intent == "pickup_status"
+    assert (
+        deterministic_pickup_service_gate_decision(
+            "직접 매장에 갈 시간이 없는데 차량을 맡기지 않고 교체할 수 있는 서비스가 있어?"
+        ).intent
+        == "pickup_request_context"
+    )
 
     generic = deterministic_pickup_service_gate_decision("신청 방법 알려줘")
     assert generic is not None
@@ -2103,6 +2109,15 @@ def test_pickup_service_guard_handles_availability_question() -> None:
 
 def test_pickup_service_guard_handles_pickup_and_delivery_request() -> None:
     event = _pickup_service_guard_event("시간이 없어서 회사로 차 가지러 왔다가 타이어 교체하고 집앞까지 데려다 줄 수 있을까?")
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "고객 차량을 픽업해 타이어를 교체한 뒤 다시 인도" in event["data"]["assistantResponse"]
+    assert event["data"]["quickReplies"][0]["label"] == "픽업서비스 신청"
+
+
+def test_pickup_service_guard_handles_visit_constraint_without_pickup_keyword() -> None:
+    event = _pickup_service_guard_event("직접 매장에 갈 시간이 없는데 차량을 맡기지 않고 교체할 수 있는 서비스가 있어?")
 
     assert event is not None
     assert event["template"] == "quickReply"
@@ -2161,6 +2176,10 @@ def test_direct_tire_delivery_guard_blocks_casual_home_delivery_request() -> Non
 
     assert event is not None
     assert "지원하지 않아요" in event["data"]["assistantResponse"]
+
+
+def test_direct_tire_delivery_guard_does_not_hijack_external_tire_install_question() -> None:
+    assert _direct_tire_delivery_guard_event("온라인에서 산 타이어를 가져가면 장착만 해주는것도 가능해?") is None
 
 
 def test_direct_tire_delivery_guard_blocks_order_context_home_delivery_request() -> None:

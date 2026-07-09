@@ -45,6 +45,12 @@ _DIRECT_HOME_DELIVERY_RE = re.compile(
     r"(?:내가|직접|셀프|자가).{0,12}(?:갈아|교체|장착|끼워)",
     re.IGNORECASE,
 )
+_EXTERNAL_TIRE_INSTALL_RE = re.compile(
+    r"인터넷(?:에서)?\s*(?:산|구매한)|온라인(?:에서)?\s*(?:산|구매한)|외부\s*구매|사제\s*타이어|"
+    r"(?:타이어|상품).{0,16}(?:가져가|들고\s*가|반입).{0,16}(?:장착|교체|공임)|"
+    r"(?:가져가|들고\s*가|반입).{0,16}(?:장착|교체|공임)",
+    re.IGNORECASE,
+)
 _SHIPPING_FEE_REGION_RE = re.compile(
     r"(?:제주(?:도|특별자치도)?|서귀포(?:시)?|도서산간).{0,24}(?:배송비|배송\s*비|추가|비용|더\s*들)|"
     r"(?:배송비|배송\s*비|추가\s*배송비|추가\s*비용|더\s*들).{0,24}(?:제주(?:도|특별자치도)?|서귀포(?:시)?|도서산간)",
@@ -107,7 +113,11 @@ def decide_delivery_policy_gate(
             reason="No delivery-policy trigger.",
         )
 
-    if _DIRECT_HOME_DELIVERY_RE.search(text) and not _SHIPPING_FEE_REGION_RE.search(text):
+    if (
+        _DIRECT_HOME_DELIVERY_RE.search(text)
+        and not _SHIPPING_FEE_REGION_RE.search(text)
+        and not _EXTERNAL_TIRE_INSTALL_RE.search(text)
+    ):
         return DeliveryPolicyGateDecision(
             intent=DeliveryPolicyIntent.DIRECT_HOME_DELIVERY,
             confidence=0.95,

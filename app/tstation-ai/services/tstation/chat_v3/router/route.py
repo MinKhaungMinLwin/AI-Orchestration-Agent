@@ -16,6 +16,7 @@ from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.router import ROUTER_PROMPT
 from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision
 from services.tstation.policies.delivery_policy_gate import DeliveryPolicyIntent, decide_delivery_policy_gate
+from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +180,29 @@ def _apply_delivery_policy_guard(decision: RouteDecision, request: TStationChatR
     return decision
 
 
+def _apply_pickup_service_policy(decision: RouteDecision, request: TStationChatRequest) -> RouteDecision:
+    pickup = decide_pickup_service_gate(
+        user_text=_last_user_text(request),
+        recent_context=_recent_context_before_last_user(request),
+    )
+    if not pickup.is_pickup or pickup.intent == "none":
+        return decision
+    policy_key = "pickup_status" if pickup.intent == "pickup_status" else "pickup_info"
+    if policy_key not in decision.intents:
+        logger.info(
+            "[CHAT_V3] applied pickup static FAQ policy=%s over router guard=%s reason=%s",
+            policy_key,
+            decision.guard_id.value,
+            pickup.reason,
+        )
+        decision.intents.insert(0, policy_key)
+    decision.guard_id = GuardId.NONE
+    decision.domain = Domain.SUPPORT
+    decision.extra_domains = []
+    decision.needs_selection_card = False
+    return decision
+
+
 def _move_static_faq_guard_to_intent(decision: RouteDecision) -> RouteDecision:
     policy_key = _STATIC_FAQ_GUARD_INTENTS.get(decision.guard_id)
     if policy_key is None:
@@ -224,6 +248,7 @@ async def route_request(request: TStationChatRequest, trace_config: dict | None 
         decision = _clear_in_range_reservation_date_guard(decision, request)
         decision = _move_static_faq_guard_to_intent(decision)
         decision = _apply_runflat_mixed_install_policy(decision, request)
+        decision = _apply_pickup_service_policy(decision, request)
         decision = _apply_delivery_policy_guard(decision, request)
         logger.info(
             "[CHAT_V3] route guard=%s domains=%s intents=%s slots=%s",

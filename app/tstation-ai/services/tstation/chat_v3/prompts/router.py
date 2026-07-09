@@ -46,8 +46,13 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   vehicle_type_compatibility가 아니라 runflat_mixed_install_policy 입니다.
 - runflat_mixed_install_policy: 기존 런플랫 타이어 차량에서 일반 타이어로 교체/혼용해도 되는지, 앞바퀴/뒷바퀴 2짝만 일반 타이어로 바꿔도 되는지 묻는 문의
 - pickup_status: 신청한 픽업서비스의 기사 위치/도착 시간/진행 상태 문의
-- pickup_info: 스마트픽업 서비스가 무엇인지/신청 방법/가능 여부 문의
-- direct_home_delivery: 타이어를 집/자택/주소지로 택배 수령하거나 직접/셀프 장착하려는 문의
+- pickup_info: 스마트픽업 서비스가 무엇인지/신청 방법/가능 여부 문의. 사용자가 픽업이라는 단어를 쓰지 않아도
+  "매장에 갈 시간이 없다", "방문하기 어렵다", "차량을 맡기지 않고 교체할 방법"처럼 차량 수거/인도형 교체 서비스를
+  찾는 니즈이면 pickup_info 입니다.
+- direct_home_delivery: 타이어를 집/자택/주소지로 택배 수령하거나 직접/셀프 장착하려는 문의. 매장 방문이 어려워
+  차량을 가져가 교체해 주는 서비스를 묻는 경우는 direct_home_delivery가 아니라 pickup_info 입니다.
+- external_tire_install_policy: 인터넷/온라인/외부에서 산 타이어를 매장에 가져가 장착만 가능한지, 공임만 받고
+  장착 가능한지 묻는 문의. 이 경우 direct_home_delivery가 아닙니다.
 - shipping_fee_region: 제주/서귀포/도서산간 배송비·추가 배송비 문의
 - online_store_price_policy: 온라인 판매가와 매장 현장 판매가가 같은지/다른지 묻는 문의
 - regional_price_policy: 지역·매장·배송 조건에 따라 상품 최종가가 같은지/다른지 묻는 문의

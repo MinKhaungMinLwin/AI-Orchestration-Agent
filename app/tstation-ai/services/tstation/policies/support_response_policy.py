@@ -88,7 +88,7 @@ _WORK_STARTED_RE = re.compile(
     re.IGNORECASE,
 )
 _EXTERNAL_TIRE_INSTALL_POLICY_RE = re.compile(
-    r"인터넷(?:에서)?\s*(?:산|구매한)|외부\s*구매|사제\s*타이어|"
+    r"인터넷(?:에서)?\s*(?:산|구매한)|온라인(?:에서)?\s*(?:산|구매한)|외부\s*구매|사제\s*타이어|"
     r"가져가(?:서)?\s*장착|반입\s*장착|들고\s*가(?:서)?\s*장착|"
     r"공임만\s*받고\s*장착|타이어만\s*장착|타이어만\s*(?:가져가|들고가)",
     re.IGNORECASE,

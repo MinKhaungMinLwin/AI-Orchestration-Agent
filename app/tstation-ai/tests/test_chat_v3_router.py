@@ -51,6 +51,7 @@ from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from services.tstation.chat_v3.router.guards import get_guard  # noqa: E402
 from services.tstation.chat_v3.router.route import (  # noqa: E402
     _apply_delivery_policy_guard,
+    _apply_pickup_service_policy,
     _apply_runflat_mixed_install_policy,
     _clear_in_range_reservation_date_guard,
     _move_static_faq_guard_to_intent,
@@ -131,6 +132,25 @@ def test_direct_home_delivery_policy_overrides_v3_router_guard() -> None:
     assert result.guard_id == GuardId.NONE
     assert result.domain == Domain.SUPPORT
     assert result.intents[0] == "direct_home_delivery"
+
+
+def test_pickup_visit_constraint_policy_overrides_v3_router_guard() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.TRANSACTION,
+        intents=["store_search"],
+        needs_selection_card=True,
+    )
+    request = _request(
+        messages=[{"role": "user", "content": "직접 매장에 갈 시간이 없는데 차량을 맡기지 않고 교체할 수 있는 서비스가 있어?"}]
+    )
+
+    result = _apply_pickup_service_policy(decision, request)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.intents[0] == "pickup_info"
+    assert result.needs_selection_card is False
 
 
 def test_static_faq_router_guard_is_moved_to_support_intent() -> None:

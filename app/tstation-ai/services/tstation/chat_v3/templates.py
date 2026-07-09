@@ -710,6 +710,13 @@ def _benefit_quick_replies(*, has_events: bool, has_deals: bool) -> list[dict[st
     return chips or [{"label": "진행 중인 이벤트", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"}]
 
 
+def _format_benefit_answer(lines: list[str]) -> str:
+    text = "\n".join(line.rstrip() for line in lines).replace("\r\n", "\n").replace("\r", "\n")
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    return text.strip()
+
+
 def build_current_events_quickreply_event(tool_calls: list[dict]) -> dict | None:
     event_raw = _latest_tool_output(tool_calls, "get_events_tool")
     deal_raw = _latest_tool_output(tool_calls, "get_deals_tool")
@@ -731,7 +738,8 @@ def build_current_events_quickreply_event(tool_calls: list[dict]) -> dict | None
                     f"현재 진행 중인 이벤트는 총 {_benefit_total(event_raw, event_rows)}개, "
                     f"기획전은 총 {_benefit_total(deal_raw, deal_rows)}개입니다."
                 ),
-                "이벤트",
+                "",
+                "진행 중인 이벤트",
             ]
             _append_benefit_rows(
                 lines,
@@ -740,7 +748,7 @@ def build_current_events_quickreply_event(tool_calls: list[dict]) -> dict | None
                 start_keys=("evt_strt_dtime", "start_date", "startDate"),
                 end_keys=("evt_end_dtime", "end_date", "endDate"),
             )
-            lines.append("기획전")
+            lines.extend(["", "진행 중인 기획전"])
             _append_benefit_rows(
                 lines,
                 deal_rows,
@@ -748,9 +756,9 @@ def build_current_events_quickreply_event(tool_calls: list[dict]) -> dict | None
                 start_keys=("deal_strt_dtime", "start_date", "startDate"),
                 end_keys=("deal_end_dtime", "end_date", "endDate"),
             )
-            lines.append("원하시면 특정 이벤트나 기획전의 대상 상품과 적용 가능한 혜택도 확인해드릴게요.")
+            lines.extend(["", "원하시면 특정 이벤트나 기획전의 대상 상품과 적용 가능한 혜택도 확인해드릴게요."])
         elif deal_rows:
-            lines = [f"현재 진행 중인 기획전은 총 {_benefit_total(deal_raw, deal_rows)}개입니다."]
+            lines = [f"현재 진행 중인 기획전은 총 {_benefit_total(deal_raw, deal_rows)}개입니다.", "", "진행 중인 기획전"]
             _append_benefit_rows(
                 lines,
                 deal_rows,
@@ -758,9 +766,9 @@ def build_current_events_quickreply_event(tool_calls: list[dict]) -> dict | None
                 start_keys=("deal_strt_dtime", "start_date", "startDate"),
                 end_keys=("deal_end_dtime", "end_date", "endDate"),
             )
-            lines.append("원하시면 특정 기획전의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요.")
+            lines.extend(["", "원하시면 특정 기획전의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요."])
         else:
-            lines = [f"현재 진행 중인 이벤트는 총 {_benefit_total(event_raw, event_rows)}개입니다."]
+            lines = [f"현재 진행 중인 이벤트는 총 {_benefit_total(event_raw, event_rows)}개입니다.", "", "진행 중인 이벤트"]
             _append_benefit_rows(
                 lines,
                 event_rows,
@@ -768,13 +776,13 @@ def build_current_events_quickreply_event(tool_calls: list[dict]) -> dict | None
                 start_keys=("evt_strt_dtime", "start_date", "startDate"),
                 end_keys=("evt_end_dtime", "end_date", "endDate"),
             )
-            lines.append("원하시면 특정 이벤트의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요.")
-        assistant_response = "\n".join(lines)
+            lines.extend(["", "원하시면 특정 이벤트의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요."])
+        assistant_response = _format_benefit_answer(lines)
     return {
         "type": "data",
         "template": "quickReply",
         "data": {
-            "assistantResponse": compact_answer_spacing(assistant_response),
+            "assistantResponse": assistant_response,
             "quickReplies": _benefit_quick_replies(has_events=bool(event_raw), has_deals=bool(deal_raw)),
             "predictedDomains": ["DISCOVERY"],
             "metadata": {
