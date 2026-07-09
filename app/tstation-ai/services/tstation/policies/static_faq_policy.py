@@ -70,6 +70,18 @@ STATIC_FAQ_POLICY_DATABASE: dict[str, StaticFaqPolicy] = {
         ],
         "predicted_domains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
     },
+    "late_night_store_hours_policy": {
+        "answer": (
+            "티스테이션 공식 영업시간은 평일 기준 09:00 ~ 19:00입니다.\n\n"
+            "다만 매장별 영업시간은 상이할 수 있어, 심야 영업이나 19시 이후 방문 가능 여부는 "
+            "이용하시려는 매장의 상세 영업시간을 방문 전 확인해 주세요."
+        ),
+        "quick_replies": [
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ],
+        "predicted_domains": ["SUPPORT", "TRANSACTION"],
+    },
     "direct_home_delivery": {
         "answer": (
             "현재 티스테이션닷컴에서는 타이어를 집으로 배송받아 직접 장착하는 방식은 지원하지 않아요. "

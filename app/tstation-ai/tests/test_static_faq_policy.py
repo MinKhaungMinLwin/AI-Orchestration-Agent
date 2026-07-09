@@ -58,6 +58,7 @@ def test_static_faq_policy_database_contains_moved_router_policy_keys() -> None:
         "runflat_mixed_install_policy",
         "pickup_status",
         "pickup_info",
+        "late_night_store_hours_policy",
         "direct_home_delivery",
         "shipping_fee_region",
         "online_store_price_policy",
@@ -76,6 +77,10 @@ def test_static_faq_policy_database_contains_moved_router_policy_keys() -> None:
     assert "앞바퀴 2짝만 일반 타이어로 바꾸는 것은 권장하지 않아요" in (
         get_static_faq_policy("runflat_mixed_install_policy") or {}
     ).get("answer", "")
+    assert "평일 기준 09:00 ~ 19:00" in (get_static_faq_policy("late_night_store_hours_policy") or {}).get(
+        "answer",
+        "",
+    )
 
 
 def test_static_faq_policy_tool_returns_official_answer_by_key() -> None:
@@ -85,6 +90,14 @@ def test_static_faq_policy_tool_returns_official_answer_by_key() -> None:
     assert result["data"]["policy_key"] == "shipping_fee_region"
     assert "상품 1개당 배송비 1만 원" in result["data"]["answer"]
     assert result["data"]["quick_replies"]
+
+
+def test_static_faq_policy_tool_returns_late_night_store_hours_policy() -> None:
+    result = get_static_faq_policy_tool.invoke({"policy_key": "late_night_store_hours_policy"})
+
+    assert result["status"] == "success"
+    assert "티스테이션 공식 영업시간은 평일 기준 09:00 ~ 19:00입니다" in result["data"]["answer"]
+    assert "매장별 영업시간은 상이할 수 있어" in result["data"]["answer"]
 
 
 def test_static_faq_policy_buttons_use_legacy_cta_urls() -> None:

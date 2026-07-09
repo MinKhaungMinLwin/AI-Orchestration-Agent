@@ -49,6 +49,7 @@ def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
         "runflat_mixed_install_policy",
         "pickup_status",
         "pickup_info",
+        "late_night_store_hours_policy",
         "direct_home_delivery",
         "shipping_fee_region",
         "online_store_price_policy",
@@ -89,6 +90,16 @@ def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():
     assert "런플랫" in static_faq_section
     assert "vehicle_type_compatibility가 아니라 runflat_mixed_install_policy" in static_faq_section
     assert "앞바퀴/뒷바퀴 2짝만 일반 타이어" in static_faq_section
+
+
+def test_router_prompt_routes_late_night_store_hours_to_static_policy():
+    static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
+
+    assert "late_night_store_hours_policy" in static_faq_section
+    assert "09:00 ~ 19:00" in static_faq_section
+    assert "매장별 영업시간은 상이" in static_faq_section
+    assert "예약/장착 표현이 있어도" in static_faq_section
+    assert "get_stores_with_time_filter_tool 로 매장 목록을 확정하지 마세요" in static_faq_section
 
 
 def test_router_prompt_defines_cart_confirmation_intent():

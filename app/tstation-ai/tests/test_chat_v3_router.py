@@ -51,6 +51,7 @@ from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from services.tstation.chat_v3.router.guards import get_guard  # noqa: E402
 from services.tstation.chat_v3.router.route import (  # noqa: E402
     _apply_delivery_policy_guard,
+    _apply_late_night_store_hours_policy,
     _apply_pickup_service_policy,
     _apply_runflat_mixed_install_policy,
     _clear_in_range_reservation_date_guard,
@@ -204,6 +205,56 @@ def test_runflat_mixed_install_policy_overrides_vehicle_type_compatibility() -> 
     assert result.extra_domains == []
     assert result.needs_selection_card is False
     assert result.intents[0] == "runflat_mixed_install_policy"
+
+
+def test_late_night_store_hours_policy_overrides_time_filtered_store_search() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.TRANSACTION,
+        intents=["store_search"],
+        needs_selection_card=True,
+    )
+    request = _request(messages=[{"role": "user", "content": "서울 지역에 저녁 7시 이후 영업하는 매장 있어?"}])
+
+    result = _apply_late_night_store_hours_policy(decision, request)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.SUPPORT
+    assert result.extra_domains == []
+    assert result.needs_selection_card is False
+    assert result.intents[0] == "late_night_store_hours_policy"
+
+
+def test_late_night_store_hours_policy_also_overrides_after_19_booking_request() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.TRANSACTION,
+        intents=["store_schedule"],
+        needs_selection_card=False,
+    )
+    request = _request(messages=[{"role": "user", "content": "서울에서 19시 이후 예약 가능한 매장 찾아줘"}])
+
+    result = _apply_late_night_store_hours_policy(decision, request)
+
+    assert result.domain == Domain.SUPPORT
+    assert result.extra_domains == []
+    assert result.intents[0] == "late_night_store_hours_policy"
+    assert result.needs_selection_card is False
+
+
+def test_late_night_store_hours_policy_handles_late_install_place_request() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.TRANSACTION,
+        intents=["store_schedule"],
+        needs_selection_card=False,
+    )
+    request = _request(messages=[{"role": "user", "content": "밤늦게 장착 가능한 곳 있어?"}])
+
+    result = _apply_late_night_store_hours_policy(decision, request)
+
+    assert result.domain == Domain.SUPPORT
+    assert result.intents[0] == "late_night_store_hours_policy"
 
 
 def test_direct_home_delivery_policy_handles_short_home_delivery_question() -> None:

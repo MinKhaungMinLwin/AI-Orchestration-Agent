@@ -17,6 +17,7 @@ from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.router import ROUTER_PROMPT
 from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision
 from services.tstation.policies.delivery_policy_gate import DeliveryPolicyIntent, decide_delivery_policy_gate
+from services.tstation.policies.late_night_store_hours_gate import is_late_night_store_hours_policy_request
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
 
 logger = logging.getLogger(__name__)
@@ -244,6 +245,24 @@ def _apply_runflat_mixed_install_policy(decision: RouteDecision, request: TStati
     return decision
 
 
+def _apply_late_night_store_hours_policy(decision: RouteDecision, request: TStationChatRequest) -> RouteDecision:
+    if not is_late_night_store_hours_policy_request(_last_user_text(request)):
+        return decision
+    policy_key = "late_night_store_hours_policy"
+    if policy_key not in decision.intents:
+        logger.info(
+            "[CHAT_V3] applied late-night store hours static FAQ policy over guard=%s intents=%s",
+            decision.guard_id.value,
+            decision.intents,
+        )
+        decision.intents.insert(0, policy_key)
+    decision.guard_id = GuardId.NONE
+    decision.domain = Domain.SUPPORT
+    decision.extra_domains = []
+    decision.needs_selection_card = False
+    return decision
+
+
 async def route_request(
     request: TStationChatRequest,
     trace_config: dict | None = None,
@@ -258,6 +277,7 @@ async def route_request(
         decision = _clear_in_range_reservation_date_guard(decision, request)
         decision = _move_static_faq_guard_to_intent(decision)
         decision = _apply_runflat_mixed_install_policy(decision, request)
+        decision = _apply_late_night_store_hours_policy(decision, request)
         decision = _apply_pickup_service_policy(decision, request)
         decision = _apply_delivery_policy_guard(decision, request)
         logger.info(
