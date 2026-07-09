@@ -143,8 +143,9 @@ services:
       - TZ_OFFSET=9
       - ENV=staging
       - LOG_LEVEL=INFO
-    volumes:
-      - ingestion-data:/app/data
+    # No named volume on /app/data: it would shadow the deployed image and hide
+    # local_faq.json updates. The CI-built image bakes the latest overlay; main.py
+    # reconciles it into Qdrant (persisted in qdrant-data) on start.
     networks:
       - agent-net
     deploy:
@@ -364,7 +365,6 @@ volumes:
   redis-data:
   qdrant-data:
   rabbitmq-data:
-  ingestion-data:
   langfuse-postgres-data:
   langfuse-clickhouse-data:
   langfuse-clickhouse-logs:
