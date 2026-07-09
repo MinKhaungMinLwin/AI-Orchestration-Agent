@@ -358,6 +358,72 @@ def test_location_template_builds_directly_from_tool_items(monkeypatch):
     assert event["data"]["metadata"][0]["ui_action"]["slots"]["shop_id"] == "F09090"
 
 
+def test_listcar_template_builds_directly_from_registered_car_tool(monkeypatch):
+    def fail_if_llm_builder_is_used():
+        raise AssertionError("listCar template should be built directly from registered-car tool output")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_if_llm_builder_is_used)
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "12가3456",
+                    "car_lnc_cd": "W000001",
+                    "mbr_car_unif_no": "1001",
+                    "car_maker": "Hyundai",
+                    "car_nm": "Tucson",
+                    "car_model_det": "Tucson Diesel",
+                    "tire_size_fr": "225/55R18",
+                    "tire_size_re": "225/55R18",
+                },
+                {
+                    "car_no": "34나5678",
+                    "car_lnc_cd": "W000002",
+                    "mbr_car_unif_no": "1002",
+                    "car_maker": "Volkswagen",
+                    "car_nm": "Jetta",
+                    "car_model_det": "Jetta 2.0 TDI",
+                    "tire_size_fr": "245/45R17",
+                    "tire_size_re": "245/45R17",
+                },
+                {
+                    "car_no": "56다9012",
+                    "car_lnc_cd": "W000003",
+                    "mbr_car_unif_no": "1003",
+                    "car_maker": "Genesis",
+                    "car_nm": "GV70",
+                    "car_model_det": "GV70 AWD",
+                    "tire_size_fr": "235/55R19",
+                    "tire_size_re": "235/55R19",
+                },
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "Registered cars found. Please select one.",
+            [
+                {
+                    "name": "get_my_cars_tool",
+                    "args": {"mbr_no": "M123"},
+                    "output": json.dumps(tool_output, ensure_ascii=False),
+                }
+            ],
+            slots=ConversationSlots(pending_intent="stock", goal_type="store_with_stock"),
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "listCar"
+    assert [item["licensePlate"] for item in event["data"]["listCar"]] == ["12가3456", "34나5678", "56다9012"]
+    assert event["data"]["metadata"][0]["carLncCd"] == "W000001"
+    assert event["data"]["metadata"][0]["tireSize"] == "225/55R18"
+    assert event["data"]["metadata"][0]["ctaAction"] == "select_vehicle_candidate"
+    assert event["data"]["metadata"][0]["sourceIntent"] == "stock_store_search"
+
+
 def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
 
