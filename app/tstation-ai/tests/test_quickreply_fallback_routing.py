@@ -2867,6 +2867,13 @@ def test_competitor_counterpart_guidance_lives_in_llm_prompt_not_regex_guard() -
         assert "키너지 4S2를 검색해드릴까요?" in prompt
 
 
+def test_discovery_recommendation_prompt_locks_price_label_wording() -> None:
+    for prompt in (DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE, DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE):
+        assert "`기본가`, `혜택가`, `보유쿠폰 적용 혜택가`" in prompt
+        assert "`안내가`, `예시 혜택가`, `보유 쿠폰 적용 시 예시 혜택가`" in prompt
+        assert "임의 라벨은 절대 쓰지 않는다" in prompt
+
+
 def test_router_prompt_classifies_competitor_counterpart_as_discovery_guidance() -> None:
     for prompt in (prompt_router_multi(), prompt_router_slim()):
         assert "competitor_counterpart_guidance" in prompt

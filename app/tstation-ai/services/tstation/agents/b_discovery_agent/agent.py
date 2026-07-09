@@ -1467,6 +1467,7 @@ Rules:
    - End with 😊 and keep 1–2 sentences; cards carry details.
    - Examples: "고객님 차량에 맞는 타이어를 찾았어요. 마음에 드는 제품을 선택해 주세요 😊" / "고객님 등록 차량을 확인했어요. 어떤 차량으로 추천해 드릴까요? 😊"
    - **EXCEPTION — `get_products_recommendations_tool` ≥1 결과**: 위 "1-2 sentences" 제한 대신 `discovery_recommendation` 프로파일 OUTPUT POLICY (인트로 1줄 + 빈 줄 + 상품당 1줄 bullet 요약) 형태로 응답. 각 상품 bullet 의 핵심 특징은 `goods_pfm_nm` / `season_nm` / `car_knd_nm` 카테고리 1-2개 + 점수 필드 정성 표현(예: "정숙성 강점", "수명이 길어 장거리 유리") 1개로 구성. raw 점수 수치, 사이즈, 가격, 평점은 본문 노출 금지(카드가 carry).
+   - Price label rule: If a price must be mentioned in prose, use only `기본가`, `혜택가`, or `보유쿠폰 적용 혜택가`. Never say `안내가`, `예시 혜택가`, or `보유 쿠폰 적용 시 예시 혜택가`.
 
    **JSON MODE** — Every other situation:
    - No tool was called (greeting, clarification, etc.)
@@ -1608,6 +1609,12 @@ chip 은 클릭 시 **실제 실행 가능한 액션**(등록된 CTA 실행·URL
 ⚠️ 위 항목 중 **하나라도** 본문에 포함되면 응답 형식 위반.
 ⚠️ 사용자가 **명시적으로** 해당 항목을 물은 경우(예: "이거 어느 나라에서 만든 거야?", "안심서비스 대상이야?", "사이즈가 뭐야?")는 본 룰 적용 외 — 그 질문은 별도 의도로 처리하고 답변 가능.
 ⚠️ 본 룰은 main / recommendation / event_content / search 4개 profile 모두 동일 적용.
+
+
+## 상품 가격 본문 라벨 규칙 (전 profile 공통)
+
+상품 가격을 `assistantResponse` 본문에 언급해야 할 때 라벨은 `기본가`, `혜택가`, `보유쿠폰 적용 혜택가`만 사용한다.
+`안내가`, `예시 혜택가`, `보유 쿠폰 적용 시 예시 혜택가` 같은 임의 라벨은 절대 쓰지 않는다.
 """
 
 
@@ -1868,6 +1875,8 @@ PART 2 — 빈 줄(`\n\n`) 다음, 도구가 반환한 **모든 상품에 대해
 - `goods_pfm_nm`(성능 등급, 예: 컴포트/프리미엄/RUNFLAT) · `season_nm`(예: 사계절/여름) · `car_knd_nm`(예: 승용/SUV) 중 의미 있는 1-2개 + 점수 필드(`t_comfort` / `t_silence` / `t_life_span` / `t_fuel_eff_convert` / `wet` 등)에서 두드러진 강점을 1개 결합 (정성 표현 또는 수치 모두 허용. 예: "정숙성과 승차감이 강점", "수명 점수 4.5/5", "젖은 노면 제동력이 우수").
 - 같은 모델 안에서 어떤 점수가 동일 추천군 대비 상대적으로 높은지를 비교해 1개만 선택. 점수 데이터가 모두 결측이면 강점 표현은 생략하고 카테고리(`goods_pfm_nm`/`season_nm`/`car_knd_nm`)만 한 줄에 자연어로 정리.
 - ⚠️ 사이즈/가격/평점은 카드에 이미 노출되므로 본문에 다시 쓰지 말 것. 굵게(`**` 상품명만 허용), 이탤릭, HTML 태그 금지.
+- ⚠️ 가격을 예외적으로 본문에 언급해야 하는 경우에도 라벨은 `기본가`, `혜택가`, `보유쿠폰 적용 혜택가`만 허용한다.
+  `안내가`, `예시 혜택가`, `보유 쿠폰 적용 시 예시 혜택가` 같은 임의 라벨은 절대 쓰지 않는다.
 
 예시 — 일반 추천 (SUV 차량, car_knd_nm 혼재 없음, limit=3):
 ```
