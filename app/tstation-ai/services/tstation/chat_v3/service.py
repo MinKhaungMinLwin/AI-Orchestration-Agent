@@ -19,6 +19,7 @@ from services.tstation.chat_v3 import composer, context, memory, monitoring, qc,
 from services.tstation.chat_v3.executor import ToolLoopExecutor
 from services.tstation.chat_v3.prompts.persona import (
     ERROR_RESPONSE,
+    ORDER_HISTORY_GUIDANCE,
     STORE_SEARCH_FLOW_GUIDANCE,
     SYSTEM_PROMPT,
     TRANSACTION_WRITE_GUIDANCE,
@@ -299,6 +300,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if "TRANSACTION" in domains:
         extra_context.append(TRANSACTION_WRITE_GUIDANCE)
         extra_context.append(STORE_SEARCH_FLOW_GUIDANCE)
+        extra_context.append(ORDER_HISTORY_GUIDANCE)
     if "DISCOVERY" in domains:
         extra_context.append(VEHICLE_LOOKUP_GUIDANCE)
     static_faq_context = _static_faq_policy_context(decision)
