@@ -71,6 +71,85 @@ def test_preorder_stream_does_not_emit_duplicate_message(monkeypatch: pytest.Mon
     asyncio.run(_assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch))
 
 
+def test_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch))
+
+
+async def _assert_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    slots = ConversationSlots(
+        goods_no="G0001",
+        ord_qty=4,
+        pending_intent="cart",
+        goal_type="add_to_cart",
+        pending_product_name="Ventus S2 AS 225/45R17",
+    )
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["cart_confirmation"],
+    )
+    saved_slots = []
+    persisted_tool_calls = []
+
+    class FakeCartTool:
+        name = "save_to_cart_tool"
+
+        async def ainvoke(self, args, config=None):
+            assert args == {"goods_no": "G0001", "ord_qty": 4}
+            return {"status": "success", "http_status": 200, "data": {"result": True}}
+
+    class ForbiddenExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("confirmed cart should execute save_to_cart_tool without re-running the LLM loop")
+
+    async def fake_route_request(*args, **kwargs):
+        assert kwargs["known_slots"].goods_no == "G0001"
+        assert kwargs["known_slots"].ord_qty == 4
+        return decision
+
+    async def fake_load_slots(session_id):
+        return slots
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        saved_slots.append(next_slots)
+
+    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
+        persisted_tool_calls.extend(tool_calls)
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [FakeCartTool()])
+    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
+    monkeypatch.setattr(service, "_tool_display_names", lambda: {"save_to_cart_tool": "장바구니에 담는 중..."})
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[
+            {"role": "assistant", "content": "맞으면 장바구니에 담아드릴게요."},
+            {"role": "user", "content": "네 담아줘"},
+        ],
+        stream=True,
+        user_id="test-user",
+        session_id="confirmed-cart-stream-test",
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    tool_events = [event for event in events if event.get("type") == "tool"]
+    assert tool_events
+    assert tool_events[0]["tool"] == "save_to_cart_tool"
+    assert "장바구니에 담았어요" in next(
+        event["content"] for event in events if event.get("type") == "message"
+    )
+    assert persisted_tool_calls[0]["name"] == "save_to_cart_tool"
+    assert saved_slots
+
+
 async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: pytest.MonkeyPatch) -> None:
     slots = ConversationSlots(
         goods_no="G0001",
