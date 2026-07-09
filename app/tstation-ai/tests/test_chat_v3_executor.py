@@ -47,6 +47,7 @@ for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
 from services.tstation.chat_v3.executor import (  # noqa: E402
+    _model_visible_tool_output,
     _normalize_schedule_tool_call_with_inventory,
     _normalize_tool_call,
 )
@@ -130,3 +131,14 @@ def test_schedule_call_keeps_today_shop_combined_mode_from_prior_inventory_resul
     )
 
     assert normalized is call
+
+
+def test_inventory_tool_output_is_redacted_only_for_model_visible_observation() -> None:
+    output = '{"status":"success","data":{"todayShopArray":[{"shopId":"F00071","stock_qty":8}]}}'
+
+    visible = _model_visible_tool_output("get_store_inventory_tool", output)
+
+    assert output != visible
+    assert "status" not in visible
+    assert "8" not in visible
+    assert "available_quantity_redacted" in visible
