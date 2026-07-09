@@ -312,18 +312,18 @@ def _schedule_action(item: dict, hour, metadata: dict) -> dict | None:
     }
 
 
-def _render_preorder_actions(data: dict) -> None:
+def _render_preorder_actions(data: dict, key_prefix: str = "") -> None:
     metadata = _dict_value(data.get("metadata"))
     if data.get("isReadyToOrder") and metadata:
         st.button(
             "Order",
-            key="template_action_preorder_order",
+            key=f"template_action_{key_prefix}_preorder_order",
             on_click=_queue_template_action,
             args=({"kind": "quick_order", "content": "Order", "payload": metadata},),
         )
 
 
-def render_template_expander(template: str, data: dict):
+def render_template_expander(template: str, data: dict, key_prefix: str = ""):
     """Render UI template data as Streamlit expanders."""
     _render_data_debug(template, data)
     if template == "product":
@@ -346,7 +346,7 @@ def render_template_expander(template: str, data: dict):
                         item,
                         metadata,
                         label=f"Select {item.get('titleProductName') or item.get('title') or 'product'}",
-                        key=f"product_{idx}",
+                        key=f"{key_prefix}_product_{idx}",
                     )
     elif template == "listCar":
         items = data.get("listCar", [data])
@@ -364,7 +364,7 @@ def render_template_expander(template: str, data: dict):
                         item,
                         metadata,
                         label=f"Select {item.get('licensePlate') or 'car'}",
-                        key=f"list_car_{idx}",
+                        key=f"{key_prefix}_list_car_{idx}",
                     )
     elif template == "voucher":
         items = data.get("vouchers", [data])
@@ -407,7 +407,7 @@ def render_template_expander(template: str, data: dict):
                     item,
                     metadata,
                     label=f"Select {item.get('nameAddress') or metadata.get('shopName') or 'store'}",
-                    key=f"location_{idx}",
+                    key=f"{key_prefix}_location_{idx}",
                 )
     elif template == "datepick":
         dates = data.get("dates", [data])
@@ -441,7 +441,7 @@ def render_template_expander(template: str, data: dict):
                             with cols[time_idx % len(cols)]:
                                 st.button(
                                     f"{hour}:00",
-                                    key=f"datepick_{item.get('index', idx)}_{hour}",
+                                    key=f"{key_prefix}_datepick_{item.get('index', idx)}_{hour}",
                                     on_click=_queue_template_action,
                                     args=(action,),
                                 )
@@ -454,7 +454,7 @@ def render_template_expander(template: str, data: dict):
                     ans,
                     ans.get("metadata") if isinstance(ans.get("metadata"), dict) else {},
                     label=str(ans.get("label") or ans.get("value") or "Select"),
-                    key=f"question_{idx}",
+                    key=f"{key_prefix}_question_{idx}",
                 )
     elif template == "billService":
         with st.expander("📄 Service Bill", expanded=True):
@@ -539,7 +539,7 @@ def render_template_expander(template: str, data: dict):
                 st.markdown(f"**{recommend_actions.get('question', '')}**")
                 for action in recommend_actions.get("listActions", []):
                     st.markdown(f"- {action}")
-            _render_preorder_actions(data)
+            _render_preorder_actions(data, key_prefix)
     elif template == "questionCreateOrder":
         with st.expander("❓ Create Order", expanded=True):
             st.markdown(f"**Key:** {data.get('key', '')}")
@@ -552,7 +552,7 @@ def render_template_expander(template: str, data: dict):
                     ans,
                     ans.get("metadata") if isinstance(ans.get("metadata"), dict) else {},
                     label=str(ans.get("label") or ans.get("value") or "Select"),
-                    key=f"question_create_order_{idx}",
+                    key=f"{key_prefix}_question_create_order_{idx}",
                 )
     else:
         # Fallback: show as JSON
@@ -560,12 +560,49 @@ def render_template_expander(template: str, data: dict):
             st.json(data)
 
 
+def _render_tool_calls(tool_calls: list[dict]) -> None:
+    if not tool_calls:
+        return
+    with st.expander("🔧 Tools Called", expanded=False):
+        for tc in tool_calls:
+            with st.expander(f"{tc['tool']}", expanded=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**INPUT:**")
+                    st.code(json.dumps(tc["input"], indent=2, ensure_ascii=False) if tc["input"] else "None", language="json")
+                with col2:
+                    st.markdown("**OUTPUT:**")
+                    output_data = tc["output"]
+                    if isinstance(output_data, str):
+                        try:
+                            output_text = json.dumps(json.loads(output_data), indent=2, ensure_ascii=False)
+                        except (json.JSONDecodeError, TypeError):
+                            output_text = output_data
+                    else:
+                        output_text = json.dumps(output_data, indent=2, ensure_ascii=False)
+                    st.code(output_text, language="json")
+
+
+def _render_saved_message(msg: dict, index: int) -> None:
+    content = str(msg.get("content") or "")
+    if content:
+        st.markdown(content)
+    for event_idx, event in enumerate(msg.get("templates") or []):
+        if not isinstance(event, dict):
+            continue
+        render_template_expander(
+            str(event.get("template") or ""),
+            event.get("data") if isinstance(event.get("data"), dict) else {},
+            key_prefix=f"history_{index}_{event_idx}",
+        )
+    _render_tool_calls(msg.get("tool_calls") or [])
+
 chat_container = st.container()
 
 with chat_container:
     for i, msg in enumerate(st.session_state['messages']):
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            _render_saved_message(msg, i)
 
 def _queue_quick_reply_chip(chip: dict) -> None:
     """Chip click → queue an actionable message; the payload is sent as chip_context/ui_action."""
@@ -681,6 +718,8 @@ if outgoing_message:
         with st.chat_message("assistant"):
             if stream_mode:
                 tool_calls = []
+                template_events = []
+                assistant_response_from_data = ""
                 status_placeholder = st.empty()
                 message_placeholder = st.empty()
                 full_response = ""
@@ -729,10 +768,13 @@ if outgoing_message:
                             message_placeholder.markdown(full_response + "▌")
                         elif chunk.get("type") == "error":
                             full_response += f"\nError: {chunk.get('content', '')}"
-                            message_placeholder.markdown(full_response)
+                            message_placeholder.markdown(full_response or assistant_response_from_data)
                         elif chunk.get("type") == "data":
                             status_placeholder.empty()
                             data_payload = chunk.get("data", {}) or {}
+                            template_events.append({"template": chunk.get("template", ""), "data": data_payload})
+                            if isinstance(data_payload, dict) and data_payload.get("assistantResponse"):
+                                assistant_response_from_data = data_payload["assistantResponse"]
                             if chunk.get("template") == "quickReply" and isinstance(data_payload, dict):
                                 st.session_state["last_quick_replies"] = [
                                     chip for chip in (data_payload.get("quickReplies") or [])
@@ -740,30 +782,12 @@ if outgoing_message:
                                 ]
                             render_template_expander(chunk.get("template", ""), data_payload)
 
-                    message_placeholder.markdown(full_response)
+                    message_placeholder.markdown(full_response or assistant_response_from_data)
                     status_placeholder.empty()
 
-                    if tool_calls:
-                        with st.expander("🔧 Tools Called", expanded=False):
-                            for tc in tool_calls:
-                                with st.expander(f"{tc['tool']}", expanded=False):
-                                    col1, col2 = st.columns(2)
-                                    with col1:
-                                        st.markdown("**INPUT:**")
-                                        st.code(json.dumps(tc["input"], indent=2, ensure_ascii=False) if tc["input"] else "None", language="json")
-                                    with col2:
-                                        st.markdown("**OUTPUT:**")
-                                        output_data = tc["output"]
-                                        if isinstance(output_data, str):
-                                            try:
-                                                output_text = json.dumps(json.loads(output_data), indent=2, ensure_ascii=False)
-                                            except (json.JSONDecodeError, TypeError):
-                                                output_text = output_data
-                                        else:
-                                            output_text = json.dumps(output_data, indent=2, ensure_ascii=False)
-                                        st.code(output_text, language="json")
+                    _render_tool_calls(tool_calls)
 
-                    bot_reply = full_response
+                    bot_reply = full_response or assistant_response_from_data
 
                 except Exception as e:
                     error_msg = f"Error when streaming: {e}"
@@ -783,7 +807,12 @@ if outgoing_message:
                     )
                 st.markdown(bot_reply)
 
-    st.session_state['messages'].append({"role": "assistant", "content": bot_reply})
+    st.session_state['messages'].append({
+        "role": "assistant",
+        "content": bot_reply,
+        "templates": template_events if stream_mode else [],
+        "tool_calls": tool_calls if stream_mode else [],
+    })
 
     # Refresh sessions to show the new conversation
     if access_token:

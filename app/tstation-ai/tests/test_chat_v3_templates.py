@@ -695,6 +695,9 @@ def test_preorder_fallback_builds_ready_order_card_from_slots():
     assert event["template"] == "preOrder"
     assert event["data"]["isReadyToOrder"] is True
     assert event["data"]["metadata"]["goodsId"] == "G000000309783"
+    assert event["data"]["metadata"]["tireSize"] == "245/45R19"
+    assert event["data"]["metadata"]["tire_size"] == "245/45R19"
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
     assert event["data"]["orderInfo"]["storeName"] == "티스테이션 한남점"
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
 
@@ -743,8 +746,62 @@ def test_get_final_price_tool_builds_preorder_without_llm(monkeypatch):
     assert event["template"] == "preOrder"
     assert event["data"]["metadata"]["source"] == "chat_v3_final_price_preorder"
     assert event["data"]["metadata"]["goodsId"] == "G000000309783"
+    assert event["data"]["metadata"]["tireSize"] == "245/45R19"
     assert event["data"]["orderInfo"]["paymentAmount"] == 308200
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
+
+
+def test_present_order_preview_uses_slot_tire_size_when_tool_output_omits_it(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("present_order_preview_tool preOrder should be built without LLM")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        payment_amount=616400,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    preview_output = {
+        "status": "ok",
+        "goods_no": "G000000309783",
+        "ord_qty": 4,
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 한남점",
+        "requested_cal_day": "20260708",
+        "rsv_hour": "14",
+        "payment_amount": 616400,
+        "product_name": "벤투스 S2 AS",
+        "is_ready_to_order": True,
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "아래 내용으로 구매 진행해도 될까요?",
+            [
+                {
+                    "name": "present_order_preview_tool",
+                    "args": {"goods_no": "G000000309783", "ord_qty": 4},
+                    "output": json.dumps(preview_output),
+                }
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["metadata"]["source"] == "chat_v3_k1_order_preview"
+    assert event["data"]["metadata"]["tireSize"] == "245/45R19"
+    assert event["data"]["metadata"]["tire_size"] == "245/45R19"
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
 
 
 def test_get_final_price_tool_does_not_build_preorder_without_schedule():
