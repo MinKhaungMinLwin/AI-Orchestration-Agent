@@ -107,6 +107,14 @@ _URL_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         url=CTAUrls.WARRANTY_EASE_DETAIL,
     ),
     CTADefinition(
+        cta_id="warranty.ease_signup.open",
+        label="안심서비스 가입",
+        domain="SUPPORT",
+        cta_action="open_warranty_ease_signup",
+        expected_behavior="open_url",
+        url=CTAUrls.SAFE_SERVICE_SIGNUP,
+    ),
+    CTADefinition(
         cta_id="promotion.event.open",
         label="진행 중인 이벤트 보기",
         domain="DISCOVERY",

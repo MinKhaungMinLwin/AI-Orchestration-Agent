@@ -29,7 +29,14 @@
     "similar_questions": [],
     "metadata": {
       "category_lv1": "상품/서비스",
-      "category_lv2": "서비스"
+      "category_lv2": "서비스",
+      "intent": "assurance_service_policy",
+      "policy_group": "assurance_warranty_policy",
+      "fact_type": "assurance_signup_channel",
+      "quick_replies": [
+        {"label": "안심서비스 가입", "domain": "SUPPORT"}
+      ],
+      "keywords": ["안심서비스", "안심플러스", "가입", "가입링크", "네이버 스마트스토어", "오픈마켓", "14일"]
     }
   },
   {
@@ -2010,6 +2017,26 @@
     "metadata": {
       "category_lv1": "배송/장착",
       "category_lv2": "장착"
+    }
+  },
+  {
+    "id": "FAQ-184",
+    "content": "카테고리: 주문/결제 > 결제\n질문: 포인트와 쿠폰을 동시에 사용할 수 있나요?\n답변: 현재 티스테이션닷컴 주문/결제 페이지에서는 포인트 사용 정책을 별도로 제공하지 않으므로 포인트와 쿠폰을 동시에 적용할 수 있다고 안내하지 않습니다. 주문/결제 단계에서는 쿠폰 할인만 적용 가능합니다. 네이버페이 포인트 등 결제수단에서 제공하는 포인트나 혜택은 주문 이후 선택한 결제 모듈에서 확인할 수 있습니다.",
+    "representative_question": "포인트와 쿠폰을 동시에 사용할 수 있나요?",
+    "representative_answer": "현재 티스테이션닷컴 주문/결제 페이지에서는 포인트 사용 정책을 별도로 제공하지 않으므로 포인트와 쿠폰을 동시에 적용할 수 있다고 안내하지 않습니다. 주문/결제 단계에서는 쿠폰 할인만 적용 가능합니다. 네이버페이 포인트 등 결제수단에서 제공하는 포인트나 혜택은 주문 이후 선택한 결제 모듈에서 확인할 수 있습니다.",
+    "similar_questions": [
+      "쿠폰이랑 포인트 같이 쓸 수 있어?",
+      "네이버페이 포인트와 쿠폰 동시 적용돼?",
+      "포인트 할인도 주문서에서 적용돼?",
+      "결제수단 포인트 혜택은 어디서 확인해?"
+    ],
+    "metadata": {
+      "category_lv1": "주문/결제",
+      "category_lv2": "결제",
+      "intent": "coupon_stacking_policy",
+      "policy_group": "coupon_policy",
+      "fact_type": "coupon_payment_point_policy",
+      "keywords": ["포인트", "쿠폰", "동시사용", "동시적용", "네이버페이", "결제수단", "결제모듈"]
     }
   }
 ]

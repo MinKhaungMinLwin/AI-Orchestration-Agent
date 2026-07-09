@@ -65,6 +65,7 @@ def test_legacy_policy_url_ctas_are_registered_for_v3_normalization() -> None:
         ("all my T 점검", CTAUrls.MEMBERSHIP_DASHBOARD, "membership.dashboard.open"),
         ("마모도 측정 결과", CTAUrls.TIRE_CHECK_RESULT_LIST, "tire.check_result.open"),
         ("안심서비스 상세", CTAUrls.WARRANTY_EASE_DETAIL, "warranty.ease_detail.open"),
+        ("안심서비스 가입", CTAUrls.SAFE_SERVICE_SIGNUP, "warranty.ease_signup.open"),
     ]
     event = {
         "type": "data",
