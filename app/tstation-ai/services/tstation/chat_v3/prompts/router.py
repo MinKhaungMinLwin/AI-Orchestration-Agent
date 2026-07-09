@@ -18,6 +18,9 @@ ROUTER_PROMPT = """\
 - expired_coupon_or_event: 만료된 쿠폰이나 종료된 이벤트 혜택을 원복/재사용해 달라는 요청
 - nonexistent_benefit: 확인되지 않은 VIP/블랙카드/50% 할인 등 존재하지 않는 특별 혜택 요구
 - reservation_date_range: 예약/장착 희망 날짜가 이미 지난 날짜이거나 오늘로부터 30일 이후인 경우 (30일 이내 날짜는 none)
+- product_code_request: 상품 코드, 상품번호/상품 번호, goods_no, goodsNo, goodsId 같은 내부 상품 식별자를 알려 달라는 요청
+  (예: "이 타이어 상품코드 알려줘", "벤투스 goods_no 뭐야?", "상품번호 보여줘")
+  단, 사용자가 상품명·규격·가격·재고·장착 가능 여부를 묻는 경우는 상품 코드 요청이 아니므로 none.
 
 ## 2. domain — guard가 none일 때 이번 턴을 처리할 주 영역
 - DISCOVERY: 타이어 추천, 상품 검색, 차량-타이어 호환, 내 차량 조회, 이벤트/혜택 상품 탐색

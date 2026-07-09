@@ -57,6 +57,15 @@ def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
         assert policy_key in static_faq_section
 
 
+def test_router_prompt_blocks_internal_product_code_requests_as_guard():
+    guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
+
+    assert "product_code_request" in guard_section
+    assert "상품 코드" in guard_section
+    assert "goods_no" in guard_section
+    assert "상품명·규격·가격·재고·장착 가능 여부" in guard_section
+
+
 def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():
     static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
 
