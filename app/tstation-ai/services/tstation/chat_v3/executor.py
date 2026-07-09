@@ -7,6 +7,7 @@ final state is available on the instance after the stream ends.
 
 import json
 import logging
+from collections.abc import Callable
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
@@ -80,12 +81,14 @@ class ToolLoopExecutor:
         *,
         stream_tokens: bool = True,
         trace_config: dict | None = None,
+        tool_call_normalizer: Callable[[dict], dict] | None = None,
     ):
         self._messages = list(messages)
         self._tools = {t.name: t for t in tools}
         self._display_names = display_names
         self._stream_tokens = stream_tokens
         self._trace_config = trace_config
+        self._tool_call_normalizer = tool_call_normalizer
         self.final_text: str = ""
         self.tool_calls: list[dict] = []
 
@@ -128,6 +131,8 @@ class ToolLoopExecutor:
 
     async def _run_tool(self, call: dict):
         call = _normalize_tool_call(call)
+        if self._tool_call_normalizer is not None:
+            call = self._tool_call_normalizer(call)
         name = call.get("name") or ""
         args = call.get("args") or {}
         call_id = call.get("id") or name
