@@ -9,6 +9,7 @@ from typing import Any
 INVENTORY_TOOL_NAMES = {
     "get_store_inventory_tool",
     "get_logistics_inventory_tool",
+    "get_store_install_availability_tool",
 }
 _QUANTITY_KEY_PARTS = (
     "qty",

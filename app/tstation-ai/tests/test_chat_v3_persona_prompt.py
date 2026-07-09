@@ -40,6 +40,21 @@ def test_store_flow_prompt_forbids_external_stock_quantity_disclosure():
     assert "요청 수량 기준 장착 가능 여부" in STORE_SEARCH_FLOW_GUIDANCE
 
 
+def test_store_flow_prompt_uses_unified_install_availability_tool():
+    assert "get_store_install_availability_tool" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "물류 재고, 매장 재고, T바로배송 가능 여부" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "가장 빠른 장착 가능 일정" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "일반 매장 방문 스케줄" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "get_logistics_inventory_tool" not in STORE_SEARCH_FLOW_GUIDANCE
+    assert "get_store_inventory_tool" not in STORE_SEARCH_FLOW_GUIDANCE
+    assert "get_store_schedule_tool" not in STORE_SEARCH_FLOW_GUIDANCE
+
+
+def test_confirmed_order_recheck_uses_unified_install_availability_tool():
+    assert "get_store_install_availability_tool" in TRANSACTION_WRITE_GUIDANCE
+    assert "get_logistics_inventory_tool" not in TRANSACTION_WRITE_GUIDANCE
+
+
 def test_vehicle_lookup_guidance_calls_tool_without_waiting_for_a_request_verb():
     # A bare "차량번호 + 소유주명" message (no request verb) must still trigger
     # get_user_vehicles_tool once DISCOVERY is bound — the model shouldn't just

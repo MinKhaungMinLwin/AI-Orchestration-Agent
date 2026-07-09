@@ -1,8 +1,52 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+import os
 
-from services.tstation.agents.c_transaction_agent import tools
+_TEST_ENV_DEFAULTS = {
+    "PROJECT_NAME": "test",
+    "ROOT_PATH": "",
+    "API_SECRET_KEY": "secret",
+    "TSTATION_BE_API": "http://localhost",
+    "TSTATION_BE_MCP": "http://localhost",
+    "AI_DEFAULT_PROVIDER": "openai",
+    "AI_GATEWAY_BASE_URL": "http://localhost/v1",
+    "AI_GATEWAY_API_KEY": "test",
+    "AI_MODEL": "gpt-test",
+    "AI_MODEL_REASONING": "gpt-test",
+    "AI_MODEL_MINI": "gpt-test",
+    "AI_MODEL_LEADING_AGENT": "gpt-test",
+    "AI_MODEL_QC_AGENT": "gpt-test",
+    "AI_MODEL_TRANSACTION_AGENT": "gpt-test",
+    "UPSTAGE_API_KEY": "test",
+    "OPENAI_API_KEY": "test",
+    "REDIS_CONVERSATION_MANAGEMENT_PASSWORD": "",
+    "REDIS_CONVERSATION_MANAGEMENT_URL": "redis://localhost:6379/0",
+    "REDIS_QUEUE_URL": "redis://localhost:6379/1",
+    "REDIS_PASSWORD": "",
+    "REDIS_URL": "redis://localhost:6379/0",
+    "RABBITMQ_NODENAME": "rabbit@test",
+    "RABBITMQ_USERNAME": "guest",
+    "RABBITMQ_PASSWORD": "guest",
+    "RABBITMQ_URL": "amqp://guest:guest@localhost:5672/",
+    "RABBITMQ_URL_MANAGEMENT": "http://localhost:15672",
+    "AWS_ACCESS_KEY_ID": "test",
+    "AWS_SECRET_ACCESS_KEY": "test",
+    "AWS_DEFAULT_REGION": "ap-northeast-2",
+    "S3_BUCKET_NAME": "test",
+    "GF_SECURITY_ADMIN_USER": "admin",
+    "GF_SECURITY_ADMIN_PASSWORD": "admin",
+    "LOKI_URL": "http://localhost",
+    "PROMETHEUS_URL": "http://localhost",
+    "LANGFUSE_HOST": "http://localhost",
+    "LANGFUSE_PROJECT_NAME": "test",
+    "LANGFUSE_SECRET_KEY": "test",
+    "LANGFUSE_PUBLIC_KEY": "test",
+}
+
+for key, value in _TEST_ENV_DEFAULTS.items():
+    os.environ.setdefault(key, value)
+
+from services.tstation.agents.c_transaction_agent import tools  # noqa: E402
 
 
 class _Parsed:
@@ -50,13 +94,20 @@ def test_transaction_store_preview_reuses_authenticated_client_in_worker_threads
             ]
         })
 
-    def fake_get_logistics_inventory(*, client, body):
-        subcall_clients["logistics"] = client
-        return _Response({"logistics_qty": 256, "rsv_sale_yn": "N", "rsv_install_date": None})
-
-    def fake_get_store_inventory(*, client, body):
-        subcall_clients["store_inventory"] = client
-        return _Response({"todayShopArray": [{"shopId": "T02396"}], "tnaShopArray": []})
+    def fake_get_store_install_availability(*, client, body):
+        subcall_clients["availability"] = client
+        return _Response({
+            "items": [{
+                "shop_id": "T02396",
+                "shop_nm": "티스테이션 강릉강남점",
+                "status": "available",
+                "mode": "in_store_only",
+                "has_today_stock": True,
+                "has_tna_stock": False,
+                "has_logistics_stock": False,
+                "slots": [{"cal_day": "20260617", "tm": "1000"}],
+            }]
+        })
 
     def fake_get_price(*, client, goods_no, member_type):
         subcall_clients["price"] = client
@@ -64,14 +115,8 @@ def test_transaction_store_preview_reuses_authenticated_client_in_worker_threads
 
     monkeypatch.setattr(tools, "get_client", fake_get_client)
     monkeypatch.setattr(tools, "get_store_list", fake_get_store_list)
-    monkeypatch.setattr(tools, "get_logistics_inventory", fake_get_logistics_inventory)
-    monkeypatch.setattr(tools, "get_store_inventory", fake_get_store_inventory)
+    monkeypatch.setattr(tools, "get_store_install_availability", fake_get_store_install_availability)
     monkeypatch.setattr(tools, "get_price", fake_get_price)
-    monkeypatch.setattr(
-        tools,
-        "get_multi_store_schedule_tool",
-        SimpleNamespace(func=lambda **kwargs: {"data": {"tier": "today", "stores": ["T02396"]}}),
-    )
 
     result = tools.transaction_store_preview_tool.func(
         goods_no="G000000309780",
@@ -81,12 +126,11 @@ def test_transaction_store_preview_reuses_authenticated_client_in_worker_threads
     )
 
     assert result["status"] == "success"
-    assert result["data"]["logistics"]["logistics_qty"] == 256
+    assert result["data"]["logistics"]["has_logistics_stock"] is False
     assert result["data"]["inventory"]["todayShopArray"] == [{"shopId": "T02396"}]
     assert result["data"]["price"] == {"final_price": 120800}
     assert subcall_clients == {
-        "logistics": "client-2",
-        "store_inventory": "client-2",
+        "availability": "client-2",
         "price": "client-2",
     }
     assert clients == ["client-1", "client-2"]
@@ -125,18 +169,23 @@ def test_transaction_store_preview_falls_back_to_place_coordinates_for_landmark_
     monkeypatch.setattr(tools, "get_store_list", fake_get_store_list)
     monkeypatch.setattr(tools, "search_place", fake_search_place)
     monkeypatch.setattr(tools, "decide_domestic_search_area", lambda query: _GateDecision(True))
-    monkeypatch.setattr(tools, "get_logistics_inventory", lambda **kwargs: _Response({"logistics_qty": 0}))
     monkeypatch.setattr(
         tools,
-        "get_store_inventory",
-        lambda **kwargs: _Response({"todayShopArray": [{"shopId": "F10001"}], "tnaShopArray": []}),
+        "get_store_install_availability",
+        lambda **kwargs: _Response({
+            "items": [{
+                "shop_id": "F10001",
+                "shop_nm": "티스테이션 강남구청점",
+                "status": "available",
+                "mode": "in_store_only",
+                "has_today_stock": True,
+                "has_tna_stock": False,
+                "has_logistics_stock": False,
+                "slots": [{"cal_day": "20260617", "tm": "1000"}],
+            }]
+        }),
     )
     monkeypatch.setattr(tools, "get_price", lambda **kwargs: _Response({"final_price": 120800}))
-    monkeypatch.setattr(
-        tools,
-        "get_multi_store_schedule_tool",
-        SimpleNamespace(func=lambda **kwargs: {"data": {"tier": "today", "stores": ["F10001"]}}),
-    )
 
     result = tools.transaction_store_preview_tool.func(
         goods_no="G000000309780",
@@ -165,27 +214,36 @@ def test_transaction_store_preview_filters_schedule_by_requested_cal_day(monkeyp
 
     monkeypatch.setattr(tools, "get_client", fake_get_client)
     monkeypatch.setattr(tools, "get_store_list", fake_get_store_list)
-    monkeypatch.setattr(tools, "get_logistics_inventory", lambda **kwargs: _Response({"logistics_qty": 20}))
-    monkeypatch.setattr(tools, "get_store_inventory", lambda **kwargs: _Response({"todayShopArray": [], "tnaShopArray": []}))
     monkeypatch.setattr(tools, "get_price", lambda **kwargs: _Response({"final_price": 120800}))
     monkeypatch.setattr(
         tools,
-        "get_multi_store_schedule_tool",
-        SimpleNamespace(func=lambda **kwargs: {
-            "data": {
-                "tier": "logistics_only",
-                "stores": [
-                    {
-                        "shop_id": "T10001",
-                        "slots": [
-                            {"cal_day": "20260617", "tm": "1000"},
-                            {"cal_day": "20260618", "tm": "1100"},
-                        ],
-                    },
-                    {"shop_id": "T10002", "slots": [{"cal_day": "20260618", "tm": "0900"}]},
-                ],
-                "candidate_shop_ids": ["T10001", "T10002"],
-            }
+        "get_store_install_availability",
+        lambda **kwargs: _Response({
+            "items": [
+                {
+                    "shop_id": "T10001",
+                    "shop_nm": "티스테이션 강남점",
+                    "status": "available",
+                    "mode": "logistics_only",
+                    "has_today_stock": False,
+                    "has_tna_stock": False,
+                    "has_logistics_stock": True,
+                    "slots": [
+                        {"cal_day": "20260617", "tm": "1000"},
+                        {"cal_day": "20260618", "tm": "1100"},
+                    ],
+                },
+                {
+                    "shop_id": "T10002",
+                    "shop_nm": "티스테이션 역삼점",
+                    "status": "available",
+                    "mode": "logistics_only",
+                    "has_today_stock": False,
+                    "has_tna_stock": False,
+                    "has_logistics_stock": True,
+                    "slots": [{"cal_day": "20260618", "tm": "0900"}],
+                },
+            ]
         }),
     )
 
@@ -201,10 +259,10 @@ def test_transaction_store_preview_filters_schedule_by_requested_cal_day(monkeyp
     assert [store["shop_id"] for store in result["data"]["stores"]] == ["T10001"]
     assert result["data"]["candidate_shop_ids"] == ["T10001"]
     assert result["data"]["schedule"]["requested_cal_day"] == "20260617"
-    assert result["data"]["schedule"]["stores"] == [{
-        "shop_id": "T10001",
-        "slots": [{"cal_day": "20260617", "tm": "1000"}],
-    }]
+    schedule_stores = result["data"]["schedule"]["stores"]
+    assert len(schedule_stores) == 1
+    assert schedule_stores[0]["shop_id"] == "T10001"
+    assert schedule_stores[0]["slots"] == [{"cal_day": "20260617", "tm": "1000"}]
 
 
 def test_transaction_store_preview_requested_cal_day_removes_all_non_matching_candidates(monkeypatch):
@@ -216,18 +274,21 @@ def test_transaction_store_preview_requested_cal_day_removes_all_non_matching_ca
             "stores": [{"shop_id": "T10001", "shop_nm": "티스테이션 강남점", "is_installable": True}]
         }),
     )
-    monkeypatch.setattr(tools, "get_logistics_inventory", lambda **kwargs: _Response({"logistics_qty": 20}))
-    monkeypatch.setattr(tools, "get_store_inventory", lambda **kwargs: _Response({"todayShopArray": [], "tnaShopArray": []}))
     monkeypatch.setattr(tools, "get_price", lambda **kwargs: _Response({"final_price": 120800}))
     monkeypatch.setattr(
         tools,
-        "get_multi_store_schedule_tool",
-        SimpleNamespace(func=lambda **kwargs: {
-            "data": {
-                "tier": "logistics_only",
-                "stores": [{"shop_id": "T10001", "slots": [{"cal_day": "20260618", "tm": "1000"}]}],
-                "candidate_shop_ids": ["T10001"],
-            }
+        "get_store_install_availability",
+        lambda **kwargs: _Response({
+            "items": [{
+                "shop_id": "T10001",
+                "shop_nm": "티스테이션 강남점",
+                "status": "available",
+                "mode": "logistics_only",
+                "has_today_stock": False,
+                "has_tna_stock": False,
+                "has_logistics_stock": True,
+                "slots": [{"cal_day": "20260618", "tm": "1000"}],
+            }]
         }),
     )
 
@@ -257,27 +318,32 @@ def test_transaction_store_preview_keeps_tna_candidates_for_today_request(monkey
             ]
         }),
     )
-    monkeypatch.setattr(tools, "get_logistics_inventory", lambda **kwargs: _Response({"logistics_qty": 0}))
     monkeypatch.setattr(
         tools,
-        "get_store_inventory",
+        "get_store_install_availability",
         lambda **kwargs: _Response({
-            "todayShopArray": [],
-            "tnaShopArray": [{"shopId": "C01317"}, {"shopId": "F00469"}],
-        }),
-    )
-    monkeypatch.setattr(
-        tools,
-        "get_multi_store_schedule_tool",
-        SimpleNamespace(func=lambda **kwargs: {
-            "data": {
-                "tier": "tna_only",
-                "stores": [
-                    {"shop_id": "C01317", "slots": [{"cal_day": "20260620", "tm": "1000"}]},
-                    {"shop_id": "F00469", "slots": [{"cal_day": "20260620", "tm": "1100"}]},
-                ],
-                "candidate_shop_ids": ["C01317", "F00469"],
-            }
+            "items": [
+                {
+                    "shop_id": "C01317",
+                    "shop_nm": "티스테이션 송파삼전점",
+                    "status": "available",
+                    "mode": "tna_only",
+                    "has_today_stock": False,
+                    "has_tna_stock": True,
+                    "has_logistics_stock": False,
+                    "slots": [{"cal_day": "20260618", "tm": "1000"}],
+                },
+                {
+                    "shop_id": "F00469",
+                    "shop_nm": "티스테이션 구로구청점",
+                    "status": "available",
+                    "mode": "tna_only",
+                    "has_today_stock": False,
+                    "has_tna_stock": True,
+                    "has_logistics_stock": False,
+                    "slots": [{"cal_day": "20260618", "tm": "1100"}],
+                },
+            ]
         }),
     )
 

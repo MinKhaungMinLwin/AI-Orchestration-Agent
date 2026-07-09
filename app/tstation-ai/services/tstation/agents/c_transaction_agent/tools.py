@@ -22,6 +22,7 @@ from common.brand_mapping import normalize_brand_name
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_list_api_store_list_get import sync_detailed as get_store_list
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_detail_api_store_detail_get import sync_detailed as get_store_detail
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_schedule_api_store_schedule_get import sync_detailed as get_store_schedule
+from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.get_store_install_availability_api_store_install_availability_post import sync_detailed as get_store_install_availability
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.search_stores_complex_api_store_complex_search_get import sync_detailed as search_stores_complex
 from common.tstation_be_api_client.hkt_api_client.api.store_af_매장_정보_및_예약_조회.search_place_api_store_place_search_get import sync_detailed as search_place
 from common.tstation_be_api_client.hkt_api_client.models import ScheduleMode
@@ -49,7 +50,8 @@ from common.tstation_be_api_client.hkt_api_client.models import (
     LogisticsRequest,
     StoreInventoryRequest,
     GoodsItem,
-    ShopIdItem
+    ShopIdItem,
+    StoreInstallAvailabilityRequest,
 )
 
 # QUICK SHOPPING AF (setOrderFormAI - 퀵쇼핑/장바구니 통합 API)
@@ -250,8 +252,7 @@ def _validate_store_nm_exact_match(user_input: str, stores: List[dict]) -> dict 
                 f"DETERMINISTIC GUARD: 사용자 입력 '{user_input}' 과 매칭된 매장 분점명이 정확히 일치하지 않음 "
                 f"(candidates={candidate_names}). "
                 f"validation_message 를 그대로 emit + quickReplies: {quick_reply_hint}. "
-                f"get_store_schedule_tool / get_store_detail_tool / get_store_inventory_tool / "
-                f"get_multi_store_schedule_tool 절대 호출 금지. STOP."
+                f"get_store_install_availability_tool / get_store_detail_tool 절대 호출 금지. STOP."
             ),
         },
     }
@@ -560,9 +561,13 @@ def get_product_promotions_tool(goods_no: str):
 @tool
 def get_logistics_inventory_tool(goods_no: str):
     """
+    DEPRECATED: use get_store_install_availability_tool instead.
+
     물류 창고 재고 조회.
 
-    MANDATORY as STEP 3 in order flow — call before presenting store options.
+    Deprecated compatibility tool only. Do not call in new flows.
+    get_store_install_availability_tool now calculates logistics availability,
+    store inventory availability, and schedule slots in one backend request.
 
     Result interpretation:
     - logistics_qty > 0 → LOGISTICS_AVAILABLE (all stores eligible)
@@ -596,7 +601,13 @@ def get_logistics_inventory_tool(goods_no: str):
 @tool
 def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: List[Dict[str, Any]]):
     """
+    DEPRECATED: use get_store_install_availability_tool instead.
+
     Check store inventory availability.
+
+    Deprecated compatibility tool only. Do not call in new flows.
+    get_store_install_availability_tool now returns today/T-NA/logistics flags
+    and installable schedule slots for each store.
 
     Returns todayShopArray (stores that can install today) and tnaShopArray (T-NA delivery eligible).
 
@@ -624,6 +635,85 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
     except Exception as e:
         logger.exception("[TOOL][get_store_inventory_tool] Failed")
         return _error_response(None, str(e), "Failed to get store inventory")
+
+
+@tool
+def get_store_install_availability_tool(
+    shop_id_list: List[str],
+    goods_no: str | None = None,
+    ord_qty: int = 1,
+    requested_cal_day: str | None = None,
+):
+    """
+    Unified store install availability lookup.
+
+    Use this single tool for:
+    - 가장 빠른 장착 가능일/시간 확인
+    - 특정 날짜 장착 가능 여부 확인
+    - 상품/수량이 있는 주문·재고·예약 가능성 확인
+    - 상품이 아직 없는 일반 매장 방문 예약 스케줄 확인 (goods_no=None)
+
+    This replaces the old three-step flow:
+    get_logistics_inventory_tool → get_store_inventory_tool → get_store_schedule_tool.
+    Do not call those deprecated tools in new flows.
+
+    Args:
+        shop_id_list (List[str]): Store IDs to check. Use IDs from store search results.
+        goods_no (str | None): Product number. Pass None for a general store visit schedule.
+        ord_qty (int): Quantity when goods_no is present. Default 1.
+        requested_cal_day (str | None): Optional YYYYMMDD date. If provided, returned schedule is filtered to that day.
+
+    Returns:
+        {
+          "items": [{shop_id, status, mode, has_today_stock, has_tna_stock,
+                     has_logistics_stock, first_available_slot, slots}],
+          "inventory": {todayShopArray, tnaShopArray},
+          "logistics": {has_logistics_stock},
+          "schedule": {tier, stores, candidate_shop_ids, requested_cal_day?}
+        }
+    """
+    candidates = [str(shop_id).strip() for shop_id in (shop_id_list or []) if str(shop_id).strip()]
+    candidates = list(dict.fromkeys(candidates))
+    if not candidates:
+        return _error_response(None, "invalid_input", "shop_id_list is empty")
+    try:
+        safe_qty = max(1, int(ord_qty or 1))
+    except (TypeError, ValueError):
+        safe_qty = 1
+    body = StoreInstallAvailabilityRequest(
+        shop_ids=candidates,
+        goods_no=str(goods_no).strip() if goods_no else None,
+        qty=safe_qty,
+    )
+    logger.debug(
+        "[TOOL][get_store_install_availability_tool] Called with shop_id_list=%s goods_no=%s ord_qty=%s "
+        "requested_cal_day=%s",
+        candidates,
+        goods_no,
+        safe_qty,
+        requested_cal_day,
+    )
+
+    try:
+        response = get_store_install_availability(client=get_client(), body=body)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get store install availability",
+            )
+        data = _to_dict(response.parsed)
+        data["inventory"] = _availability_inventory_payload(data)
+        data["logistics"] = {"has_logistics_stock": _availability_has_logistics(data)}
+        data["schedule"] = _availability_schedule_payload(
+            data,
+            candidate_shop_ids=candidates,
+            requested_cal_day=requested_cal_day,
+        )
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][get_store_install_availability_tool] Failed")
+        return _error_response(None, str(e), "Failed to get store install availability")
 
 
 # =====================================================
@@ -1029,7 +1119,7 @@ def search_stores_tool(
     - xpos/ypos가 있으면 좌표 기반 주변 매장을 조회합니다.
     - 그 외에는 region_code/store_nm 기반 매장 목록을 조회합니다.
     - 날짜/요일 영업 여부, 예약 슬롯, 재고 확인은 하지 않습니다. 해당 확인은
-      get_store_detail_tool/get_store_schedule_tool/재고 도구를 후속 호출하세요.
+      get_store_install_availability_tool 을 후속 호출하세요.
 
     Args:
         place_query (str | None): 랜드마크/장소명 (예: "남산타워", "강남역").
@@ -1482,7 +1572,13 @@ def get_store_detail_tool(shop_id: str, cal_day: str, is_logistics_delivery: boo
 @tool_cache(ttl=120)
 def get_store_schedule_tool(shop_id: str, mode: str):
     """
+    DEPRECATED: use get_store_install_availability_tool instead.
+
     Get reservation slots for a single store using mode-based cal_day range (single BE call).
+
+    Deprecated compatibility tool only. New flows must call
+    get_store_install_availability_tool with shop_id_list=[shop_id]. Pass goods_no=None
+    for general store visit schedules.
 
     The backend applies a different cal_day range per mode based on inventory state.
     Choose mode AFTER inspecting get_store_inventory_tool + get_logistics_inventory_tool
@@ -1565,7 +1661,12 @@ def get_multi_store_schedule_tool(
     has_logistics: bool = False,
 ):
     """
+    DEPRECATED: use get_store_install_availability_tool instead.
+
     Flow 3.5 — find earliest reservation slots across up to 3 stores using **tier cascade**.
+
+    Deprecated compatibility tool only. New flows must call
+    get_store_install_availability_tool once with the candidate shop_id_list.
 
     The tool selects ONE tier across the whole batch based on inventory state:
 
@@ -1848,9 +1949,83 @@ def _scheduled_shop_ids_with_slots(schedule_data: Any) -> list[str]:
     return shop_ids
 
 
+def _availability_items(data: Any) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _availability_inventory_payload(data: Any) -> dict[str, list[dict[str, str]]]:
+    today: list[dict[str, str]] = []
+    tna: list[dict[str, str]] = []
+    for item in _availability_items(data):
+        shop_id = str(item.get("shop_id") or "").strip()
+        if not shop_id:
+            continue
+        if item.get("has_today_stock"):
+            today.append({"shopId": shop_id})
+        if item.get("has_tna_stock"):
+            tna.append({"shopId": shop_id})
+    return {"todayShopArray": today, "tnaShopArray": tna}
+
+
+def _availability_has_logistics(data: Any) -> bool:
+    return any(bool(item.get("has_logistics_stock")) for item in _availability_items(data))
+
+
+def _availability_schedule_payload(
+    data: Any,
+    *,
+    candidate_shop_ids: list[str],
+    requested_cal_day: str | None = None,
+) -> dict[str, Any]:
+    requested_day = str(requested_cal_day or "").strip()
+    stores: list[dict[str, Any]] = []
+    first_tier = ""
+    for item in _availability_items(data):
+        shop_id = str(item.get("shop_id") or "").strip()
+        if not shop_id:
+            continue
+        slots = item.get("slots") if isinstance(item.get("slots"), list) else []
+        if requested_day:
+            slots = [
+                slot
+                for slot in slots
+                if isinstance(slot, dict) and str(slot.get("cal_day") or "").strip() == requested_day
+            ]
+        if not slots:
+            continue
+        mode = str(item.get("mode") or "").strip()
+        if not first_tier:
+            first_tier = mode
+        stores.append({
+            "shop_id": shop_id,
+            "shop_nm": item.get("shop_nm"),
+            "mode": mode or None,
+            "status": item.get("status"),
+            "is_installable": bool(item.get("is_installable", False)),
+            "is_tna_delivery": bool(item.get("is_tna_delivery", False)),
+            "slots": slots,
+        })
+
+    payload: dict[str, Any] = {
+        "tier": first_tier or "none",
+        "stores": stores,
+        "candidate_shop_ids": candidate_shop_ids,
+    }
+    if requested_day:
+        payload["requested_cal_day"] = requested_day
+    return payload
+
+
 def _extract_logistics_qty(data: Any) -> int:
     if not isinstance(data, dict):
         return 0
+    if data.get("has_logistics_stock") is True:
+        return 1
     value = data.get("logistics_qty") or data.get("logisticsQty") or data.get("qty") or 0
     try:
         return int(value or 0)
@@ -2177,23 +2352,16 @@ def transaction_store_preview_tool(
             empty_data["search"] = place_fallback
         return _success_response(store_response.status_code, empty_data)
 
-    goods_list = [{"goodsNo": goods_no, "qty": str(ord_qty)}]
-    shop_id_list = [{"shopId": sid} for sid in shop_ids]
     be_client = get_client()
 
-    def _fetch_logistics():
-        body = LogisticsRequest(goods_no=goods_no)
-        return get_logistics_inventory(client=be_client, body=body)
-
-    def _fetch_store_inventory():
-        g_items = [GoodsItem(goods_no=g["goodsNo"], qty=str(g["qty"])) for g in goods_list]
-        s_items = [ShopIdItem(shop_id=s["shopId"]) for s in shop_id_list]
-        return get_store_inventory(client=be_client, body=StoreInventoryRequest(goods_list=g_items, shop_id_list=s_items))
+    def _fetch_availability():
+        body = StoreInstallAvailabilityRequest(shop_ids=shop_ids, goods_no=goods_no, qty=ord_qty)
+        return get_store_install_availability(client=be_client, body=body)
 
     def _fetch_price():
         return get_price(client=be_client, goods_no=goods_no, member_type=None)
 
-    tasks = {"logistics": _fetch_logistics, "store_inventory": _fetch_store_inventory}
+    tasks = {"availability": _fetch_availability}
     if include_price:
         tasks["price"] = _fetch_price
 
@@ -2212,23 +2380,16 @@ def transaction_store_preview_tool(
                 )
             results[name] = _to_dict(response.parsed) if response.parsed is not None else None
 
-    logistics_qty = _extract_logistics_qty(results.get("logistics"))
-    today_shop_ids = _extract_inventory_shop_ids(results.get("store_inventory"), "todayShopArray")
-    tna_shop_ids = _extract_inventory_shop_ids(results.get("store_inventory"), "tnaShopArray")
-    schedule = get_multi_store_schedule_tool.func(
-        shop_id_list=shop_ids,
-        today_shop_ids=today_shop_ids,
-        tna_shop_ids=tna_shop_ids,
-        has_logistics=logistics_qty > 0,
+    availability_data = results.get("availability") if isinstance(results.get("availability"), dict) else {}
+    inventory_data = _availability_inventory_payload(availability_data)
+    logistics_data = {"has_logistics_stock": _availability_has_logistics(availability_data)}
+    schedule_data = _availability_schedule_payload(
+        availability_data,
+        candidate_shop_ids=shop_ids,
+        requested_cal_day=requested_cal_day,
     )
-    schedule_data = schedule.get("data") if isinstance(schedule, dict) else schedule
-    # todayShopArray/tnaShopArray are already inventory-proven today-installable
-    # candidates. Do not erase those candidates just because the range schedule
-    # endpoint has no slot with today's cal_day.
-    requested_day_filter = None if (today_shop_ids or tna_shop_ids) else requested_cal_day
-    schedule_data = _filter_schedule_by_cal_day(schedule_data, requested_day_filter)
     scheduled_shop_ids = _scheduled_shop_ids_with_slots(schedule_data)
-    if requested_day_filter:
+    if requested_cal_day:
         scheduled_set = set(scheduled_shop_ids)
         candidates = [store for store in candidates if (_shop_id(store) in scheduled_set)]
         shop_ids = [sid for sid in shop_ids if sid in scheduled_set]
@@ -2239,8 +2400,9 @@ def transaction_store_preview_tool(
 
     result_data: dict[str, Any] = {
         "price": results.get("price"),
-        "logistics": results.get("logistics"),
-        "inventory": results.get("store_inventory"),
+        "logistics": logistics_data,
+        "inventory": inventory_data,
+        "availability": availability_data,
         "schedule": schedule_data,
         "stores": [{"shop_id": _shop_id(store), **store} for store in candidates],
         "candidate_shop_ids": shop_ids,
@@ -2263,7 +2425,7 @@ def transaction_store_preview_tool(
             result_data["instruction_to_agent"] = (
                 f"DETERMINISTIC GUARD: 사용자가 특정 매장명(`{store_nm}`)으로 검색해 단일 매장만 "
                 "매칭됨 — 사용자가 이미 매장을 확정한 상태. 다음 액션을 즉시 수행: "
-                "(1) get_store_schedule_tool(shop_id=candidate_shop_ids[0], mode=\"general\") 호출, "
+                "(1) get_store_install_availability_tool(shop_id_list=[candidate_shop_ids[0]], goods_no=None) 호출, "
                 "(2) 응답으로 datepick 템플릿 emit. "
                 "⛔ 금지: location 카드 emit, \"원하시는 매장을 선택해 주세요\" / "
                 "\"주문 가능한 매장을 확인했어요\" 류 quickReply emit, fallback chip "
@@ -2273,8 +2435,8 @@ def transaction_store_preview_tool(
         else:
             result_data["instruction_to_agent"] = (
                 "DETERMINISTIC GUARD: 사용자가 매장을 아직 선택하지 않았음 — "
-                "자동으로 candidate_shop_ids[0] 를 픽해서 get_store_schedule_tool / "
-                "get_store_inventory_tool / get_store_detail_tool 등 후속 도구를 호출하거나 "
+                "자동으로 candidate_shop_ids[0] 를 픽해서 get_store_install_availability_tool / "
+                "get_store_detail_tool 등 후속 도구를 호출하거나 "
                 "datepick 을 emit 하면 절대 안 됨. 다음 액션: "
                 "(1) 'stores' 리스트로 `location` 템플릿 emit, "
                 "(2) assistantResponse 는 **사용자의 직전 발화 의도** 와 **검색 경로** 에 맞춰 작성: "
@@ -2388,10 +2550,8 @@ def quick_order_tool(
     퀵쇼핑 주문 실행 (매장 선택 포함).
 
     Pre-conditions MUST all pass before calling:
-      1. get_logistics_inventory_tool called (inventory_mode set)
-      2. get_store_detail_tool called → is_installable=true confirmed
-      3. If LOGISTICS_UNAVAILABLE: get_store_inventory_tool verified shop in todayShopArray/tnaShopArray
-      4. Pre-order preview shown, user confirmed
+      1. get_store_install_availability_tool confirmed the selected shop has an installable slot for this order
+      2. Pre-order preview shown, user confirmed
 
     When NOT to use:
     - shop_id not yet confirmed from tool result (never fabricate shop_id)

@@ -52,6 +52,7 @@ V3_TOOL_TO_CUSTOMER_AF: dict[str, str] = {
     "get_store_detail_tool": "Store AF",
     "get_store_schedule_tool": "Store AF",
     "get_multi_store_schedule_tool": "Store AF",
+    "get_store_install_availability_tool": "Store AF",
     "get_stores_with_time_filter_tool": "Store AF",
     "transaction_store_preview_tool": "Store AF",
     "get_favorite_stores_tool": "Store AF",

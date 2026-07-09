@@ -1144,6 +1144,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_product_promotions_tool": "기획전 조회중",
     "get_logistics_inventory_tool": "재고 확인 중...",
     "get_store_inventory_tool": "매장 재고 확인 중...",
+    "get_store_install_availability_tool": "장착 가능 일정 확인 중...",
     "search_stores_tool": "매장 검색 중...",
     "search_stores_complex_tool": "매장 복합 검색 중...",
     "search_place_tool": "위치 검색 중...",

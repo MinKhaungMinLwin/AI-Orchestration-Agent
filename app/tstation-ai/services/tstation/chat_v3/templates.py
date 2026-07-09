@@ -117,6 +117,7 @@ _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "get_final_price_tool": ("preOrder", PreOrderTemplate),
     "get_store_schedule_tool": ("datepick", DatepickTemplate),
     "get_multi_store_schedule_tool": ("datepick", DatepickTemplate),
+    "get_store_install_availability_tool": ("datepick", DatepickTemplate),
     "transaction_store_preview_tool": ("location", LocationTemplate),
     "present_order_preview_tool": ("preOrder", PreOrderTemplate),
     "quick_order_tool": ("orderComplete", OrderCompleteTemplate),
@@ -662,6 +663,71 @@ def _get_store_schedule_datepick_event(answer: str, call: dict, slots: Conversat
         "data": datepick.model_dump(mode="json", exclude_none=True),
         "source_tool": call["name"],
         "assistant_response_source": "code_chat_v3_get_store_schedule",
+    }
+
+
+def _get_install_availability_datepick_event(
+    answer: str,
+    call: dict,
+    slots: ConversationSlots | None = None,
+) -> dict | None:
+    payload = _tool_payload(call.get("output"))
+    schedule = payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
+    stores = schedule.get("stores") if isinstance(schedule.get("stores"), list) else []
+    if not stores:
+        stores = [
+            item
+            for item in payload.get("items", [])
+            if isinstance(item, dict) and isinstance(item.get("slots"), list) and item.get("slots")
+        ]
+    first_store = next((store for store in stores if isinstance(store, dict) and store.get("slots")), None)
+    if not first_store:
+        return None
+
+    by_day = _schedule_slots_by_day(first_store.get("slots"))
+    if not by_day:
+        return None
+
+    dates: list[dict[str, Any]] = []
+    selected_idx: int | None = None
+    for index, cal_day in enumerate(sorted(by_day.keys())):
+        times = sorted(by_day[cal_day])
+        dates.append({
+            "date": _format_korean_date(cal_day),
+            "available": bool(times),
+            "availableTimes": times,
+            "index": index,
+        })
+        if selected_idx is None and times:
+            selected_idx = index
+    if selected_idx is None:
+        return None
+
+    shop_id = _get_str(first_store, "shop_id", "shopId")
+    shop_name = _get_str(first_store, "shop_nm", "shopName", "storeName") or str(
+        getattr(slots, "shop_name", "") or ""
+    )
+    metadata = {"shopId": shop_id or None}
+    if shop_name:
+        metadata["shopName"] = shop_name
+    mode = _get_str(first_store, "mode")
+    if mode:
+        metadata["scheduleMode"] = mode
+        metadata["schedule_mode"] = mode
+
+    datepick = DatepickTemplate(
+        assistantResponse=_datepick_response(shop_name, dates) or answer,
+        dates=dates,
+        selectedDate=selected_idx,
+        metadata=metadata,
+    )
+    _normalize_datepick_payload(datepick, slots)
+    return {
+        "type": "data",
+        "template": "datepick",
+        "data": datepick.model_dump(mode="json", exclude_none=True),
+        "source_tool": call["name"],
+        "assistant_response_source": "code_chat_v3_install_availability",
     }
 
 
@@ -1493,6 +1559,10 @@ async def build_rich_data_event(
         return build_location_data_event(answer, call, slots)
     if template_name == "datepick" and call.get("name") == "get_store_schedule_tool":
         event = _get_store_schedule_datepick_event(answer, call, slots)
+        if event is not None:
+            return event
+    if template_name == "datepick" and call.get("name") == "get_store_install_availability_tool":
+        event = _get_install_availability_datepick_event(answer, call, slots)
         if event is not None:
             return event
 

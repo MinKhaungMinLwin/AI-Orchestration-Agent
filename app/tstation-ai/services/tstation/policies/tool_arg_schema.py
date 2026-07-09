@@ -288,6 +288,20 @@ TOOL_REQUIRED_INPUTS: dict[str, ToolInputSpec] = {
             "shop_id_list": ToolArgRule("매장 ID 목록", ("shop_id_list", "shopIdList"), ("shop_id_list_from_slots",)),
         },
     ),
+    # 역할: 매장별 물류/매장 재고와 예약 가능 일정을 통합 조회한다.
+    "get_store_install_availability_tool": ToolInputSpec(
+        role="매장별 장착 가능 일정 통합 조회",
+        args={
+            "shop_id_list": ToolArgRule("매장 ID 목록", ("shop_id_list", "shop_ids", "shopIds"), ("shop_ids_from_slots",)),
+            "goods_no": ToolArgRule("상품번호", ("goods_no", "goodsNo"), required=False),
+            "ord_qty": ToolArgRule("주문 수량", ("ord_qty", "ordQty", "quantity"), default=1, required=False),
+            "requested_cal_day": ToolArgRule(
+                "희망 예약일",
+                ("requested_cal_day", "requestedCalDay", "cal_day"),
+                required=False,
+            ),
+        },
+    ),
     # 역할: 장소명을 좌표/장소 후보로 검색한다.
     "search_place_tool": ToolInputSpec(
         role="장소명 검색",

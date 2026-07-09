@@ -119,6 +119,9 @@ from .shop_id_item import ShopIdItem
 from .store_complex_search_item import StoreComplexSearchItem
 from .store_complex_search_response import StoreComplexSearchResponse
 from .store_detail_response import StoreDetailResponse
+from .store_install_availability_item import StoreInstallAvailabilityItem
+from .store_install_availability_request import StoreInstallAvailabilityRequest
+from .store_install_availability_response import StoreInstallAvailabilityResponse
 from .store_inventory_request import StoreInventoryRequest
 from .store_inventory_response import StoreInventoryResponse
 from .store_list_item import StoreListItem
@@ -249,6 +252,9 @@ __all__ = (
     "StoreComplexSearchItem",
     "StoreComplexSearchResponse",
     "StoreDetailResponse",
+    "StoreInstallAvailabilityItem",
+    "StoreInstallAvailabilityRequest",
+    "StoreInstallAvailabilityResponse",
     "StoreInventoryRequest",
     "StoreInventoryResponse",
     "StoreListItem",

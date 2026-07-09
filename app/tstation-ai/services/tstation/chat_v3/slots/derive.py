@@ -26,6 +26,7 @@ _INPUT_FIELDS: dict[str, tuple[str, ...]] = {
     "save_to_cart_tool": ("goods_no", "ord_qty"),
     "get_store_inventory_tool": ("goods_no", "shop_id"),
     "get_logistics_inventory_tool": ("goods_no",),
+    "get_store_install_availability_tool": ("goods_no", "ord_qty", "requested_cal_day"),
     "get_store_detail_tool": ("shop_id",),
     "get_store_schedule_tool": ("shop_id",),
 }
@@ -36,6 +37,7 @@ _SINGLE_ROW_FIELDS: dict[str, str] = {
     "search_stores_tool": "shop_id",
     "get_store_list_tool": "shop_id",
     "get_nearby_stores_tool": "shop_id",
+    "get_store_install_availability_tool": "shop_id",
 }
 
 # FE payloads use camelCase in places; normalize to slot field names.
