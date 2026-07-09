@@ -81,6 +81,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     "search_faq_rag_tool": ToolSpec("search_faq_rag_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("search_faq_rag_tool")),
     "get_faq_tool": ToolSpec("get_faq_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("get_faq_tool")),
     "get_card_installments_tool": ToolSpec("get_card_installments_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("get_card_installments_tool")),
+    "get_my_relief_services_tool": ToolSpec("get_my_relief_services_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("get_my_relief_services_tool")),
     "get_my_warranties_tool": ToolSpec("get_my_warranties_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("get_my_warranties_tool")),
     "transfer_to_qna_tool": ToolSpec("transfer_to_qna_tool", frozenset({AgentFlow.FALLBACK_ESCALATION}), lambda: _support_tool("transfer_to_qna_tool"), read_only=False),
     "escalate_tool": ToolSpec("escalate_tool", frozenset({AgentFlow.FALLBACK_ESCALATION}), lambda: _support_tool("escalate_tool"), read_only=False),

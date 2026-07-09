@@ -185,7 +185,7 @@ class LeadingAgentPlanner:
             "with benefit_query set to the product name. "
             "For authenticated account lookups, set known_inputs.account_lookup to one of: "
             "coupons for owned coupon list, reservations for reservation history, orders for order history, "
-            "maintenance_history for service/maintenance history, warranties for owned warranty/assurance service. "
+            "maintenance_history for service/maintenance history, relief_services for the user's own Assurance Service/안심서비스 status, expiration, or compensation history, warranties for owned non-Assurance warranty records. "
             "For unsupported fact lookups that are not searchable in current tools, such as asking a vehicle's "
             "OE/factory tire part number or exact original-equipment part code, select FAQAF instead of ProductDescriptionAF. "
             "In those cases, treat the turn as an informational limitation answer: explain that the exact OE part number "

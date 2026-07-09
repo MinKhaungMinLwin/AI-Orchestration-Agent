@@ -521,6 +521,22 @@ class FakeExecutor(AFExecutor):
                     ]
                 },
             }
+        elif tool_name == "get_my_relief_services_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "relief_services": [
+                        {
+                            "ord_no": "O001",
+                            "vhcl_model_nm": "쏘나타",
+                            "join_state_nm": "정상",
+                            "relief_state_nm": "가입완료",
+                            "relief_end_dtime": "2027-07-01 23:59:59",
+                            "plus_yn": "Y",
+                        }
+                    ]
+                },
+            }
         elif tool_name == "quick_order_tool":
             if not allow_side_effect:
                 result = None
@@ -2591,6 +2607,36 @@ def test_my_warranty_uses_warranty_tool_not_faq_search() -> None:
     assert metadata["planner"]["selected_afs"][0]["af"] == "FAQAF"
     assert metadata["planner"]["selected_afs"][0]["known_inputs"]["account_lookup"] == "warranties"
     assert metadata["tool_calls"][0]["tool_name"] == "get_my_warranties_tool"
+
+
+def test_my_relief_services_uses_relief_service_tool_not_warranty_tool() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.FAQ,
+                    reason="owned assurance service lookup",
+                    known_inputs={"account_lookup": "relief_services"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 안심서비스 조회해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="my-relief-services",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events == []
+    assert metadata["planner"]["selected_afs"][0]["af"] == "FAQAF"
+    assert metadata["planner"]["selected_afs"][0]["known_inputs"]["account_lookup"] == "relief_services"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_my_relief_services_tool"
 
 
 def test_product_compatibility_uses_my_cars_tool_and_listcar_template() -> None:

@@ -7,6 +7,7 @@ from services.tstation.agents.e_support_agent.tools import (
     get_maintenance_dday_tool,
     get_my_cars_tool,
     get_my_coupons_tool,
+    get_my_relief_services_tool,
     get_my_warranties_tool,
     get_product_warranties_tool,
     get_static_faq_policy_tool,
@@ -141,6 +142,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 | search_faq_rag_tool | Fallback only: get_faq_tool fails or returns no relevant result at limit=200 |
 | transfer_to_qna_tool | Intent 0 (user agrees), 1A, 1C (after FAQ/policy answer), or FAQ exhausted |
 | get_product_warranties_tool | 사용자가 **특정 상품**의 워런티 적용 가능 종류를 물을 때 (goods_no 필요). FAQ 보다 우선. |
+| get_my_relief_services_tool | 사용자가 **본인이 가입/신청/보유한 안심서비스/안심플러스**의 가입 여부, 상태, 유효/만료 여부, 보상/클레임 처리 또는 이력을 물을 때 (JWT mbr_no 자동). FAQ/워런티보다 우선. |
 | get_my_warranties_tool | 사용자가 **본인 보유** 워런티 현황을 물을 때 (JWT mbr_no 자동). FAQ 보다 우선. |
 | get_maintenance_dday_tool | 사용자가 **본인 차량**의 정비 일정/주기 D-day 를 물을 때 (mbr_car_reg_seq 필요). FAQ 보다 우선. 차량 컨텍스트 없으면 호출 금지 → chip 핸드오프. |
 | get_card_installments_tool | 사용자가 **카드사별 무이자 할부** 가능 여부/개월수를 물을 때 (예: "신한 무이자 돼?", "12개월 무이자 어떤 카드?", "무이자 할부 가능한 카드 알려줘"). FAQ 보다 우선. tgt_amt 는 사용자가 결제 금액 명시 시에만 전달 (예: "30만원 결제 무이자"). |
@@ -159,7 +161,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 
 **Warranty data lookup rules (신규 도구 — 본 블록이 아래 FAQ 기반 Digital Warranty 룰보다 우선):**
 
-특정 상품의 워런티 적용 여부 또는 회원 본인 보유 워런티 조회는 신규 도구를 먼저 사용한다.
+특정 상품의 워런티 적용 여부, 회원 본인 안심서비스 이력, 회원 본인 보유 워런티 조회는 신규 도구를 먼저 사용한다.
 정책/조건 일반 질문 ("얼마", "어떻게", "조건", "범위") 은 아래 FAQ 기반 룰 (Digital Warranty / 안심서비스 answer rules) 그대로 적용.
 
 - **Warranty claim signal — 조기 마모/품질 불만 + 보상/교체 요구**: 사용자가 상품명/모델명과 함께
@@ -170,7 +172,12 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   - 첫 chip은 항상 `{"label":"나의 워런티 확인","url":"__URL_WARRANTY_MAIN__","domain":"SUPPORT"}`.
   - 차량번호/타이어사이즈를 받아 구매 진행처럼 이어가거나, 상품 설명/추천 위주로 답하지 않는다.
 
-- **Path A — 회원 본인 보유 워런티**: 사용자가 "내 워런티", "내가 가입한 안심서비스", "내 품질보증 만료일", "워런티 현황", "내 보증 남은 기간" 식으로 본인 보유를 묻는 경우 → `get_my_warranties_tool()` 호출.
+- **Path A1 — 회원 본인 안심서비스 가입/보상 이력**: 사용자가 안심서비스/안심플러스에 대해 **본인의 가입·신청·보유 여부, 현재 상태, 유효/만료 여부, 만료일, 보상/클레임 처리 상태 또는 과거 이력**을 확인하려는 경우 → `get_my_relief_services_tool()` 호출. 표현이 달라도 회원 본인 레코드 확인 의도이면 이 경로를 우선하고, 워런티 API나 FAQ로 대체하지 않는다.
+  - 응답 본문 (성공 + relief_services 1건 이상): "고객님의 안심서비스 내역을 확인했어요 😊" + 각 항목을 차량/주문번호/가입상태/서비스상태/마감일/보상 실행일/주행거리/안심플러스 여부 중 응답에 있는 값만 자연스럽게 요약한다. 시각(HH:MM:SS)은 노출하지 말고 날짜까지만 안내한다.
+  - relief_services=[] (보유 0건): "고객님께서 현재 확인되는 안심서비스 가입/보상 이력이 없어요. 자세한 내용은 마이페이지 또는 1:1 문의로 확인해 주세요."
+  - **CTA (필수)**: quickReplies 첫 chip 으로 `{"label":"나의 워런티 확인","url":"__URL_WARRANTY_MAIN__","domain":"SUPPORT"}` 포함.
+
+- **Path A2 — 회원 본인 보유 워런티**: 사용자가 "내 워런티", "내 품질보증 만료일", "워런티 현황", "내 보증 남은 기간" 식으로 안심서비스가 아닌 본인 보유 워런티를 묻는 경우 → `get_my_warranties_tool()` 호출.
   - 응답 본문 (성공 + warranties 1건 이상): "고객님이 보유하신 워런티는 다음과 같아요 😊" + 각 항목을 다음 markdown bullet 형식으로 노출 (각 라인 사이 `\n\n` 1줄):
     `- **{wrt_nm}**: {wrt_prgs_stat_nm} (가입 {wrt_reg_date}, 만료 {wrt_exp_date})`
     날짜 필드가 null 이면 해당 부분만 "(만료일 미정)" 또는 "(가입일 미정)" 으로 치환. 시각(HH:MM:SS) 절대 노출 금지 — BE 가 YYYY-MM-DD 로만 내려준다.
@@ -712,6 +719,7 @@ def get_support_tools() -> list:
         *faq_tools,
         transfer_to_qna_tool,
         get_product_warranties_tool,
+        get_my_relief_services_tool,
         get_my_warranties_tool,
         get_maintenance_dday_tool,
         get_my_cars_tool,
@@ -739,6 +747,7 @@ class SupportSubAgent(BaseAgent):
         # Warranty 조회 도구도 정보성 응답이라 FAQ AF 로 묶는다 — 표준 AF 10개
         # 유지를 위해 별도 AF 신설하지 않음.
         "get_product_warranties_tool": "FAQ",
+        "get_my_relief_services_tool": "FAQ",
         "get_my_warranties_tool": "FAQ",
         # 정비 D-day 매트릭스도 정보성 응답이라 FAQ AF 묶음 유지.
         "get_maintenance_dday_tool": "FAQ",

@@ -116,6 +116,7 @@ class StructuredKnownInputs(BaseModel):
         "reservations",
         "orders",
         "maintenance_history",
+        "relief_services",
         "warranties",
     ] | None
 

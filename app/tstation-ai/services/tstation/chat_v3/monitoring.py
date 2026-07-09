@@ -79,6 +79,7 @@ V3_TOOL_TO_CUSTOMER_AF: dict[str, str] = {
     # FAQ AF
     "search_faq_hybrid_tool": "FAQ AF",
     "get_product_warranties_tool": "FAQ AF",
+    "get_my_relief_services_tool": "FAQ AF",
     "get_my_warranties_tool": "FAQ AF",
     "get_maintenance_dday_tool": "FAQ AF",
     "get_card_installments_tool": "FAQ AF",
