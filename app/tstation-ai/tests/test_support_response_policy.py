@@ -1,6 +1,8 @@
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.response_decision import ResponseShape, TemplateName
 from services.tstation.policies.support_response_policy import (
     _is_card_installment_lookup_query,
+    build_support_faq_policy_event,
     build_maintenance_dday_event,
     build_maintenance_history_event,
     build_order_document_guidance_event,
@@ -85,6 +87,25 @@ def test_signup_first_purchase_benefit_policy_uses_faq_contract() -> None:
     assert "start_owned_coupon_lookup" in decision.forbidden_behaviors
     assert "call_coupon_issue_tool" in decision.forbidden_behaviors
     assert "all my T 회원이고 마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능" in decision.assistant_guidance
+
+
+def test_assurance_service_installation_fee_uses_dedicated_fact_and_cta() -> None:
+    user_text = "안심서비스 보상 신청했는데 장착비 무료 맞죠?"
+
+    decision = decide_support_response(intent="support_faq", user_text=user_text)
+    resolution = resolve_support_faq_policy_context("assurance_service_policy", user_text)
+    event = build_support_faq_policy_event(
+        intent="assurance_service_policy",
+        user_query=user_text,
+        tool_result={"data": {"items": []}},
+    )
+
+    assert decision.metadata["response_shape_key"] == "assurance_service_policy"
+    assert resolution == {"policy_group": "assurance_warranty_policy", "fact_type": "assurance_installation_fee"}
+    assert "17인치 이하 15,000원" in event["data"]["assistantResponse"]
+    assert "18인치 이상 20,000원" in event["data"]["assistantResponse"]
+    assert event["data"]["quickReplies"][0]["label"] == "안심서비스 상세"
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.WARRANTY_EASE_DETAIL
 
 
 def test_signup_first_purchase_benefit_policy_text_trigger_without_explicit_intent() -> None:

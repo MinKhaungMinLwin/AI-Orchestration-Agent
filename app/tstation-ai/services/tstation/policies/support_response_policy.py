@@ -1607,8 +1607,12 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
         strong_fact_types = []
         if _ASSURANCE_DOCUMENT_LOST_RE.search(text):
             strong_fact_types.append("assurance_document_lost")
+        if re.search(r"장착비|장착\s*비|공임|17\s*인치|18\s*인치|런플렛|런플랫", text, re.IGNORECASE):
+            strong_fact_types.append("assurance_installation_fee")
         if re.search(r"조건|보상|가입|워런티|안심\s*서비스|안심플러스", text, re.IGNORECASE):
             strong_fact_types.append("assurance_coverage_condition")
+        if "assurance_installation_fee" in strong_fact_types and "assurance_coverage_condition" in strong_fact_types:
+            strong_fact_types = [t for t in strong_fact_types if t != "assurance_coverage_condition"]
         if len(strong_fact_types) > 1:
             return {
                 "policy_group": _ASSURANCE_WARRANTY_POLICY,
@@ -1738,6 +1742,14 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
         return bool(_PAYMENT_ERROR_RE.search(text))
     if fact_type == "assurance_coverage_condition":
         return bool(re.search(r"안심\s*서비스|안심플러스|보상|가입|워런티|16,?000km|1년", text, re.IGNORECASE))
+    if fact_type == "assurance_installation_fee":
+        return bool(
+            re.search(
+                r"안심\s*서비스|안심플러스|보상|장착비|장착\s*비|공임|17\s*인치|18\s*인치|런플렛|런플랫",
+                text,
+                re.IGNORECASE,
+            )
+        )
     if fact_type == "assurance_document_lost":
         return bool(_ASSURANCE_DOCUMENT_LOST_RE.search(text))
     if fact_type == "quality_warranty_condition":
@@ -1886,6 +1898,11 @@ def _extract_support_faq_policy_facts(
         facts["mileage_limit"] = "16,000km" if re.search(r"16[, ]?000\s*km", combined, re.IGNORECASE) else None
         facts["assurance_min_qty"] = "2개" if re.search(r"2개\s*이상", combined, re.IGNORECASE) else None
         facts["plus_min_qty"] = "4개" if re.search(r"4개\s*(?:구매|이상)", combined, re.IGNORECASE) else None
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_installation_fee":
+        facts["installation_fee_customer_paid"] = bool(re.search(r"고객\s*부담|별도|부담", combined, re.IGNORECASE))
+        facts["under_17_fee"] = "15,000원" if re.search(r"17\s*인치\s*이하.{0,12}15,?000원", combined, re.IGNORECASE) else None
+        facts["over_18_fee"] = "20,000원" if re.search(r"18\s*인치\s*이상.{0,12}20,?000원", combined, re.IGNORECASE) else None
+        facts["runflat_extra_fee"] = "10,000원 추가" if re.search(r"런플[렛랫].{0,12}10,?000원", combined, re.IGNORECASE) else None
     elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_document_lost":
         facts["digital_or_history_check"] = bool(re.search(r"디지털|구매\s*이력|장착\s*이력|워런티", combined, re.IGNORECASE))
     elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "quality_warranty_condition":
@@ -1940,6 +1957,8 @@ def _support_faq_reply_ctas(policy_group: str, fact_type: str, *, user_text: str
                 {"label": "차량으로 확인하기", "domain": "DISCOVERY"},
                 {"label": "타이어 사이즈 입력", "domain": "DISCOVERY"},
             ]
+        if fact_type == "assurance_installation_fee":
+            return [{"label": "안심서비스 상세", "url": CTAUrls.WARRANTY_EASE_DETAIL, "domain": "SUPPORT"}]
         return [{"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"}]
     if policy_group == _BENEFIT_PROMOTION_POLICY:
         return [{"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"}]
@@ -2176,6 +2195,11 @@ def _build_support_faq_policy_reply(
             "안심서비스/안심플러스 보상 조건은 장착 후 1년 이내, 주행거리 16,000km 이내 같은 기본 조건을 먼저 확인해야 해요.\n"
             "안심서비스는 2개 이상, 안심플러스는 4개 구매 기준과 대상 상품·약관에 따라 적용 범위가 달라질 수 있어요.\n"
             "보상 여부는 실제 구매 수량, 대상 상품, 손상 상태를 함께 확인해 주세요."
+        )
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_installation_fee":
+        response = (
+            "안심서비스 이용 시 타이어 장착비는 고객 부담이며, 휠 사이즈와 타이어 종류에 따라 금액이 달라질 수 있어요.\n"
+            "기준 금액은 17인치 이하 15,000원, 18인치 이상 20,000원이며 런플렛 타이어는 10,000원이 추가됩니다."
         )
     elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_document_lost":
         response = (
