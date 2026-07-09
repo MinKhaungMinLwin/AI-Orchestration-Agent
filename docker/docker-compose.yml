@@ -162,8 +162,10 @@
         condition: service_healthy
     env_file:
       - ../.env
-    volumes:
-      - ingestion-data:/app/data
+    # No named volume on /app/data: it would shadow the freshly-built image and
+    # hide local_faq.json updates. `up --build` bakes the latest overlay into the
+    # image, and main.py reconciles it into Qdrant (the real persistent store) on
+    # start. Qdrant embeddings persist in the separate qdrant-data volume.
     networks:
       - internal-net
     restart: on-failure
@@ -383,7 +385,6 @@ networks:
 volumes:
   qdrant-data:
   rabbitmq-data:
-  ingestion-data:
   langfuse-clickhouse-data:
   langfuse-clickhouse-logs:
   langfuse-minio-data:
