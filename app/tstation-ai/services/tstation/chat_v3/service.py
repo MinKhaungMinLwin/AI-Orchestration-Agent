@@ -45,6 +45,7 @@ _STREAM_HEADERS = {
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }
+_ADD_TO_CART_INTENT = "add_to_cart"
 _CART_CONFIRMATION_INTENT = "cart_confirmation"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
 
@@ -66,7 +67,16 @@ def _is_confirmed_cart_turn(decision: RouteDecision | None, slots: ConversationS
         _CART_CONFIRMATION_INTENT in decision.intents
         and slots.goods_no
         and slots.ord_qty
-        and (slots.pending_intent == "cart" or slots.goal_type == "add_to_cart")
+    )
+
+
+def _normalize_add_to_cart_slots(decision: RouteDecision | None, slots: ConversationSlots) -> ConversationSlots:
+    if decision is None or _ADD_TO_CART_INTENT not in decision.intents:
+        return slots
+    return slots.apply_runtime_values(
+        {"pending_intent": "cart", "goal_type": "add_to_cart"},
+        source="chat_v3:add_to_cart_intent",
+        fill_only=True,
     )
 
 
@@ -324,6 +334,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         return
 
     slots = apply_patch(slots, decision.slots_patch if decision else None)
+    slots = _normalize_add_to_cart_slots(decision, slots)
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
 
