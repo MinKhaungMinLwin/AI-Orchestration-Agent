@@ -26,6 +26,7 @@ class GuardId(str, Enum):
     SHIPPING_FEE_REGION = "shipping_fee_region"
     ONLINE_STORE_PRICE_POLICY = "online_store_price_policy"
     REGIONAL_PRICE_POLICY = "regional_price_policy"
+    OUT_OF_SCOPE = "out_of_scope"
 
 
 class Domain(str, Enum):

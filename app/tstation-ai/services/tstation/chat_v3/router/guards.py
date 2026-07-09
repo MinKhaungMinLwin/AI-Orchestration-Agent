@@ -142,6 +142,19 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
     GuardId.SHIPPING_FEE_REGION: _guard_from_static_faq_policy("shipping_fee_region"),
     GuardId.ONLINE_STORE_PRICE_POLICY: _guard_from_static_faq_policy("online_store_price_policy"),
     GuardId.REGIONAL_PRICE_POLICY: _guard_from_static_faq_policy("regional_price_policy"),
+    GuardId.OUT_OF_SCOPE: Guard(
+        id="out_of_scope",
+        text=(
+            "죄송하지만 저는 한국타이어 T'Station 챗봇이라 타이어·차량 관리, 매장·주문·혜택·보증 관련 문의만 "
+            "도와드릴 수 있어요. 말씀하신 내용은 제가 답변드리기 어려운 주제예요 😊"
+        ),
+        chips=[
+            {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ],
+        predicted_domains=["DISCOVERY", "TRANSACTION", "SUPPORT"],
+    ),
 }
 
 
