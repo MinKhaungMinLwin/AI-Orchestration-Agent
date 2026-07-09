@@ -204,6 +204,26 @@ def test_store_and_reservation_ctas_get_conversation_contracts() -> None:
     assert date_chip["expected_contract_intent"] == "store_schedule"
 
 
+def test_my_reservation_lookup_cta_uses_reservation_history_tool() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "예약 내역을 확인할 수 있어요.",
+            "quickReplies": [{"label": "내 예약 조회", "domain": "TRANSACTION"}],
+        },
+    }
+
+    normalize_quickreply_ctas(event, contract=TurnContract(domain="transaction", intent="reservation_status_lookup"))
+    chip = event["data"]["quickReplies"][0]
+
+    assert chip["cta_id"] == "order.reservation.lookup"
+    assert chip["cta_action"] == "lookup_my_reservations"
+    assert chip["expected_contract_intent"] == "reservation_status_lookup"
+    assert chip["metadata"]["allowed_tools"] == ["get_my_reservations_tool"]
+
+
 def test_forbidden_tool_cta_is_removed_and_quickreplies_may_be_empty() -> None:
     contract = TurnContract(
         domain="support",
@@ -310,7 +330,7 @@ def test_entry_point_ctas_are_registered_with_contract_intents() -> None:
         "order.reservation.lookup",
     ]
     assert chips[2]["expected_contract_intent"] == "vehicle_lookup"
-    assert chips[3]["expected_contract_intent"] == "order_history_lookup"
+    assert chips[3]["expected_contract_intent"] == "reservation_status_lookup"
 
 
 def test_unregistered_chip_with_url_is_kept_as_open_url_action() -> None:

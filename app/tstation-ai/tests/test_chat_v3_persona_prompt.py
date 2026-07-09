@@ -9,6 +9,7 @@ TRANSACTION_WRITE_GUIDANCE = _PERSONA["TRANSACTION_WRITE_GUIDANCE"]
 STORE_SEARCH_FLOW_GUIDANCE = _PERSONA["STORE_SEARCH_FLOW_GUIDANCE"]
 VEHICLE_LOOKUP_GUIDANCE = _PERSONA["VEHICLE_LOOKUP_GUIDANCE"]
 ORDER_HISTORY_GUIDANCE = _PERSONA["ORDER_HISTORY_GUIDANCE"]
+RESERVATION_HISTORY_GUIDANCE = _PERSONA["RESERVATION_HISTORY_GUIDANCE"]
 
 
 def test_system_prompt_limits_store_recommendations_to_tool_verifiable_conditions():
@@ -78,3 +79,10 @@ def test_order_history_guidance_calls_tool_instead_of_refusing_or_redirecting():
     assert "조회 기능이 없다고 답하거나 마이페이지로만 안내하지 마세요" in ORDER_HISTORY_GUIDANCE
     assert "get_order_status_tool" in ORDER_HISTORY_GUIDANCE
     assert "주문번호를 먼저 알려 달라고 되묻지 마세요" in ORDER_HISTORY_GUIDANCE
+
+
+def test_reservation_history_guidance_calls_tool_instead_of_refusing_or_redirecting():
+    assert "get_my_reservations_tool" in RESERVATION_HISTORY_GUIDANCE
+    assert "조회 기능이 없다고 답하거나 마이페이지로만 안내하지 마세요" in RESERVATION_HISTORY_GUIDANCE
+    assert "오늘 오후에 예약한 거 있지?" in RESERVATION_HISTORY_GUIDANCE
+    assert "get_store_install_availability_tool" in RESERVATION_HISTORY_GUIDANCE
