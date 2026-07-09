@@ -12689,24 +12689,16 @@ def _product_description_price_context(user_text: str | None = None) -> bool:
 
 def _product_description_price_lines(row: Mapping[str, Any]) -> list[str]:
     sale_prc = _to_int(row.get("sale_prc"))
-    extra_fvr_sale_prc = _to_int(row.get("extra_fvr_sale_prc"))
     cheapest_final_prc = _to_int(row.get("cheapest_final_prc"))
 
-    if sale_prc is None and extra_fvr_sale_prc is None and cheapest_final_prc is None:
+    if sale_prc is None and cheapest_final_prc is None:
         return []
 
     lines: list[str] = []
     if sale_prc is not None:
-        lines.append(f"현재 확인 기준 정가는 {_format_krw(sale_prc)}예요.")
-        if cheapest_final_prc is not None:
-            lines.append(f"회원 보유 쿠폰 적용 시 최저 혜택가는 {_format_krw(cheapest_final_prc)}까지 확인돼요.")
-        elif extra_fvr_sale_prc is not None and extra_fvr_sale_prc != sale_prc:
-            lines.append(f"현재 확인 기준 혜택가는 {_format_krw(extra_fvr_sale_prc)}까지 확인돼요.")
-        return lines
-
-    best_price = cheapest_final_prc or extra_fvr_sale_prc
-    if best_price is not None:
-        lines.append(f"현재 확인 기준 가격은 {_format_krw(best_price)}예요.")
+        lines.append(f"현재 확인 기준 기본가는 {_format_krw(sale_prc)}예요.")
+    if cheapest_final_prc is not None:
+        lines.append(f"회원 보유 쿠폰 적용 시 최저 혜택가는 {_format_krw(cheapest_final_prc)}까지 확인돼요.")
     return lines
 
 
