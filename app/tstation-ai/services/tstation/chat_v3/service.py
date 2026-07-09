@@ -14,9 +14,10 @@ from fastapi.responses import StreamingResponse
 from config.env import settings
 from config.tracing import _tracing_enabled, build_trace_config, safe_trace_update, set_trace_name, tracer, truncate_for_trace
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
+from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
 from services.tstation.chat_v3 import composer, context, memory, monitoring, qc, sse, templates
-from services.tstation.chat_v3.executor import ToolLoopExecutor
+from services.tstation.chat_v3.executor import ToolLoopExecutor, _tool_output_text
 from services.tstation.chat_v3.prompts.persona import (
     ERROR_RESPONSE,
     ORDER_HISTORY_GUIDANCE,
@@ -31,6 +32,7 @@ from services.tstation.chat_v3.router.schemas import Domain, RouteDecision
 from services.tstation.chat_v3.slots.derive import apply_fe_slots, derive_slots_from_tool_calls
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
 from services.tstation.policies.cta_registry import normalize_quickreply_ctas
 from services.tstation.policies.internal_product_code_policy import sanitize_internal_product_codes
@@ -43,6 +45,8 @@ _STREAM_HEADERS = {
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }
+_CART_CONFIRMATION_INTENT = "cart_confirmation"
+_SAVE_TO_CART_TOOL = "save_to_cart_tool"
 
 
 def _tool_display_names() -> dict[str, str]:
@@ -53,6 +57,32 @@ def _tool_display_names() -> dict[str, str]:
 
 def _tokens_enabled() -> bool:
     return bool(getattr(settings, "AI_CHAT_V3_STREAM_TOKENS", True))
+
+
+def _is_confirmed_cart_turn(decision: RouteDecision | None, slots: ConversationSlots) -> bool:
+    if decision is None:
+        return False
+    return bool(
+        _CART_CONFIRMATION_INTENT in decision.intents
+        and slots.goods_no
+        and slots.ord_qty
+        and (slots.pending_intent == "cart" or slots.goal_type == "add_to_cart")
+    )
+
+
+def _cart_tool_args(slots: ConversationSlots) -> dict:
+    args = {"goods_no": slots.goods_no, "ord_qty": slots.ord_qty}
+    if slots.car_lnc_cd:
+        args["car_lnc_cd"] = slots.car_lnc_cd
+    return args
+
+
+def _cart_tool_success(output_text: str) -> bool:
+    try:
+        parsed = json.loads(output_text)
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict) and parsed.get("status") == "success"
 
 
 def _allow_selection_cards(decision: RouteDecision | None) -> bool:
@@ -238,6 +268,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     _audit_set_user_message(user_text)
 
     yield sse.status("생각 중...")
+    slots = await load_slots(request.session_id)
+    slots = apply_fe_slots(slots, request)  # card-click payload: goods_no/shop_id/…
     decision = await route_request(
         request,
         trace_config=_trace_config(
@@ -247,6 +279,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             tags=["router"],
             parent_span_id=parent_span_id,
         ),
+        known_slots=slots,
     )
     t_route = time.perf_counter()
 
@@ -290,11 +323,87 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             yield event
         return
 
-    slots = await load_slots(request.session_id)
     slots = apply_patch(slots, decision.slots_patch if decision else None)
-    slots = apply_fe_slots(slots, request)  # card-click payload: goods_no/shop_id/…
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
+
+    if _is_confirmed_cart_turn(decision, slots):
+        tool = next((candidate for candidate in tools_for_domains(["TRANSACTION"]) if candidate.name == _SAVE_TO_CART_TOOL), None)
+        args = _cart_tool_args(slots)
+        display = _tool_display_names().get(_SAVE_TO_CART_TOOL, _SAVE_TO_CART_TOOL)
+        yield sse.agent_flow("[V3 TRANSACTION FLOW]", "start")
+        yield sse.tool_start(_SAVE_TO_CART_TOOL, display)
+        if tool is None:
+            output_text = f"Unknown tool: {_SAVE_TO_CART_TOOL}"
+        else:
+            try:
+                output = await tool.ainvoke(
+                    args,
+                    config=_trace_config(
+                        request,
+                        run_name="chat_v3_confirmed_cart_tool",
+                        prompt_name="chat_v3_confirmed_cart_tool",
+                        tags=["tool_loop", "cart_confirmation"],
+                        parent_span_id=parent_span_id,
+                    ),
+                )
+                output_text = _tool_output_text(output)
+            except Exception as exc:
+                logger.exception("[CHAT_V3] confirmed cart tool failed")
+                output_text = f"Tool error: {exc}"
+        tool_call = {"name": _SAVE_TO_CART_TOOL, "args": args, "output": output_text}
+        success = _cart_tool_success(output_text)
+        yield sse.tool_result(_SAVE_TO_CART_TOOL, args, output_text[:4000])
+        yield sse.agent_flow(display, "success" if success else "error")
+        if success:
+            answer = "장바구니에 담았어요. 바로 주문하시겠어요?"
+            chips = [
+                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                {"label": "주문 내역 보기", "domain": "TRANSACTION", "url": CTAUrls.ORDER_HISTORY},
+            ]
+        else:
+            answer = "장바구니 담기 중 문제가 생겼어요. 다시 시도해 주세요."
+            chips = [{"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART}]
+        result["answer"] = answer
+        if _tokens_enabled():
+            yield sse.token(answer)
+        yield sse.message(answer)
+        yield sse.data_event(
+            "quickReply",
+            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": ["TRANSACTION"]},
+            source_domain="TRANSACTION",
+        )
+        _update_trace_monitoring(
+            route_domains=domains,
+            tool_calls=[tool_call],
+            final_template="quickReply",
+            trace_id=request.tracing_id,
+            parent_span_id=parent_span_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            answer=answer,
+            user_text=user_text,
+            message_id=message_id,
+            route_intents=list(decision.intents if decision else []),
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            trace_observation=parent_span,
+        )
+        if parent_span is not None:
+            parent_span.end()
+        _flush_trace()
+        yield sse.agent_flow("[DONE]", "success")
+        for event in sse.done():
+            yield event
+        slots = derive_slots_from_tool_calls(slots, [tool_call])
+        await save_slots(request.session_id, slots, user_id=request.user_id)
+        await memory.persist_turn_context(
+            request.session_id,
+            tool_calls=[tool_call],
+            quick_reply_domains=[chip["domain"] for chip in chips],
+            predicted_domains=["TRANSACTION"],
+            user_id=request.user_id,
+        )
+        return
 
     extra_context = []
     if "TRANSACTION" in domains:
