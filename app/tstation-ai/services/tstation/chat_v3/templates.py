@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field, create_model
 
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.templates.schemas import (
+    CarItem,
+    CarMeta,
     CheapestProductTemplate,
     DatepickTemplate,
     ListCarTemplate,
@@ -869,6 +871,128 @@ def _store_rows_from_output(output: str) -> list[dict[str, Any]]:
     return []
 
 
+def _car_rows_from_output(output: str) -> list[dict[str, Any]]:
+    parsed = _parse_tool_output(output)
+    if not parsed:
+        return []
+    data = parsed.get("data")
+    if isinstance(data, list):
+        return _rows_from_any(data)
+    candidates = [data, parsed]
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        rows = _rows_from_any(candidate.get("items"))
+        if rows:
+            return rows
+    if any(_get_str(parsed, key) for key in ("car_no", "carNo", "licensePlate")):
+        return [parsed]
+    return []
+
+
+def _car_available_sizes(row: dict[str, Any]) -> list[str]:
+    raw_sizes = (
+        row.get("available_sizes") or row.get("availableSizes") or row.get("valid_sizes") or row.get("validSizes")
+    )
+    candidates = raw_sizes if isinstance(raw_sizes, list) else []
+    sizes: list[str] = []
+    for raw_size in [
+        *candidates,
+        row.get("tire_size_fr"),
+        row.get("tireSize"),
+        row.get("tire_size_re"),
+        row.get("tireSizeRe"),
+    ]:
+        size = normalize_tire_size(str(raw_size or ""))
+        if size and size not in sizes:
+            sizes.append(size)
+    return sizes
+
+
+def _listcar_contract_intent(slots: ConversationSlots | None) -> str:
+    if slots is None:
+        return "vehicle_resolved_recommendation"
+    if slots.pending_intent == "order" or slots.goal_type == "place_order":
+        return "quick_order_reservation"
+    if slots.pending_intent == "stock" or slots.goal_type == "store_with_stock":
+        return "stock_store_search"
+    return "vehicle_resolved_recommendation"
+
+
+def build_listcar_data_event(answer: str, call: dict, slots: ConversationSlots | None = None) -> dict | None:
+    rows = _car_rows_from_output(str(call.get("output") or ""))
+    if not rows:
+        return None
+
+    items: list[CarItem] = []
+    metadata: list[CarMeta] = []
+    source_intent = _listcar_contract_intent(slots)
+    for row in rows[:5]:
+        car_no = _get_str(row, "car_no", "carNo", "licensePlate")
+        if not car_no:
+            continue
+        car_model = _get_str(row, "car_model_det", "carModelDet", "car_nm", "carName", "car_model", "carModel")
+        car_maker = _get_str(row, "car_maker", "carMaker")
+        car_info = " ".join(part for part in (car_maker, car_model) if part).strip() or car_no
+        available_sizes = _car_available_sizes(row)
+        multiple_sizes = len(available_sizes) > 1
+        tire_size = None if multiple_sizes else (normalize_tire_size(_get_str(row, "tire_size_fr", "tireSize")) or None)
+        tire_size_re = (
+            None if multiple_sizes else (normalize_tire_size(_get_str(row, "tire_size_re", "tireSizeRe")) or None)
+        )
+        items.append(
+            CarItem(
+                licensePlate=car_no,
+                info=car_info,
+                description=car_info,
+                imageUrl=_get_str(row, "thnl_img_path_nm", "mo_img_path_nm", "pc_img_path_nm", "imageUrl"),
+            )
+        )
+        metadata.append(
+            CarMeta(
+                carNo=car_no,
+                car_no=car_no,
+                carLncCd=_get_str(row, "car_lnc_cd", "carLncCd") or None,
+                car_lnc_cd=_get_str(row, "car_lnc_cd", "carLncCd") or None,
+                mbrCarRegSeq=_get_str(row, "mbr_car_reg_seq", "mbr_car_unif_no", "mbrCarRegSeq") or None,
+                mbr_car_reg_seq=_get_str(row, "mbr_car_reg_seq", "mbr_car_unif_no", "mbrCarRegSeq") or None,
+                carMaker=car_maker or None,
+                carModelDet=_get_str(row, "car_model_det", "carModelDet") or None,
+                car_model_det=_get_str(row, "car_model_det", "carModelDet") or None,
+                carName=_get_str(row, "car_nm", "carName") or None,
+                car_nm=_get_str(row, "car_nm", "carName") or None,
+                carTrim=_get_str(row, "ver_opt_choc", "carTrim") or None,
+                carEngine=_get_str(row, "car_engine", "carEngine") or None,
+                carType=_get_str(row, "car_type", "carType") or None,
+                car_type=_get_str(row, "car_type", "carType") or None,
+                vehicleType=_get_str(row, "vehicle_type", "vehicleType") or None,
+                vehicle_type=_get_str(row, "vehicle_type", "vehicleType") or None,
+                tireSize=tire_size,
+                tire_size_fr=tire_size,
+                tireSizeRe=tire_size_re,
+                tire_size_re=tire_size_re,
+                availableSizes=available_sizes or None,
+                available_sizes=available_sizes or None,
+                ctaAction="select_vehicle_candidate",
+                cta_action="select_vehicle_candidate",
+                sourceIntent=source_intent,
+                source_intent=source_intent,
+                expectedContractIntent=source_intent,
+                expected_contract_intent=source_intent,
+            )
+        )
+
+    if not items:
+        return None
+    payload = ListCarTemplate(assistantResponse=answer, listCar=items, metadata=metadata)
+    return {
+        "type": "data",
+        "template": "listCar",
+        "data": payload.model_dump(mode="json", exclude_none=True),
+        "source_tool": call["name"],
+    }
+
+
 def _rows_from_any(value: object) -> list[dict[str, Any]]:
     return [row for row in value if isinstance(row, dict)] if isinstance(value, list) else []
 
@@ -1475,6 +1599,8 @@ async def build_rich_data_event(
     if source is None:
         return None
     template_name, template_model, call = source
+    if template_name == "listCar":
+        return build_listcar_data_event(answer, call, slots)
     if template_name == "preOrder":
         if call.get("name") == "get_final_price_tool":
             return build_final_price_preorder_event(answer, slots, call)
