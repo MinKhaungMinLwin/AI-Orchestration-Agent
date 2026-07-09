@@ -8,6 +8,7 @@ Turn pipeline (all decisions LLM-made, zero regex):
 import json
 import logging
 import time
+from collections.abc import Callable
 
 from fastapi.responses import StreamingResponse
 
@@ -47,6 +48,7 @@ _STREAM_HEADERS = {
 }
 _ADD_TO_CART_INTENT = "add_to_cart"
 _CART_CONFIRMATION_INTENT = "cart_confirmation"
+_ORDER_PREVIEW_TOOL = "present_order_preview_tool"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
 _CART_PREVIEW_SLOT_KEYS = {"ord_qty", "tire_model", "tire_size", "shop_name", "requested_cal_day", "rsv_hour"}
 
@@ -109,6 +111,43 @@ def _cart_tool_args(slots: ConversationSlots) -> dict:
     if slots.car_lnc_cd:
         args["car_lnc_cd"] = slots.car_lnc_cd
     return args
+
+
+def _as_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ready_cart_slots(slots: ConversationSlots) -> bool:
+    return bool(
+        slots.goods_no
+        and slots.ord_qty
+        and (slots.pending_intent == "cart" or slots.goal_type == "add_to_cart")
+    )
+
+
+def _same_cart_preview_args(args: dict, slots: ConversationSlots) -> bool:
+    goods_no = str(args.get("goods_no") or "").strip()
+    ord_qty = _as_int(args.get("ord_qty"))
+    return goods_no == str(slots.goods_no or "").strip() and ord_qty == slots.ord_qty
+
+
+def _duplicate_cart_preview_tool_normalizer(slots: ConversationSlots, *, enabled: bool) -> Callable[[dict], dict]:
+    def normalize(call: dict) -> dict:
+        if not enabled or (call.get("name") or "") != _ORDER_PREVIEW_TOOL:
+            return call
+        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        if not _ready_cart_slots(slots) or not _same_cart_preview_args(args, slots):
+            return call
+
+        normalized = dict(call)
+        normalized["name"] = _SAVE_TO_CART_TOOL
+        normalized["args"] = _cart_tool_args(slots)
+        return normalized
+
+    return normalize
 
 
 def _cart_tool_success(output_text: str) -> bool:
@@ -470,6 +509,11 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             prompt_name="chat_v3_chat",
             tags=["tool_loop"],
             parent_span_id=parent_span_id,
+        ),
+        tool_call_normalizer=_duplicate_cart_preview_tool_normalizer(
+            slots,
+            enabled=_ready_cart_slots(slots)
+            and (decision is None or not _patch_changes_cart_preview_slots(decision, slots_before_patch)),
         ),
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")

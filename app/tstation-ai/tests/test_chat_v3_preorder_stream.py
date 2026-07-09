@@ -95,6 +95,35 @@ def test_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch: pyt
     asyncio.run(_assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch))
 
 
+def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
+    slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
+    normalize = service._duplicate_cart_preview_tool_normalizer(slots, enabled=True)
+
+    normalized = normalize(
+        {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 4}, "id": "call-1"}
+    )
+
+    assert normalized["name"] == "save_to_cart_tool"
+    assert normalized["args"] == {"goods_no": "G0001", "ord_qty": 4}
+    assert normalized["id"] == "call-1"
+
+
+def test_cart_preview_tool_call_is_preserved_when_quantity_changes() -> None:
+    slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
+    normalize = service._duplicate_cart_preview_tool_normalizer(slots, enabled=True)
+    call = {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 2}}
+
+    assert normalize(call) is call
+
+
+def test_cart_preview_tool_call_is_preserved_when_guard_disabled() -> None:
+    slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
+    normalize = service._duplicate_cart_preview_tool_normalizer(slots, enabled=False)
+    call = {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 4}}
+
+    assert normalize(call) is call
+
+
 async def _assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
     slots = ConversationSlots(
         goods_no="G0001",
