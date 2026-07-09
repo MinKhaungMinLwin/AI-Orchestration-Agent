@@ -7,6 +7,14 @@ _ROUTER = runpy.run_path(_APP_ROOT / "services/tstation/chat_v3/prompts/router.p
 ROUTER_PROMPT = _ROUTER["ROUTER_PROMPT"]
 
 
+def test_router_prompt_defines_tstation_scope_boundary():
+    assert "scope boundary" in ROUTER_PROMPT
+    assert "키워드가 아니라 사용자의 주된 목적" in ROUTER_PROMPT
+    assert "타이어 판매·장착·차량 관리 서비스" in ROUTER_PROMPT
+    assert "타이어/상품/차량/매장/가격/재고/쿠폰/혜택/주문/예약/장착/보증/안심서비스/FAQ" in ROUTER_PROMPT
+    assert "최종 행동 목적" in ROUTER_PROMPT
+
+
 def test_router_routes_bare_info_to_the_domain_that_can_use_it():
     # A message with no request verb but enough info to call a tool's required
     # args (e.g. car_no + owner_nm) must not be classified as LEADING — the
@@ -64,6 +72,15 @@ def test_router_prompt_blocks_internal_product_code_requests_as_guard():
     assert "상품 코드" in guard_section
     assert "goods_no" in guard_section
     assert "상품명·규격·가격·재고·장착 가능 여부" in guard_section
+
+
+def test_router_prompt_routes_external_prediction_or_advice_as_out_of_scope():
+    guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
+
+    assert "out_of_scope" in guard_section
+    assert "외부 분야의 판단·예측·추천·결정" in guard_section
+    assert "불확실하거나 무작위인 결과에 대한 예측" in guard_section
+    assert "타이어 말고" in guard_section
 
 
 def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():
