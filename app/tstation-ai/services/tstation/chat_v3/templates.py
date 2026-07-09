@@ -13,7 +13,6 @@ from typing import Any
 from pydantic import BaseModel, Field, create_model
 
 from schemas.tstation.slots import ConversationSlots
-from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.agents.templates.schemas import (
     CheapestProductTemplate,
     DatepickTemplate,
@@ -32,6 +31,8 @@ from services.tstation.agents.templates.schemas import (
 from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.templates import TEMPLATE_BUILDER_PROMPT
 from services.tstation.chat_v3.router.schemas import RouteDecision
+from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 
 logger = logging.getLogger(__name__)
 
@@ -658,6 +659,133 @@ def _latest_tool_output(tool_calls: list[dict], tool_name: str) -> dict[str, Any
         if call.get("name") == tool_name:
             return _parse_tool_output(call.get("output"))
     return {}
+
+
+def _benefit_items_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    data = payload.get("data")
+    if isinstance(data, dict):
+        rows = data.get("items")
+    else:
+        rows = payload.get("items")
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+def _benefit_date(value: str) -> str:
+    return str(value or "").strip()[:10]
+
+
+def _benefit_total(raw: dict[str, Any], rows: list[dict[str, Any]]) -> int:
+    data = raw.get("data")
+    total = data.get("total") if isinstance(data, dict) else None
+    return total if isinstance(total, int) and total > 0 else len(rows)
+
+
+def _append_benefit_rows(
+    lines: list[str],
+    rows: list[dict[str, Any]],
+    *,
+    name_keys: tuple[str, ...],
+    start_keys: tuple[str, ...],
+    end_keys: tuple[str, ...],
+) -> None:
+    for index, row in enumerate(rows[:5], start=1):
+        name = _get_str(row, *name_keys)
+        if not name:
+            continue
+        start = _benefit_date(_get_str(row, *start_keys))
+        end = _benefit_date(_get_str(row, *end_keys))
+        lines.append(f"{index}. **{name}**")
+        if start and end:
+            lines.append(f"   - 기간: {start} ~ {end}")
+        elif start or end:
+            lines.append(f"   - 기간: {start or end}")
+
+
+def _benefit_quick_replies(*, has_events: bool, has_deals: bool) -> list[dict[str, str]]:
+    chips: list[dict[str, str]] = []
+    if has_events:
+        chips.append({"label": "진행 중인 이벤트", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"})
+    if has_deals:
+        chips.append({"label": "진행 중인 기획전", "url": CTAUrls.PROMOTION_DEAL_LIST, "domain": "DISCOVERY"})
+    return chips or [{"label": "진행 중인 이벤트", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"}]
+
+
+def build_current_events_quickreply_event(tool_calls: list[dict]) -> dict | None:
+    event_raw = _latest_tool_output(tool_calls, "get_events_tool")
+    deal_raw = _latest_tool_output(tool_calls, "get_deals_tool")
+    event_rows = _benefit_items_from_payload(event_raw) if event_raw.get("status") == "success" else []
+    deal_rows = _benefit_items_from_payload(deal_raw) if deal_raw.get("status") == "success" else []
+    if not event_raw and not deal_raw:
+        return None
+    if not event_rows and not deal_rows:
+        if event_raw and deal_raw:
+            assistant_response = "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요."
+        elif deal_raw:
+            assistant_response = "현재 진행 중인 기획전이 없어요. 잠시 후에 다시 확인해 주세요."
+        else:
+            assistant_response = "현재 진행 중인 이벤트가 없어요. 잠시 후에 다시 확인해 주세요."
+    else:
+        if event_rows and deal_rows:
+            lines = [
+                (
+                    f"현재 진행 중인 이벤트는 총 {_benefit_total(event_raw, event_rows)}개, "
+                    f"기획전은 총 {_benefit_total(deal_raw, deal_rows)}개입니다."
+                ),
+                "이벤트",
+            ]
+            _append_benefit_rows(
+                lines,
+                event_rows,
+                name_keys=("evt_nm", "event_nm", "title", "name"),
+                start_keys=("evt_strt_dtime", "start_date", "startDate"),
+                end_keys=("evt_end_dtime", "end_date", "endDate"),
+            )
+            lines.append("기획전")
+            _append_benefit_rows(
+                lines,
+                deal_rows,
+                name_keys=("deal_nm", "deal_nm_ko", "title", "name"),
+                start_keys=("deal_strt_dtime", "start_date", "startDate"),
+                end_keys=("deal_end_dtime", "end_date", "endDate"),
+            )
+            lines.append("원하시면 특정 이벤트나 기획전의 대상 상품과 적용 가능한 혜택도 확인해드릴게요.")
+        elif deal_rows:
+            lines = [f"현재 진행 중인 기획전은 총 {_benefit_total(deal_raw, deal_rows)}개입니다."]
+            _append_benefit_rows(
+                lines,
+                deal_rows,
+                name_keys=("deal_nm", "deal_nm_ko", "title", "name"),
+                start_keys=("deal_strt_dtime", "start_date", "startDate"),
+                end_keys=("deal_end_dtime", "end_date", "endDate"),
+            )
+            lines.append("원하시면 특정 기획전의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요.")
+        else:
+            lines = [f"현재 진행 중인 이벤트는 총 {_benefit_total(event_raw, event_rows)}개입니다."]
+            _append_benefit_rows(
+                lines,
+                event_rows,
+                name_keys=("evt_nm", "event_nm", "title", "name"),
+                start_keys=("evt_strt_dtime", "start_date", "startDate"),
+                end_keys=("evt_end_dtime", "end_date", "endDate"),
+            )
+            lines.append("원하시면 특정 이벤트의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요.")
+        assistant_response = "\n".join(lines)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": compact_answer_spacing(assistant_response),
+            "quickReplies": _benefit_quick_replies(has_events=bool(event_raw), has_deals=bool(deal_raw)),
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "source": "chat_v3_current_events",
+                "response_shape_key": "benefit_event_list_lookup",
+                "eventCount": len(event_rows),
+                "dealCount": len(deal_rows),
+            },
+        },
+        "assistant_response_source": "code_chat_v3_current_events",
+    }
 
 
 def _answer_without_urls(answer: str) -> str:

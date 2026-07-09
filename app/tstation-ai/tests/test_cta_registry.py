@@ -53,6 +53,8 @@ def test_coupon_url_cta_preserves_coupon_list_destination() -> None:
 def test_legacy_policy_url_ctas_are_registered_for_v3_normalization() -> None:
     cases = [
         ("지난 이벤트 보기", CTAUrls.PROMOTION_PAST_EVENT_LIST, "promotion.past_event.open"),
+        ("진행 중인 이벤트", CTAUrls.PROMOTION_EVENT_LIST, "promotion.event.open"),
+        ("진행 중인 기획전", CTAUrls.PROMOTION_DEAL_LIST, "promotion.deal.open"),
         ("픽업서비스 신청", CTAUrls.SMART_PICKUP, "smart_pickup.open"),
         ("픽업서비스 내역", CTAUrls.SMART_PICKUP_LIST, "smart_pickup.list.open"),
         ("정비이력보기", CTAUrls.STORE_SERVICE_HISTORY, "service_history.open"),

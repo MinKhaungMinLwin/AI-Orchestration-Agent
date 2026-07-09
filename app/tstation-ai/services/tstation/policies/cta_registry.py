@@ -107,6 +107,22 @@ _URL_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         url=CTAUrls.PROMOTION_EVENT_LIST,
     ),
     CTADefinition(
+        cta_id="promotion.event.open",
+        label="진행 중인 이벤트",
+        domain="DISCOVERY",
+        cta_action="open_promotion_event_list",
+        expected_behavior="open_url",
+        url=CTAUrls.PROMOTION_EVENT_LIST,
+    ),
+    CTADefinition(
+        cta_id="promotion.deal.open",
+        label="진행 중인 기획전",
+        domain="DISCOVERY",
+        cta_action="open_promotion_deal_list",
+        expected_behavior="open_url",
+        url=CTAUrls.PROMOTION_DEAL_LIST,
+    ),
+    CTADefinition(
         cta_id="promotion.past_event.open",
         label="지난 이벤트 보기",
         domain="DISCOVERY",

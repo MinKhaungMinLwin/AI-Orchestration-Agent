@@ -365,6 +365,15 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     qna_event = templates.build_qna_complete_event(answer, executor.tool_calls)
     if qna_event:
         answer = qna_event["data"]["assistantResponse"]
+    current_events_event = templates.build_current_events_quickreply_event(executor.tool_calls)
+    current_events_chips: list[dict] = []
+    if current_events_event:
+        current_events_data = current_events_event.get("data") if isinstance(current_events_event.get("data"), dict) else {}
+        answer = str(current_events_data.get("assistantResponse") or answer)
+        current_events_chips = [
+            chip for chip in current_events_data.get("quickReplies", []) if isinstance(chip, dict)
+        ]
+        token_events = []
     sanitized_answer = sanitize_internal_product_codes(answer)
     if sanitized_answer != answer:
         answer = sanitized_answer
@@ -374,7 +383,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     preorder_event = templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
-        if preorder_event
+        if preorder_event or current_events_event
         else await templates.build_rich_data_event(
             answer,
             executor.tool_calls,
@@ -412,7 +421,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         _sanitize_data_event_assistant_response(preorder_event)
         yield sse.sse({**preorder_event, "source_domain": domain})
     else:
-        chips = quantity_chips
+        chips = current_events_chips or quantity_chips
         if not chips:
             chips = await composer.suggest_quick_replies(
                 user_text,
