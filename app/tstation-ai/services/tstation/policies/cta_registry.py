@@ -581,6 +581,8 @@ def _validate_definition(
 
 
 _PREANNOTATED_ACTION_KEYS: tuple[str, ...] = ("actionId", "action_id", "intentKey", "intent_key", "cta_action")
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]{1,120})\]\((https?://[^)\s]+)\)")
+_BARE_URL_RE = re.compile(r"https?://[^\s)>\]]+")
 
 
 def _has_preannotated_action(chip: Mapping[str, Any]) -> bool:
@@ -589,6 +591,30 @@ def _has_preannotated_action(chip: Mapping[str, Any]) -> bool:
         str(chip.get(key) or "").strip() or str(metadata.get(key) or "").strip()
         for key in _PREANNOTATED_ACTION_KEYS
     )
+
+
+def _strip_duplicate_cta_links_from_answer(answer: str, chips: list[Any]) -> str:
+    cta_url_paths = {
+        _url_path(str(chip.get("url") or ""))
+        for chip in chips
+        if isinstance(chip, Mapping) and str(chip.get("url") or "").strip()
+    }
+    cta_url_paths.discard("")
+    if not answer or not cta_url_paths:
+        return answer
+
+    def markdown_repl(match: re.Match[str]) -> str:
+        label = match.group(1).strip()
+        url_path = _url_path(match.group(2))
+        return label if url_path not in cta_url_paths else ""
+
+    sanitized = _MARKDOWN_LINK_RE.sub(markdown_repl, answer)
+    sanitized = _BARE_URL_RE.sub(
+        lambda match: "" if _url_path(match.group(0)) in cta_url_paths else match.group(0),
+        sanitized,
+    )
+    lines = [line.rstrip() for line in sanitized.splitlines()]
+    return "\n".join(line for line in lines if line.strip())
 
 
 def normalize_quickreply_ctas(
@@ -694,6 +720,12 @@ def normalize_quickreply_ctas(
 
     if changed:
         data["quickReplies"] = normalized
+    assistant_response = data.get("assistantResponse")
+    if isinstance(assistant_response, str):
+        sanitized_response = _strip_duplicate_cta_links_from_answer(assistant_response, normalized)
+        if sanitized_response != assistant_response:
+            data["assistantResponse"] = sanitized_response
+            changed = True
     if audit:
         metadata = data.get("metadata")
         if not isinstance(metadata, dict):

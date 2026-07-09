@@ -83,6 +83,54 @@ def test_legacy_policy_url_ctas_are_registered_for_v3_normalization() -> None:
         assert chip["expected_behavior"] == "open_url"
 
 
+def test_url_cta_removes_duplicate_markdown_link_from_assistant_response() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": (
+                "픽업기사의 실시간 위치나 도착 시간은 챗봇에서 바로 확인하기 어려워요.\n"
+                "신청하신 픽업/딜리버리 진행 현황은 아래 픽업서비스 내역에서 확인해 주세요.\n"
+                f"[픽업서비스 내역 바로가기]({CTAUrls.SMART_PICKUP_LIST})"
+            ),
+            "quickReplies": [
+                {"label": "픽업서비스 내역", "url": CTAUrls.SMART_PICKUP_LIST, "domain": "SUPPORT"},
+            ],
+        },
+    }
+
+    changed = normalize_quickreply_ctas(event)
+
+    assert changed is True
+    assert "https://www.tstation.com" not in event["data"]["assistantResponse"]
+    assert "픽업서비스 내역 바로가기" not in event["data"]["assistantResponse"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.SMART_PICKUP_LIST
+
+
+def test_url_cta_removes_duplicate_bare_url_but_keeps_unrelated_links() -> None:
+    other_url = "https://www.tstation.com/promotion/event-list"
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": (
+                f"픽업서비스 내역: {CTAUrls.SMART_PICKUP_LIST}\n"
+                f"다른 안내 링크는 유지합니다: {other_url}"
+            ),
+            "quickReplies": [
+                {"label": "픽업서비스 내역", "url": CTAUrls.SMART_PICKUP_LIST, "domain": "SUPPORT"},
+            ],
+        },
+    }
+
+    normalize_quickreply_ctas(event)
+
+    assert CTAUrls.SMART_PICKUP_LIST not in event["data"]["assistantResponse"]
+    assert other_url in event["data"]["assistantResponse"]
+
+
 def test_conversation_cta_gets_next_turn_contract_seed() -> None:
     event = {
         "type": "data",
