@@ -232,6 +232,8 @@ def build_customer_monitoring(
     final_template: str,
     fallback_used: bool = False,
     qc_corrected: bool = False,
+    qc_failed: bool = False,
+    qc_reason: str = "",
     runtime_error: bool = False,
     latency_ms: int | None = None,
 ) -> dict[str, Any]:
@@ -276,6 +278,8 @@ def build_customer_monitoring(
         "no_result_tools": no_result_tools,
         "fallback_used": fallback_used,
         "qc_corrected": qc_corrected,
+        "qc_failed": qc_failed,
+        "qc_reason": qc_reason,
         "user_visible": not runtime_error,
     }
     if latency_ms is not None:
@@ -289,4 +293,6 @@ def build_customer_monitoring(
     tags.extend(f"tool:{tool}" for tool in tool_path)
     if final_template:
         tags.append(f"template:{_slug(final_template)}")
+    if qc_failed:
+        tags.append("qc:failed")
     return {"metadata": metadata, "tags": _dedupe(tags)}

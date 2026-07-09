@@ -109,6 +109,25 @@ def test_customer_monitoring_marks_qc_correction_as_partial_success() -> None:
     assert "status:partial_success" in payload["tags"]
 
 
+def test_customer_monitoring_records_qc_failure_without_changing_status() -> None:
+    payload = monitoring.build_customer_monitoring(
+        route_domains=["DISCOVERY"],
+        tool_calls=[{"name": "get_products_recommendations_tool", "output": '{"status":"success"}'}],
+        final_template="product",
+        qc_failed=True,
+        qc_reason="qc_failed_correction_suppressed",
+    )
+
+    metadata = payload["metadata"]
+    assert metadata["final_status"] == "success"
+    assert metadata["status_reason"] == "tool_success_with_template"
+    assert metadata["error_reason"] == "none"
+    assert metadata["qc_corrected"] is False
+    assert metadata["qc_failed"] is True
+    assert metadata["qc_reason"] == "qc_failed_correction_suppressed"
+    assert "qc:failed" in payload["tags"]
+
+
 def test_update_trace_monitoring_uses_langfuse_current_trace(monkeypatch) -> None:
     calls: list[dict] = []
 

@@ -202,6 +202,8 @@ def _update_trace_monitoring(
     route_intents: list[str] | None = None,
     fallback_used: bool = False,
     qc_corrected: bool = False,
+    qc_failed: bool = False,
+    qc_reason: str = "",
     runtime_error: bool = False,
     latency_ms: int | None = None,
 ) -> None:
@@ -211,6 +213,8 @@ def _update_trace_monitoring(
         final_template=final_template,
         fallback_used=fallback_used,
         qc_corrected=qc_corrected,
+        qc_failed=qc_failed,
+        qc_reason=qc_reason,
         runtime_error=runtime_error,
         latency_ms=latency_ms,
     )
@@ -492,7 +496,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     slots = templates.harvest_order_slots(slots, executor.tool_calls)
 
     answer = executor.final_text.strip() or ERROR_RESPONSE
-    corrected = await qc.verify_answer(
+    qc_result = await qc.verify_answer(
         answer,
         executor.tool_calls,
         trace_config=_trace_config(
@@ -503,10 +507,23 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             parent_span_id=parent_span_id,
         ),
     )
-    qc_corrected = corrected != answer
-    if corrected != answer:
-        yield sse.sse({"type": "qc_correction", "assistantResponse": corrected})
-        answer = corrected
+    if isinstance(qc_result, str):
+        qc_corrected = qc_result != answer
+        qc_failed = qc_corrected
+        qc_reason = "legacy_qc_string_result" if qc_corrected else ""
+        if qc_corrected:
+            answer = qc_result
+    else:
+        qc_corrected = False
+        qc_failed = qc_result.failed
+        qc_reason = qc_result.reason
+        if qc_failed:
+            yield sse.sse({
+                "type": "qc_result",
+                "passed": False,
+                "reason": qc_reason,
+                "correctionApplied": False,
+            })
     answer = templates.format_location_answer(answer, executor.tool_calls)
     answer = templates.compact_answer_spacing(answer)
     qna_event = templates.build_qna_complete_event(answer, executor.tool_calls)
@@ -621,6 +638,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         route_intents=list(decision.intents if decision else []),
         fallback_used=fallback_used,
         qc_corrected=qc_corrected,
+        qc_failed=qc_failed,
+        qc_reason=qc_reason,
         latency_ms=int((time.perf_counter() - t0) * 1000),
         trace_observation=parent_span,
     )
