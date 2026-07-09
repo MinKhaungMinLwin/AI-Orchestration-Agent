@@ -267,6 +267,14 @@ def _product_label(snapshot: dict[str, Any]) -> str:
     return product or tire_size or str(snapshot.get("goods_no") or "").strip()
 
 
+def _with_slot_fallback(snapshot: dict[str, Any], slots: ConversationSlots | None) -> dict[str, Any]:
+    if slots is None:
+        return snapshot
+    slot_values = slots.model_dump(mode="json", exclude_none=True)
+    present_snapshot = {key: value for key, value in snapshot.items() if value not in (None, "", [])}
+    return {**slot_values, **present_snapshot}
+
+
 def _booking_datetime(snapshot: dict[str, Any]) -> str | None:
     day = str(snapshot.get("requested_cal_day") or "").strip()
     hour = str(snapshot.get("rsv_hour") or "").strip()
@@ -289,6 +297,7 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
         bool(snapshot.get("is_ready_to_add_to_cart")) or pending_intent == "cart" or goal_type == "add_to_cart"
     )
     is_ready_to_order = not is_ready_to_add_to_cart
+    tire_size = str(snapshot.get("tire_size") or "").strip() or None
 
     payload = PreOrderTemplate(
         orderInfo={
@@ -306,6 +315,8 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
             "goodsNo": goods_no,
             "goods_no": goods_no,
             "productName": str(snapshot.get("product_name") or snapshot.get("pending_product_name") or "").strip() or None,
+            "tireSize": tire_size,
+            "tire_size": tire_size,
             "quantity": ord_qty,
             "ordQty": ord_qty,
             "ord_qty": ord_qty,
@@ -1463,7 +1474,9 @@ async def build_rich_data_event(
         # in code from that snapshot (never via the generic LLM template builder — it
         # cannot set isReadyToOrder / metadata.goodsId reliably). None → K2 slot fallback.
         return build_preorder_data_event(
-            answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
+            answer,
+            _with_slot_fallback(_parse_tool_output(call.get("output")), slots),
+            source="chat_v3_k1_order_preview",
         )
     if template_name == "location":
         if not _is_booking_location_context(slots):

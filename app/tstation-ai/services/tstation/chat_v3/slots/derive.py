@@ -39,7 +39,13 @@ _SINGLE_ROW_FIELDS: dict[str, str] = {
 }
 
 # FE payloads use camelCase in places; normalize to slot field names.
-_FE_KEY_ALIASES = {"goodsId": "goods_no", "goodsNo": "goods_no", "shopId": "shop_id", "ordQty": "ord_qty"}
+_FE_KEY_ALIASES = {
+    "goodsId": "goods_no",
+    "goodsNo": "goods_no",
+    "shopId": "shop_id",
+    "ordQty": "ord_qty",
+    "tireSize": "tire_size",
+}
 
 
 def _single_row(parsed: object) -> dict | None:
