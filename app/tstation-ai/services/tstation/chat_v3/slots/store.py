@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.chat_history_service import get_chat_history_service
 from services.tstation.chat_v3.slots.schemas import SlotsPatch
+from services.tstation.policies.product_name_normalization import normalize_product_slot_values
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ async def load_slots(session_id: str) -> ConversationSlots:
 def apply_patch(existing: ConversationSlots, patch: SlotsPatch | None) -> ConversationSlots:
     if patch is None:
         return existing
-    values = patch.non_empty()
+    values = normalize_product_slot_values(patch.non_empty())
     while values:
         try:
             merged = existing.merge(ConversationSlots.model_validate(values))

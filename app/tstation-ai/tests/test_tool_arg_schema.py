@@ -25,3 +25,21 @@ def test_schedule_mode_keeps_today_store_combined_mode() -> None:
     )
 
     assert patch == {"shop_id": "F00071", "mode": "in_store_logistics_combined"}
+
+
+def test_search_product_keyword_normalizes_english_alias() -> None:
+    patch = canonicalize_tool_args_patch(
+        preferred_tool="search_product_tool",
+        existing_patch={"keyword": "ventus air s", "limit": 10},
+    )
+
+    assert patch["keyword"] == "벤투스 에어S"
+
+
+def test_search_product_keyword_normalizes_mixed_korean_alias() -> None:
+    patch = canonicalize_tool_args_patch(
+        preferred_tool="search_product_tool",
+        existing_patch={"keyword": "벤투스 air s", "limit": 10},
+    )
+
+    assert patch["keyword"] == "벤투스 에어S"

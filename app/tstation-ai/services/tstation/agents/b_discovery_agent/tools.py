@@ -18,6 +18,7 @@ from services.tstation.agents.b_discovery_agent._car_no_audit import (
     detect_car_no_mismatch,
     set_registered_car_nos,
 )
+from services.tstation.policies.product_name_normalization import preferred_product_search_keyword
 from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
 
 # Product Compatibility
@@ -824,11 +825,12 @@ def search_product_tool(
                 "max_price": max_price,
             },
         )
-    normalized_keyword = _strip_brand_only_keyword(keyword)
+    preferred_keyword = preferred_product_search_keyword(keyword)
+    normalized_keyword = _strip_brand_only_keyword(preferred_keyword)
     if normalized_keyword != keyword:
         logger.debug(
-            "[TOOL][search_product_tool] Stripped brand-only keyword: %r → None (brand_cd=%s)",
-            keyword, brand_cd,
+            "[TOOL][search_product_tool] Normalized keyword: %r → %r (brand_cd=%s)",
+            keyword, normalized_keyword, brand_cd,
         )
     effective_min_price, effective_max_price, effective_sort_by = _normalize_search_price_args(
         min_price,

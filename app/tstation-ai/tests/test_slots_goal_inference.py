@@ -5,6 +5,8 @@ co-occur in the same turn, while preserving existing precedence rules.
 """
 
 from schemas.tstation.slots import ConversationSlots
+from services.tstation.chat_v3.slots.schemas import SlotsPatch
+from services.tstation.chat_v3.slots.store import apply_patch
 
 
 def _goal_candidate(text: str) -> str | None:
@@ -116,6 +118,12 @@ def test_region_change_clears_stale_store_identity() -> None:
     assert merged.shop_name is None
     assert merged.goods_no == "G000000312970"
     assert merged.ord_qty == 2
+
+
+def test_v3_slot_patch_normalizes_product_alias_before_persistence() -> None:
+    slots = apply_patch(ConversationSlots(), SlotsPatch(tire_model="ventus air s"))
+
+    assert slots.tire_model == "벤투스 에어S"
 
 
 def test_merge_does_not_promote_current_turn_goal_candidate_to_goal_type() -> None:

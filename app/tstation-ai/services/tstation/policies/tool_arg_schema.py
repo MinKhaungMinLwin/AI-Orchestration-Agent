@@ -12,6 +12,7 @@ import re
 from typing import Any, Mapping
 
 from services.tstation.policies.discovery_intent_policy import extract_benefit_applicable_products_query
+from services.tstation.policies.product_name_normalization import normalize_product_search_tool_args
 
 
 _UNSET = object()
@@ -547,6 +548,8 @@ def canonicalize_tool_args_patch(
             patch[arg_name] = value
         elif rule.default is not _UNSET:
             patch[arg_name] = rule.default
+    if tool_name in {"search_product_tool", "search_product_summary_tool"}:
+        patch = normalize_product_search_tool_args(patch)
     patch = canonicalize_schedule_mode_for_inventory(preferred_tool=tool_name, tool_args=patch, known_slots=slots)
     return {key: value for key, value in patch.items() if _present(value)}
 

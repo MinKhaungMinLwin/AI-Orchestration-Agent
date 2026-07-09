@@ -248,6 +248,7 @@ from services.tstation.policies.delivery_policy_gate import (
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
+from services.tstation.policies.product_name_normalization import preferred_product_search_keyword
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
     RegionStoreInputContextResolution,
@@ -12328,36 +12329,12 @@ _GRADE_RANK = {
     "이코노미": 1,
 }
 
-_PRODUCT_SEARCH_KEYWORD_OVERRIDES = {
-    "kinergyex": "키너지 EX",
-    "ventusairs": "벤투스 에어S",
-    "ventuss2": "벤투스 S2",
-    "ventuss2as": "벤투스 S2 AS",
-    "ventuss1evozas": "벤투스 S1 evo Z AS",
-    "ventuss1evoz": "벤투스 S1 evo Z",
-    "dynaprohpx": "다이나프로 HPX",
-    "dynaprohp3": "다이나프로 HP3",
-    "sfitas": "S FIT AS",
-    "sfit": "S FIT",
-    "ionevoassuv": "아이온 에보 AS SUV",
-    "ionevoas": "아이온 에보 AS",
-    "ionevo": "아이온 에보",
-    "optimo": "옵티모",
-    "michelincc2": "미쉐린 CC2",
-    "mileageplus": "마일리지",
-    "mileageplus2": "마일리지 플러스 2",
-    "mileageplus3": "마일리지 플러스 3",
-}
-
-
 def _grade_rank_value(value: str | None) -> int:
     return _GRADE_RANK.get(str(value or "").strip(), 0)
 
 
 def _preferred_product_search_keyword(product_name: str) -> str:
-    raw = str(product_name or "").strip()
-    normalized = _normalize_coupon_match_text(raw)
-    return _PRODUCT_SEARCH_KEYWORD_OVERRIDES.get(normalized, raw)
+    return preferred_product_search_keyword(product_name)
 
 
 def _product_search_keyword_candidates(product_name: str) -> tuple[str, ...]:
