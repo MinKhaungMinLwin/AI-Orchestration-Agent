@@ -154,9 +154,24 @@ def test_pickup_visit_constraint_policy_overrides_v3_router_guard() -> None:
     assert result.needs_selection_card is False
 
 
+def test_unverified_pickup_intent_is_removed_without_regex_rerouting() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["pickup_status"],
+        needs_selection_card=False,
+    )
+    request = _request(messages=[{"role": "user", "content": "내 차 지금 작업 중이야?"}])
+
+    result = _apply_pickup_service_policy(decision, request)
+
+    assert "pickup_status" not in result.intents
+    assert result.domain == Domain.SUPPORT
+
+
 def test_static_faq_router_guard_is_moved_to_support_intent() -> None:
     decision = RouteDecision(
-        guard_id=GuardId.PICKUP_INFO,
+        guard_id=GuardId.DIRECT_HOME_DELIVERY,
         domain=Domain.LEADING,
         intents=[],
         needs_selection_card=True,
@@ -168,7 +183,7 @@ def test_static_faq_router_guard_is_moved_to_support_intent() -> None:
     assert result.domain == Domain.SUPPORT
     assert result.extra_domains == []
     assert result.needs_selection_card is False
-    assert result.intents == ["pickup_info"]
+    assert result.intents == ["direct_home_delivery"]
 
 
 def test_product_code_request_guard_refuses_internal_identifier() -> None:

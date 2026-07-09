@@ -56,8 +56,6 @@ def test_static_faq_policy_database_contains_moved_router_policy_keys() -> None:
     assert set(STATIC_FAQ_POLICY_DATABASE) == {
         "vehicle_type_compatibility",
         "runflat_mixed_install_policy",
-        "pickup_status",
-        "pickup_info",
         "late_night_store_hours_policy",
         "direct_home_delivery",
         "shipping_fee_region",

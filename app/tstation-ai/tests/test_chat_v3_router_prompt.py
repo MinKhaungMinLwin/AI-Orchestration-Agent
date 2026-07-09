@@ -55,8 +55,6 @@ def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
     for policy_key in (
         "vehicle_type_compatibility",
         "runflat_mixed_install_policy",
-        "pickup_status",
-        "pickup_info",
         "late_night_store_hours_policy",
         "direct_home_delivery",
         "shipping_fee_region",
@@ -72,6 +70,23 @@ def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
     ):
         assert policy_key not in guard_section
         assert policy_key in static_faq_section
+
+
+def test_router_prompt_routes_pickup_questions_to_faq_not_static_policy():
+    pickup_section = ROUTER_PROMPT.split("### 스마트픽업 FAQ 라우팅", maxsplit=1)[1].split(
+        "### 고정 FAQ 정책 key 라우팅",
+        maxsplit=1,
+    )[0]
+    static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
+
+    assert "SUPPORT FAQ/RAG" in pickup_section
+    assert "pickup_status" in pickup_section
+    assert "pickup_info" in pickup_section
+    assert "고정 FAQ 정책 key가 아닙니다" in pickup_section
+    assert "내 차 지금 작업 중이야?" in pickup_section
+    assert "reservation_status_lookup" in pickup_section
+    assert "pickup_status" not in static_faq_section
+    assert "pickup_info" not in static_faq_section
 
 
 def test_router_prompt_blocks_internal_product_code_requests_as_guard():

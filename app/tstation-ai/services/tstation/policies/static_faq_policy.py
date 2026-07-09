@@ -47,29 +47,6 @@ STATIC_FAQ_POLICY_DATABASE: dict[str, StaticFaqPolicy] = {
         ],
         "predicted_domains": ["SUPPORT", "DISCOVERY", "TRANSACTION"],
     },
-    "pickup_status": {
-        "answer": (
-            "픽업기사의 실시간 위치나 도착 시간은 챗봇에서 바로 확인하기 어려워요. "
-            "신청하신 픽업/딜리버리 진행 현황은 아래 '픽업서비스 내역'에서 확인해 주세요."
-        ),
-        "quick_replies": [
-            {"label": "픽업서비스 내역", "url": CTAUrls.SMART_PICKUP_LIST, "domain": "SUPPORT"},
-        ],
-        "predicted_domains": ["SUPPORT"],
-    },
-    "pickup_info": {
-        "answer": (
-            "스마트픽업은 매장에서 고객 차량을 픽업해 타이어를 교체한 뒤 다시 인도하는 서비스예요. "
-            "아래 '픽업서비스 신청'에서 신청/관리하실 수 있으며, 픽업 가능 거리는 매장 기준 최대 30km까지예요. "
-            "요금과 실제 가능 여부는 픽업/인도 위치와 매장 운영에 따라 달라질 수 있어요."
-        ),
-        "quick_replies": [
-            {"label": "픽업서비스 신청", "url": CTAUrls.SMART_PICKUP, "domain": "SUPPORT"},
-            {"label": "내 근처 매장 찾기", "domain": "TRANSACTION"},
-            {"label": "타이어 추천", "domain": "DISCOVERY"},
-        ],
-        "predicted_domains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
-    },
     "late_night_store_hours_policy": {
         "answer": (
             "티스테이션 공식 영업시간은 평일 기준 09:00 ~ 19:00입니다.\n\n"

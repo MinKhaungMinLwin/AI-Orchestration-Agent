@@ -148,8 +148,6 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         predicted_domains=["DISCOVERY", "TRANSACTION"],
     ),
     GuardId.VEHICLE_TYPE_COMPATIBILITY: _guard_from_static_faq_policy("vehicle_type_compatibility"),
-    GuardId.PICKUP_STATUS: _guard_from_static_faq_policy("pickup_status"),
-    GuardId.PICKUP_INFO: _guard_from_static_faq_policy("pickup_info"),
     GuardId.DIRECT_HOME_DELIVERY: _guard_from_static_faq_policy("direct_home_delivery"),
     GuardId.SHIPPING_FEE_REGION: _guard_from_static_faq_policy("shipping_fee_region"),
     GuardId.ONLINE_STORE_PRICE_POLICY: _guard_from_static_faq_policy("online_store_price_policy"),

@@ -69,6 +69,17 @@ intents 에 "card_installment_lookup" 을 포함하세요.
 - 일반 설명·조건·보상 범위 질문은 relief_service_lookup 이 아니라 SUPPORT FAQ/정책 질문입니다.
 - 특정 상품이나 타이어의 안심서비스 적용 가능 여부는 relief_service_lookup 이 아니라 상품 워런티/상품 확인 흐름입니다.
 
+### 스마트픽업 FAQ 라우팅
+픽업서비스/스마트픽업/픽업앤딜리버리처럼 픽업 서비스가 명시된 문의는 SUPPORT FAQ/RAG 로 라우팅하세요.
+intents 에는 "pickup_status" 또는 "pickup_info" 를 포함할 수 있지만, 이 값은 고정 FAQ 정책 key가 아닙니다.
+- pickup_status: 픽업서비스/픽업딜리버리를 신청한 뒤 픽업기사 위치, 도착 시간, 진행 현황을 묻는 문의
+- pickup_info: 스마트픽업 서비스가 무엇인지, 신청 방법, 가능 거리/지역/요금을 묻는 문의. 사용자가 픽업이라는 단어를
+  쓰지 않아도 "매장에 갈 시간이 없다", "방문하기 어렵다", "차량을 맡기지 않고 교체할 방법"처럼 차량 수거/인도형
+  교체 서비스를 찾는 니즈이면 pickup_info 입니다.
+- 단, "내 차 지금 작업 중이야?", "차량 작업 진행상태 확인", "장착 진행 중이야?", "매장 방문했는데 예약한 사실이 없다"처럼
+  픽업서비스나 픽업기사를 명시하지 않은 내 예약/장착/작업 상태 확인은 pickup_status 가 아닙니다.
+  이 경우 TRANSACTION 의 예약/주문/장착 진행 확인 흐름으로 라우팅하고 intents 에 "reservation_status_lookup" 을 포함하세요.
+
 ### 고정 FAQ 정책 key 라우팅
 아래 정책성 FAQ는 guard_id를 사용하지 말고 guard_id="none", domain=SUPPORT 로 라우팅하세요.
 intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPPORT 도구가 해당 key로 공식 답변을 조회합니다.
@@ -76,16 +87,12 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   단, "런플랫" 차량/타이어에서 일반 타이어로 바꿔도 되는지, 앞/뒤 2짝만 일반 타이어로 교체해도 되는지 묻는 경우는
   vehicle_type_compatibility가 아니라 runflat_mixed_install_policy 입니다.
 - runflat_mixed_install_policy: 기존 런플랫 타이어 차량에서 일반 타이어로 교체/혼용해도 되는지, 앞바퀴/뒷바퀴 2짝만 일반 타이어로 바꿔도 되는지 묻는 문의
-- pickup_status: 신청한 픽업서비스의 기사 위치/도착 시간/진행 상태 문의
-- pickup_info: 스마트픽업 서비스가 무엇인지/신청 방법/가능 여부 문의. 사용자가 픽업이라는 단어를 쓰지 않아도
-  "매장에 갈 시간이 없다", "방문하기 어렵다", "차량을 맡기지 않고 교체할 방법"처럼 차량 수거/인도형 교체 서비스를
-  찾는 니즈이면 pickup_info 입니다.
 - late_night_store_hours_policy: 심야 영업, 야간 영업, 밤늦게 문 여는 매장, 저녁 7시/19시 이후 영업 매장 문의.
   공식 평일 영업시간은 09:00 ~ 19:00이며 매장별 영업시간은 상이할 수 있다는 고정 안내로 처리합니다.
   이 의도는 "19시 이후 예약 가능한 매장", "밤늦게 장착 가능한 곳"처럼 예약/장착 표현이 있어도
   get_stores_with_time_filter_tool 로 매장 목록을 확정하지 마세요.
 - direct_home_delivery: 타이어를 집/자택/주소지로 택배 수령하거나 직접/셀프 장착하려는 문의. 매장 방문이 어려워
-  차량을 가져가 교체해 주는 서비스를 묻는 경우는 direct_home_delivery가 아니라 pickup_info 입니다.
+  차량을 가져가 교체해 주는 서비스를 묻는 경우는 direct_home_delivery가 아니라 스마트픽업 FAQ 라우팅 대상입니다.
 - external_tire_install_policy: 인터넷/온라인/외부에서 산 타이어를 매장에 가져가 장착만 가능한지, 공임만 받고
   장착 가능한지 묻는 문의. 이 경우 direct_home_delivery가 아닙니다.
 - shipping_fee_region: 제주/서귀포/도서산간 배송비·추가 배송비 문의

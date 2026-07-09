@@ -34,13 +34,12 @@ _DELIVERY_POLICY_INTENTS: dict[DeliveryPolicyIntent, str] = {
 _STATIC_FAQ_GUARD_INTENTS: dict[GuardId, str] = {
     GuardId.PAST_EVENT_PAGE: "past_event_page",
     GuardId.VEHICLE_TYPE_COMPATIBILITY: "vehicle_type_compatibility",
-    GuardId.PICKUP_STATUS: "pickup_status",
-    GuardId.PICKUP_INFO: "pickup_info",
     GuardId.DIRECT_HOME_DELIVERY: "direct_home_delivery",
     GuardId.SHIPPING_FEE_REGION: "shipping_fee_region",
     GuardId.ONLINE_STORE_PRICE_POLICY: "online_store_price_policy",
     GuardId.REGIONAL_PRICE_POLICY: "regional_price_policy",
 }
+_PICKUP_FAQ_INTENTS = {"pickup_status", "pickup_info"}
 _RUNFLAT_TERMS = ("런플랫", "런 플랫", "runflat", "run flat", "run-flat")
 _RUNFLAT_MIXED_INSTALL_TERMS = (
     "일반 타이어",
@@ -193,11 +192,21 @@ def _apply_pickup_service_policy(decision: RouteDecision, request: TStationChatR
         recent_context=_recent_context_before_last_user(request),
     )
     if not pickup.is_pickup or pickup.intent == "none":
+        original_intents = list(decision.intents)
+        decision.intents = [intent for intent in decision.intents if intent not in _PICKUP_FAQ_INTENTS]
+        if decision.guard_id in {GuardId.PICKUP_STATUS, GuardId.PICKUP_INFO}:
+            decision.guard_id = GuardId.NONE
+        if original_intents != decision.intents:
+            logger.info(
+                "[CHAT_V3] stripped unverified pickup intents=%s reason=%s",
+                original_intents,
+                pickup.reason,
+            )
         return decision
     policy_key = "pickup_status" if pickup.intent == "pickup_status" else "pickup_info"
     if policy_key not in decision.intents:
         logger.info(
-            "[CHAT_V3] applied pickup static FAQ policy=%s over router guard=%s reason=%s",
+            "[CHAT_V3] applied pickup FAQ intent=%s over router guard=%s reason=%s",
             policy_key,
             decision.guard_id.value,
             pickup.reason,
