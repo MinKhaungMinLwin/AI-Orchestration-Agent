@@ -32,6 +32,7 @@ from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_
 from services.tstation.chat_v3.tools import tools_for_domains
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
 from services.tstation.policies.cta_registry import normalize_quickreply_ctas
+from services.tstation.policies.internal_product_code_policy import sanitize_internal_product_codes
 from services.tstation.policies.static_faq_policy import STATIC_FAQ_POLICY_DATABASE
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,17 @@ def _allow_selection_cards(decision: RouteDecision | None) -> bool:
     if Domain.DISCOVERY in decision.extra_domains:
         return True
     return decision.needs_selection_card
+
+
+def _sanitize_data_event_assistant_response(event: dict | None) -> None:
+    if not isinstance(event, dict):
+        return
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return
+    assistant_response = data.get("assistantResponse")
+    if isinstance(assistant_response, str):
+        data["assistantResponse"] = sanitize_internal_product_codes(assistant_response)
 
 
 def _static_faq_policy_context(decision: RouteDecision | None) -> str | None:
@@ -353,12 +365,25 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     qna_event = templates.build_qna_complete_event(answer, executor.tool_calls)
     if qna_event:
         answer = qna_event["data"]["assistantResponse"]
+    current_events_event = templates.build_current_events_quickreply_event(executor.tool_calls)
+    current_events_chips: list[dict] = []
+    if current_events_event:
+        current_events_data = current_events_event.get("data") if isinstance(current_events_event.get("data"), dict) else {}
+        answer = str(current_events_data.get("assistantResponse") or answer)
+        current_events_chips = [
+            chip for chip in current_events_data.get("quickReplies", []) if isinstance(chip, dict)
+        ]
+        token_events = []
+    sanitized_answer = sanitize_internal_product_codes(answer)
+    if sanitized_answer != answer:
+        answer = sanitized_answer
+        token_events = []
 
     chips: list[dict] = []
     preorder_event = templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
-        if preorder_event
+        if preorder_event or current_events_event
         else await templates.build_rich_data_event(
             answer,
             executor.tool_calls,
@@ -388,13 +413,15 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if rich_event:
         final_template = str(rich_event.get("template") or "")
         predicted_domains = [domain]
+        _sanitize_data_event_assistant_response(rich_event)
         yield sse.sse({**rich_event, "source_domain": domain})
     elif preorder_event:
         final_template = str(preorder_event.get("template") or "preOrder")
         predicted_domains = ["TRANSACTION"]
+        _sanitize_data_event_assistant_response(preorder_event)
         yield sse.sse({**preorder_event, "source_domain": domain})
     else:
-        chips = quantity_chips
+        chips = current_events_chips or quantity_chips
         if not chips:
             chips = await composer.suggest_quick_replies(
                 user_text,

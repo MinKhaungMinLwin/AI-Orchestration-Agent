@@ -150,6 +150,15 @@ def test_static_faq_router_guard_is_moved_to_support_intent() -> None:
     assert result.intents == ["pickup_info"]
 
 
+def test_product_code_request_guard_refuses_internal_identifier() -> None:
+    guard = get_guard(GuardId.PRODUCT_CODE_REQUEST)
+
+    assert guard is not None
+    assert "내부 식별자" in guard.text
+    assert "안내해 드릴 수 없어요" in guard.text
+    assert guard.predicted_domains == ["DISCOVERY", "TRANSACTION"]
+
+
 def test_runflat_mixed_install_policy_overrides_vehicle_type_compatibility() -> None:
     decision = RouteDecision(
         guard_id=GuardId.NONE,

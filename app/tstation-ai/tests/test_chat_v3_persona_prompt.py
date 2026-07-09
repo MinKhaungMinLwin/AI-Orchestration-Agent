@@ -2,7 +2,8 @@ import runpy
 from pathlib import Path
 
 
-_PERSONA = runpy.run_path(Path("services/tstation/chat_v3/prompts/persona.py"))
+_APP_ROOT = Path(__file__).resolve().parents[1]
+_PERSONA = runpy.run_path(_APP_ROOT / "services/tstation/chat_v3/prompts/persona.py")
 SYSTEM_PROMPT = _PERSONA["SYSTEM_PROMPT"]
 TRANSACTION_WRITE_GUIDANCE = _PERSONA["TRANSACTION_WRITE_GUIDANCE"]
 STORE_SEARCH_FLOW_GUIDANCE = _PERSONA["STORE_SEARCH_FLOW_GUIDANCE"]
@@ -31,6 +32,12 @@ def test_store_flow_resolves_shown_branch_selection_from_memory():
     assert "새로 매장을 검색하지 말고" in STORE_SEARCH_FLOW_GUIDANCE
     assert "shop_id" in STORE_SEARCH_FLOW_GUIDANCE
     assert "지점명" in STORE_SEARCH_FLOW_GUIDANCE and "store_nm" in STORE_SEARCH_FLOW_GUIDANCE
+
+
+def test_store_flow_prompt_forbids_external_stock_quantity_disclosure():
+    assert "정확한 재고 수량" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "절대 외부에 말하지 마세요" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "요청 수량 기준 장착 가능 여부" in STORE_SEARCH_FLOW_GUIDANCE
 
 
 def test_vehicle_lookup_guidance_calls_tool_without_waiting_for_a_request_verb():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.common.tstation_be_client import set_tstation_origin_host
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
 from services.tstation.policies.turn_contract import TurnContract
 
@@ -52,6 +53,8 @@ def test_coupon_url_cta_preserves_coupon_list_destination() -> None:
 def test_legacy_policy_url_ctas_are_registered_for_v3_normalization() -> None:
     cases = [
         ("지난 이벤트 보기", CTAUrls.PROMOTION_PAST_EVENT_LIST, "promotion.past_event.open"),
+        ("진행 중인 이벤트", CTAUrls.PROMOTION_EVENT_LIST, "promotion.event.open"),
+        ("진행 중인 기획전", CTAUrls.PROMOTION_DEAL_LIST, "promotion.deal.open"),
         ("픽업서비스 신청", CTAUrls.SMART_PICKUP, "smart_pickup.open"),
         ("픽업서비스 내역", CTAUrls.SMART_PICKUP_LIST, "smart_pickup.list.open"),
         ("정비이력보기", CTAUrls.STORE_SERVICE_HISTORY, "service_history.open"),
@@ -81,6 +84,78 @@ def test_legacy_policy_url_ctas_are_registered_for_v3_normalization() -> None:
         assert chip["url"] == expected_url
         assert chip["cta_id"] == expected_cta_id
         assert chip["expected_behavior"] == "open_url"
+
+
+def test_warranty_cta_uses_verified_pc_and_mobile_paths() -> None:
+    assert CTAUrls.WARRANTY_MAIN == "https://www.tstation.com/mypage/tstation/warranty/main"
+
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": "나의 워런티에서 확인해 주세요.",
+            "quickReplies": [
+                {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
+            ],
+        },
+    }
+
+    try:
+        set_tstation_origin_host("m.tstation.com")
+        normalize_quickreply_ctas(event)
+    finally:
+        set_tstation_origin_host(None)
+
+    assert event["data"]["quickReplies"][0]["url"] == "https://m.tstation.com/mypage/tstation/warranty"
+
+
+def test_url_cta_removes_duplicate_markdown_link_from_assistant_response() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": (
+                "픽업기사의 실시간 위치나 도착 시간은 챗봇에서 바로 확인하기 어려워요.\n"
+                "신청하신 픽업/딜리버리 진행 현황은 아래 픽업서비스 내역에서 확인해 주세요.\n"
+                f"[픽업서비스 내역 바로가기]({CTAUrls.SMART_PICKUP_LIST})"
+            ),
+            "quickReplies": [
+                {"label": "픽업서비스 내역", "url": CTAUrls.SMART_PICKUP_LIST, "domain": "SUPPORT"},
+            ],
+        },
+    }
+
+    changed = normalize_quickreply_ctas(event)
+
+    assert changed is True
+    assert "https://www.tstation.com" not in event["data"]["assistantResponse"]
+    assert "픽업서비스 내역 바로가기" not in event["data"]["assistantResponse"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.SMART_PICKUP_LIST
+
+
+def test_url_cta_removes_duplicate_bare_url_but_keeps_unrelated_links() -> None:
+    other_url = "https://www.tstation.com/promotion/event-list"
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": (
+                f"픽업서비스 내역: {CTAUrls.SMART_PICKUP_LIST}\n"
+                f"다른 안내 링크는 유지합니다: {other_url}"
+            ),
+            "quickReplies": [
+                {"label": "픽업서비스 내역", "url": CTAUrls.SMART_PICKUP_LIST, "domain": "SUPPORT"},
+            ],
+        },
+    }
+
+    normalize_quickreply_ctas(event)
+
+    assert CTAUrls.SMART_PICKUP_LIST not in event["data"]["assistantResponse"]
+    assert other_url in event["data"]["assistantResponse"]
 
 
 def test_conversation_cta_gets_next_turn_contract_seed() -> None:

@@ -135,6 +135,18 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         ],
         predicted_domains=["TRANSACTION", "DISCOVERY", "SUPPORT"],
     ),
+    GuardId.PRODUCT_CODE_REQUEST: Guard(
+        id="product_code_request",
+        text=(
+            "상품 코드는 내부 식별자라 채팅으로 안내해 드릴 수 없어요. "
+            "상품명, 규격, 가격, 재고, 장착 가능 여부 기준으로 확인해 드릴게요."
+        ),
+        chips=[
+            {"label": "상품명으로 검색", "domain": "DISCOVERY"},
+            {"label": "가격 확인", "domain": "TRANSACTION"},
+        ],
+        predicted_domains=["DISCOVERY", "TRANSACTION"],
+    ),
     GuardId.VEHICLE_TYPE_COMPATIBILITY: _guard_from_static_faq_policy("vehicle_type_compatibility"),
     GuardId.PICKUP_STATUS: _guard_from_static_faq_policy("pickup_status"),
     GuardId.PICKUP_INFO: _guard_from_static_faq_policy("pickup_info"),

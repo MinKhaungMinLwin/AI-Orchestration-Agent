@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from services.tstation.chat_v3 import sse
 from services.tstation.chat_v3.llm import get_chat_llm
+from services.tstation.policies.inventory_response_policy import redact_inventory_output_for_model
 from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,10 @@ def _normalize_schedule_tool_call_with_inventory(call: dict, previous_tool_calls
     return call
 
 
+def _model_visible_tool_output(name: str, output_text: str) -> str:
+    return redact_inventory_output_for_model(name, output_text)
+
+
 class ToolLoopExecutor:
     """One conversation turn: LLM ↔ tools until the model answers in text."""
 
@@ -206,6 +211,9 @@ class ToolLoopExecutor:
                 logger.exception("[CHAT_V3] tool %s failed", name)
                 output_text = f"Tool error: {exc}"
         self.tool_calls.append({"name": name, "args": args, "output": output_text})
-        yield sse.tool_result(name, args, output_text[:_TOOL_OUTPUT_PREVIEW_CHARS])
+        model_visible_output = _model_visible_tool_output(name, output_text)
+        yield sse.tool_result(name, args, model_visible_output[:_TOOL_OUTPUT_PREVIEW_CHARS])
         yield sse.agent_flow(display, "error" if output_text.startswith("Tool error") else "success")
-        self._messages.append(ToolMessage(content=output_text[:_TOOL_OUTPUT_PREVIEW_CHARS], tool_call_id=call_id))
+        self._messages.append(
+            ToolMessage(content=model_visible_output[:_TOOL_OUTPUT_PREVIEW_CHARS], tool_call_id=call_id)
+        )

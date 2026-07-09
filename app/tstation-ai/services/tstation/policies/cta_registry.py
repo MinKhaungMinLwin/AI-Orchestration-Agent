@@ -7,7 +7,7 @@ import re
 from typing import Any, Mapping
 from urllib.parse import urlparse
 
-from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.common.cta_urls import CTAUrls, rebase_tstation_url_to_origin
 
 
 @dataclass(frozen=True)
@@ -105,6 +105,22 @@ _URL_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         cta_action="open_promotion_event_list",
         expected_behavior="open_url",
         url=CTAUrls.PROMOTION_EVENT_LIST,
+    ),
+    CTADefinition(
+        cta_id="promotion.event.open",
+        label="진행 중인 이벤트",
+        domain="DISCOVERY",
+        cta_action="open_promotion_event_list",
+        expected_behavior="open_url",
+        url=CTAUrls.PROMOTION_EVENT_LIST,
+    ),
+    CTADefinition(
+        cta_id="promotion.deal.open",
+        label="진행 중인 기획전",
+        domain="DISCOVERY",
+        cta_action="open_promotion_deal_list",
+        expected_behavior="open_url",
+        url=CTAUrls.PROMOTION_DEAL_LIST,
     ),
     CTADefinition(
         cta_id="promotion.past_event.open",
@@ -581,6 +597,8 @@ def _validate_definition(
 
 
 _PREANNOTATED_ACTION_KEYS: tuple[str, ...] = ("actionId", "action_id", "intentKey", "intent_key", "cta_action")
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]{1,120})\]\((https?://[^)\s]+)\)")
+_BARE_URL_RE = re.compile(r"https?://[^\s)>\]]+")
 
 
 def _has_preannotated_action(chip: Mapping[str, Any]) -> bool:
@@ -589,6 +607,33 @@ def _has_preannotated_action(chip: Mapping[str, Any]) -> bool:
         str(chip.get(key) or "").strip() or str(metadata.get(key) or "").strip()
         for key in _PREANNOTATED_ACTION_KEYS
     )
+
+
+def _strip_duplicate_cta_links_from_answer(answer: str, chips: list[Any]) -> str:
+    cta_url_paths: set[str] = set()
+    for chip in chips:
+        if not isinstance(chip, Mapping):
+            continue
+        url_path = _url_path(str(chip.get("url") or ""))
+        if not url_path:
+            continue
+        cta_url_paths.add(url_path)
+    cta_url_paths.discard("")
+    if not answer or not cta_url_paths:
+        return answer
+
+    def markdown_repl(match: re.Match[str]) -> str:
+        label = match.group(1).strip()
+        url_path = _url_path(match.group(2))
+        return label if url_path not in cta_url_paths else ""
+
+    sanitized = _MARKDOWN_LINK_RE.sub(markdown_repl, answer)
+    sanitized = _BARE_URL_RE.sub(
+        lambda match: "" if _url_path(match.group(0)) in cta_url_paths else match.group(0),
+        sanitized,
+    )
+    lines = [line.rstrip() for line in sanitized.splitlines()]
+    return "\n".join(line for line in lines if line.strip())
 
 
 def normalize_quickreply_ctas(
@@ -692,6 +737,30 @@ def normalize_quickreply_ctas(
         normalized.append(chip)
         changed = changed or chip != raw_chip
 
+    if changed:
+        data["quickReplies"] = normalized
+    assistant_response = data.get("assistantResponse")
+    if isinstance(assistant_response, str):
+        sanitized_response = _strip_duplicate_cta_links_from_answer(assistant_response, normalized)
+        if sanitized_response != assistant_response:
+            data["assistantResponse"] = sanitized_response
+            changed = True
+    rebased_normalized: list[Any] = []
+    rebased_changed = False
+    for chip in normalized:
+        if not isinstance(chip, dict):
+            rebased_normalized.append(chip)
+            continue
+        next_chip = dict(chip)
+        url = str(next_chip.get("url") or "").strip()
+        rebased_url = rebase_tstation_url_to_origin(url)
+        if url and rebased_url != url:
+            next_chip["url"] = rebased_url
+            rebased_changed = True
+        rebased_normalized.append(next_chip)
+    if rebased_changed:
+        normalized = rebased_normalized
+        changed = True
     if changed:
         data["quickReplies"] = normalized
     if audit:

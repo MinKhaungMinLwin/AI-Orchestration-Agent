@@ -75,6 +75,7 @@ _CTA_PATH_PAIRS: Final[tuple[_CTAPathPair, ...]] = (
     _path_pair("GOODS_REVIEW", "/mypage/activity/goods-review"),
     _path_pair("KEEP_SERVICE_HIST", "/mypage/tstation/custservice/keepservice-hist"),
     _path_pair("PROMOTION_EVENT_LIST", "/promotion/event-list"),
+    _path_pair("PROMOTION_DEAL_LIST", "/promotion/deal-list"),
     _path_pair("PROMOTION_PAST_EVENT_LIST", "/promotion/past-event-list"),
     _path_pair(
         "MY_COUPON_LIST",
@@ -116,6 +117,7 @@ class CTAUrls:
     GOODS_REVIEW: Final[str] = f"{_PC}/mypage/activity/goods-review"
     KEEP_SERVICE_HIST: Final[str] = f"{_PC}/mypage/tstation/custservice/keepservice-hist"
     PROMOTION_EVENT_LIST: Final[str] = f"{_PC}/promotion/event-list"
+    PROMOTION_DEAL_LIST: Final[str] = f"{_PC}/promotion/deal-list"
     PROMOTION_PAST_EVENT_LIST: Final[str] = f"{_PC}/promotion/past-event-list"
     MY_COUPON_LIST_PC: Final[str] = f"{_PC}/mypage/tstation/coupon/couponList"
     MY_COUPON_LIST_MOBILE: Final[str] = f"{_MOBILE}/coupon/myCouponList"
@@ -144,6 +146,7 @@ _SENTINEL_MAP: Mapping[str, str] = {
     "__URL_GOODS_REVIEW__": CTAUrls.GOODS_REVIEW,
     "__URL_KEEP_SERVICE_HIST__": CTAUrls.KEEP_SERVICE_HIST,
     "__URL_PROMOTION_EVENT_LIST__": CTAUrls.PROMOTION_EVENT_LIST,
+    "__URL_PROMOTION_DEAL_LIST__": CTAUrls.PROMOTION_DEAL_LIST,
     "__URL_PROMOTION_PAST_EVENT_LIST__": CTAUrls.PROMOTION_PAST_EVENT_LIST,
     "__URL_MY_COUPON_LIST_PC__": CTAUrls.MY_COUPON_LIST_PC,
     "__URL_MY_COUPON_LIST_MOBILE__": CTAUrls.MY_COUPON_LIST_MOBILE,

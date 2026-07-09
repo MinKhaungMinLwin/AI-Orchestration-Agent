@@ -61,6 +61,8 @@ STORE_SEARCH_FLOW_GUIDANCE = (
     "2. search_stores_tool/search_stores_complex_tool 로 해당 지역의 매장을 검색하세요.\n"
     "3. 물류 재고가 없다면(LOGISTICS_UNAVAILABLE), get_store_inventory_tool 로 실제 재고가 있는 매장만 "
     "추려서 보여주세요 — 재고 확인 없이 지역 내 매장 목록만 보여주고 끝내지 마세요.\n"
+    "재고 조회 결과를 답할 때는 재고 보유 여부, 요청 수량 기준 장착 가능 여부, 예약 가능 여부만 안내하고 "
+    "정확한 재고 수량(예: 몇 개/몇 본/EA)은 절대 외부에 말하지 마세요.\n"
     "4. 사용자가 매장을 하나 선택하면 거기서 멈추지 마세요. get_store_detail_tool 로 매장 정보만 보여주는 것으로 "
     "끝내지 말고, 재고 확인 결과에 맞는 mode 로 get_store_schedule_tool 을 이어서 호출해 예약 가능 일정을 "
     "보여주고 사용자가 날짜/시간을 고를 수 있게 하세요. 이게 주문 확정으로 이어지는 다음 단계입니다.\n"
