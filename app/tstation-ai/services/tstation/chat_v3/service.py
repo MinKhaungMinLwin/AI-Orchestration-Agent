@@ -48,6 +48,7 @@ _STREAM_HEADERS = {
 _ADD_TO_CART_INTENT = "add_to_cart"
 _CART_CONFIRMATION_INTENT = "cart_confirmation"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
+_CART_PREVIEW_SLOT_KEYS = {"ord_qty", "tire_model", "tire_size", "shop_name", "requested_cal_day", "rsv_hour"}
 
 
 def _tool_display_names() -> dict[str, str]:
@@ -63,8 +64,16 @@ def _tokens_enabled() -> bool:
 def _is_confirmed_cart_turn(decision: RouteDecision | None, slots: ConversationSlots) -> bool:
     if decision is None:
         return False
+    patch = decision.slots_patch.non_empty()
+    cart_confirmation_intent = _CART_CONFIRMATION_INTENT in decision.intents
+    ready_cart_reaffirmed = (
+        _ADD_TO_CART_INTENT in decision.intents
+        and slots.goods_no
+        and slots.ord_qty
+        and not any(key in patch for key in _CART_PREVIEW_SLOT_KEYS)
+    )
     return bool(
-        _CART_CONFIRMATION_INTENT in decision.intents
+        (cart_confirmation_intent or ready_cart_reaffirmed)
         and slots.goods_no
         and slots.ord_qty
     )
