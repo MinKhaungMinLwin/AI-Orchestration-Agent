@@ -31968,7 +31968,7 @@ def test_payment_error_troubleshooting_contract_keeps_checkout_screen_error_faq_
     assert "search_faq_rag_tool" in contract.allowed_tools
 
 
-def test_safe_service_subscription_check_keeps_owned_warranty_lookup_over_complaint_scope() -> None:
+def test_safe_service_subscription_check_uses_relief_service_lookup_over_complaint_scope() -> None:
     contract = build_turn_contract(
         user_text="나 안심서비스 가입했던것 같은데, 확인해줘",
         routing_result=_routing_result(
@@ -31982,14 +31982,31 @@ def test_safe_service_subscription_check_keeps_owned_warranty_lookup_over_compla
     )
 
     assert contract.domain == "support"
-    assert contract.intent == "owned_warranty_lookup"
-    assert contract.current_turn_intent == "owned_warranty_lookup"
-    assert contract.allowed_tools == ("get_my_warranties_tool",)
+    assert contract.intent == "relief_service_lookup"
+    assert contract.current_turn_intent == "relief_service_lookup"
+    assert contract.allowed_tools == ("get_my_relief_services_tool",)
     assert "search_faq_hybrid_tool" in contract.forbidden_tools
     assert "transfer_to_qna_tool" in contract.forbidden_tools
+    assert "get_my_warranties_tool" in contract.forbidden_tools
     assert contract.known_slots["pending_check_topic"] == "safe_service"
     assert contract.response_decision
-    assert contract.response_decision["metadata"]["response_shape_key"] == "owned_warranty_lookup"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "relief_service_lookup"
+
+
+def test_relief_service_tool_plan_normalizes_to_relief_lookup() -> None:
+    contract = build_turn_contract(
+        user_text="내가 가입한 안심서비스 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:get_my_relief_services_tool"],
+            referred_object_status="resolved",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "relief_service_lookup"
+    assert contract.allowed_tools == ("get_my_relief_services_tool",)
+    assert "get_my_warranties_tool" in contract.forbidden_tools
 
 
 def test_order_document_guidance_contract_blocks_direct_qna_and_order_lookup_tools() -> None:

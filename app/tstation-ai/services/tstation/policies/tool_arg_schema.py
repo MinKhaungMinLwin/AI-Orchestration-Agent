@@ -505,6 +505,7 @@ TOOL_REQUIRED_INPUTS: dict[str, ToolInputSpec] = {
         args={"goods_no": ToolArgRule("상품번호", ("goods_no", "goodsNo"))},
     ),
     # 역할: 내 보유 워런티 목록을 조회한다.
+    "get_my_relief_services_tool": ToolInputSpec(role="로그인 회원 안심서비스 가입/보상 이력 조회"),
     "get_my_warranties_tool": ToolInputSpec(role="로그인 회원 보유 워런티 조회"),
     # 역할: 카드 무이자 할부 정보를 조회한다.
     "get_card_installments_tool": ToolInputSpec(

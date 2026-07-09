@@ -32,6 +32,9 @@ from services.tstation.agents.c_transaction_agent.tools import (
 from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_warranties_api_member_warranties_get import (
     sync_detailed as get_my_warranties,
 )
+from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_relief_services_api_member_relief_services_get import (
+    sync_detailed as get_my_relief_services,
+)
 from common.tstation_be_api_client.hkt_api_client.api.installment_af_무이자_할부_조회.get_card_installments_api_installments_cards_get import (
     sync_detailed as get_card_installments,
 )
@@ -57,11 +60,39 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_QNA_CNSL_CLSS_SEQ = "10019"
 _QNA_CNSL_CLSS_SEQS = frozenset({"10002", "10006", "10010", "10013", "10017", "10019", "10025", "10034"})
+_RELIEF_SERVICE_DATE_FIELDS = frozenset({"equp_conf_dtime", "join_dtime", "relief_svc_dtime", "relief_end_dtime"})
 
 current_support_policy_intent: contextvars.ContextVar[str] = contextvars.ContextVar(
     "current_support_policy_intent",
     default="none",
 )
+
+
+def _date_only(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    return text.replace("T", " ").partition(" ")[0]
+
+
+def _format_relief_service_dates(payload: dict[str, Any]) -> dict[str, Any]:
+    relief_services = payload.get("relief_services")
+    if not isinstance(relief_services, list):
+        return payload
+    formatted = dict(payload)
+    formatted["relief_services"] = []
+    for item in relief_services:
+        if not isinstance(item, dict):
+            formatted["relief_services"].append(item)
+            continue
+        row = dict(item)
+        for field in _RELIEF_SERVICE_DATE_FIELDS:
+            if field in row:
+                row[field] = _date_only(row[field])
+        formatted["relief_services"].append(row)
+    return formatted
 _FAQ_METADATA_ONLY_POLICY_INTENTS = frozenset({
     "coupon_registration_policy",
     "coupon_usage_policy",
@@ -668,12 +699,44 @@ def get_product_warranties_tool(goods_no: str):
 
 @tool
 @tool_cache(ttl=300)
+def get_my_relief_services_tool():
+    """
+    JWT 회원의 안심서비스 가입/보상 이력을 조회한다 (VW_ET_MBR_RELIEF_MAST_INFO).
+
+    Use when: 사용자가 안심서비스/안심플러스에 대해 본인의 가입·신청·보유 여부, 현재 상태,
+    유효/만료 여부, 만료일, 보상/클레임 처리 상태 또는 과거 이력을 확인하려는 경우.
+    일반 설명/조건 질문은 FAQ를 사용하고, 상품별 안심서비스 적용 가능 여부는 get_product_warranties_tool 을 사용한다.
+
+    Returns: status/http_status/data. data 구조:
+        {"relief_services": [
+            {"ord_no":"...", "vhcl_model_nm":"...", "join_state_nm":"정상",
+             "relief_state_nm":"가입완료", "relief_svc_dtime":"...",
+             "relief_end_dtime":"...", "relief_svc_distance":"...", "plus_yn":"Y"},
+            ...
+        ]}
+    """
+    logger.debug("[TOOL][get_my_relief_services_tool] called")
+    try:
+        response = get_my_relief_services(client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get my relief services",
+            )
+        return _success_response(response.status_code, _format_relief_service_dates(_to_dict(response.parsed)))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_relief_services_tool] Failed")
+        return _error_response(None, str(e), "Failed to get my relief services")
+
+
+@tool
+@tool_cache(ttl=300)
 def get_my_warranties_tool():
     """
     JWT 회원이 보유한 워런티 목록을 조회한다 (ET_DGTL_WRT_REG_INFO).
 
-    Use when: 사용자가 "내 워런티 알려줘", "내가 가입한 안심서비스 만료일",
-    "내 품질보증 언제까지야?", "내 워런티 현황", "내 워런티 보유 내역"
+    Use when: 사용자가 "내 워런티 알려줘", "내 품질보증 언제까지야", "내 워런티 현황", "내 워런티 보유 내역"
     처럼 본인 보유 워런티를 묻는 경우. 인증된 JWT 의 회원번호를 자동 사용.
 
     Returns: status/http_status/data. data 구조:

@@ -43,6 +43,14 @@ intents 에 "card_installment_lookup" 을 포함하세요.
 - 카드 결제 실패·승인 오류, 카드 취소/환불 시점, 카드 할인/포인트/제휴 혜택, 쿠폰 적용/최종 혜택가 문의는
   card_installment_lookup 이 아닙니다.
 
+### 회원 본인 안심서비스 조회 라우팅
+사용자가 안심서비스/안심플러스에 대해 **본인의 가입·신청·보유 여부, 현재 상태, 유효/만료 여부, 만료일,
+보상/클레임 처리 상태 또는 과거 이력**을 확인하려는 경우는 SUPPORT 로 라우팅하고 intents 에
+"relief_service_lookup" 을 포함하세요. 표현이 달라도 "내/제가/가입한/신청한/보유한/상태/만료/보상/처리/이력"처럼
+회원 본인 레코드를 확인하려는 의도이면 이 intent 입니다.
+- 일반 설명·조건·보상 범위 질문은 relief_service_lookup 이 아니라 SUPPORT FAQ/정책 질문입니다.
+- 특정 상품이나 타이어의 안심서비스 적용 가능 여부는 relief_service_lookup 이 아니라 상품 워런티/상품 확인 흐름입니다.
+
 ### 고정 FAQ 정책 key 라우팅
 아래 정책성 FAQ는 guard_id를 사용하지 말고 guard_id="none", domain=SUPPORT 로 라우팅하세요.
 intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPPORT 도구가 해당 key로 공식 답변을 조회합니다.

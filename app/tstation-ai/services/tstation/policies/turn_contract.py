@@ -502,8 +502,11 @@ _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
 _OWNED_WARRANTY_LOOKUP_INTENTS = frozenset({
     "owned_warranty_lookup",
     "my_warranty_lookup",
+})
+_RELIEF_SERVICE_LOOKUP_INTENTS = frozenset({
     "verify_safe_service_subscription",
     "safe_service_subscription_lookup",
+    "relief_service_lookup",
 })
 _SUPPORT_SAFE_AGENT_TOOLS = (
     "get_faq_tool",
@@ -511,6 +514,7 @@ _SUPPORT_SAFE_AGENT_TOOLS = (
     "search_faq_hybrid_tool",
     "get_card_installments_tool",
     "get_product_warranties_tool",
+    "get_my_relief_services_tool",
     "get_my_warranties_tool",
     "get_maintenance_dday_tool",
     "check_coupon_stacking_tool",
@@ -5867,6 +5871,8 @@ def _router_wins_information_intent(
     for candidate in candidates:
         if not candidate or candidate == "none" or candidate in _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS:
             continue
+        if candidate in _RELIEF_SERVICE_LOOKUP_INTENTS:
+            return "relief_service_lookup"
         if candidate in _OWNED_WARRANTY_LOOKUP_INTENTS:
             return "owned_warranty_lookup"
         if candidate == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
@@ -6044,7 +6050,7 @@ def _router_wins_domain(intent: str, planner_domains: tuple[str, ...]) -> str:
         return "transaction"
     if intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance"):
         return "support"
-    if intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
+    if intent in _OWNED_WARRANTY_LOOKUP_INTENTS or intent in _RELIEF_SERVICE_LOOKUP_INTENTS:
         return "support"
     if intent in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
         return "transaction"
@@ -6251,6 +6257,16 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool != "get_my_warranties_tool"
             ),
         )
+    if intent in _RELIEF_SERVICE_LOOKUP_INTENTS:
+        return (
+            ("get_my_relief_services_tool",),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"search_faq_hybrid_tool", "transfer_to_qna_tool", "get_my_warranties_tool"}
+                if tool != "get_my_relief_services_tool"
+            ),
+        )
     if intent == "card_installment_lookup":
         allowed_tools = ("get_card_installments_tool",)
         return (
@@ -6310,6 +6326,7 @@ def _router_wins_response_shape_key(intent: str) -> str:
         "product_size_list_lookup": "product_size_list_lookup",
         "competitor_counterpart_guidance": "competitor_counterpart_guidance",
         "tstation_service_complaint": "support_complaint_guidance",
+        "relief_service_lookup": "relief_service_lookup",
         "owned_warranty_lookup": "owned_warranty_lookup",
     }.get(intent, intent)
 
@@ -6382,9 +6399,20 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
             "overpromise_live_agent",
             "hide_official_contact",
         ]
+    elif intent in _RELIEF_SERVICE_LOOKUP_INTENTS:
+        guidance = (
+            "사용자가 본인 안심서비스 가입/상태/만료일/보상 이력 확인을 요청한 턴은 "
+            "get_my_relief_services_tool로 회원 안심서비스 이력을 조회한다. "
+            "워런티 API나 FAQ 안내로 대체하지 않는다."
+        )
+        forbidden_behaviors = [
+            "answer_without_relief_service_lookup",
+            "route_to_member_warranty_lookup",
+            "transfer_to_qna_direct_first",
+        ]
     elif intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
         guidance = (
-            "사용자가 본인 안심서비스/워런티 가입 여부 확인을 요청한 턴은 get_my_warranties_tool로 보유 워런티를 조회한다. "
+            "사용자가 본인 워런티/품질보증 가입 여부 확인을 요청한 턴은 get_my_warranties_tool로 보유 워런티를 조회한다. "
             "이전 불만/정책 문맥만으로 FAQ 안내나 1:1 문의로 전환하지 않는다."
         )
         forbidden_behaviors = [
@@ -6648,8 +6676,11 @@ def _normalize_plan_intent(value: str) -> str:
         "best_seller": "best_seller_search",
         "sales_rank": "best_seller_search",
         "query_order_data_for_vehicle_with_period": "best_seller_search",
-        "verify_safe_service_subscription": "owned_warranty_lookup",
-        "safe_service_subscription_lookup": "owned_warranty_lookup",
+        "verify_safe_service_subscription": "relief_service_lookup",
+        "safe_service_subscription_lookup": "relief_service_lookup",
+        "relief_services": "relief_service_lookup",
+        "member_relief_services": "relief_service_lookup",
+        "get_my_relief_services_tool": "relief_service_lookup",
         "my_warranty_lookup": "owned_warranty_lookup",
         "best_seller_search_by_vehicle": "best_seller_search",
         "vehicle_best_seller_search": "best_seller_search",
