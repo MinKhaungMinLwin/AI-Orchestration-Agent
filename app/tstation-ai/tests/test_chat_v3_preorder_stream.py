@@ -91,13 +91,13 @@ def test_reaffirmed_add_to_cart_with_same_quantity_executes_save_to_cart_tool(
     )
 
 
-def test_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
-    asyncio.run(_assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch))
+def test_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypatch))
 
 
 def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
-    normalize = service._duplicate_cart_preview_tool_normalizer(slots, enabled=True)
+    normalize = service._add_to_cart_tool_normalizer(slots, enabled=True)
 
     normalized = normalize(
         {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 4}, "id": "call-1"}
@@ -108,23 +108,26 @@ def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
     assert normalized["id"] == "call-1"
 
 
-def test_cart_preview_tool_call_is_preserved_when_quantity_changes() -> None:
+def test_add_to_cart_preview_tool_call_redirects_with_tool_args() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
-    normalize = service._duplicate_cart_preview_tool_normalizer(slots, enabled=True)
+    normalize = service._add_to_cart_tool_normalizer(slots, enabled=True)
     call = {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 2}}
 
-    assert normalize(call) is call
+    normalized = normalize(call)
+
+    assert normalized["name"] == "save_to_cart_tool"
+    assert normalized["args"] == {"goods_no": "G0001", "ord_qty": 2}
 
 
 def test_cart_preview_tool_call_is_preserved_when_guard_disabled() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
-    normalize = service._duplicate_cart_preview_tool_normalizer(slots, enabled=False)
+    normalize = service._add_to_cart_tool_normalizer(slots, enabled=False)
     call = {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 4}}
 
     assert normalize(call) is call
 
 
-async def _assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeypatch: pytest.MonkeyPatch) -> None:
+async def _assert_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     slots = ConversationSlots(
         goods_no="G0001",
         tire_size="225/45R17",
@@ -136,14 +139,18 @@ async def _assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeyp
         slots_patch=SlotsPatch(ord_qty=4),
     )
     saved_slots = []
+    persisted_tool_calls = []
 
-    class FakeExecutor:
+    class FakeCartTool:
+        name = "save_to_cart_tool"
+
+        async def ainvoke(self, args, config=None):
+            assert args == {"goods_no": "G0001", "ord_qty": 4}
+            return {"status": "success", "http_status": 200, "data": {"result": True}}
+
+    class ForbiddenExecutor:
         def __init__(self, *args, **kwargs) -> None:
-            self.final_text = "I cannot add this to cart from chat."
-            self.tool_calls = []
-
-        async def stream(self):
-            yield service.sse.token("I cannot add this to cart from chat.")
+            raise AssertionError("add-to-cart request should execute save_to_cart_tool without preOrder")
 
     async def fake_route_request(*args, **kwargs):
         assert kwargs["known_slots"].goods_no == "G0001"
@@ -155,8 +162,8 @@ async def _assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeyp
     async def fake_save_slots(session_id, next_slots, user_id=None):
         saved_slots.append(next_slots)
 
-    async def fake_verify_answer(answer, tool_calls, trace_config):
-        return answer
+    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
+        persisted_tool_calls.extend(tool_calls)
 
     async def fake_noop(*args, **kwargs):
         return None
@@ -164,11 +171,10 @@ async def _assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeyp
     monkeypatch.setattr(service, "route_request", fake_route_request)
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
     monkeypatch.setattr(service, "save_slots", fake_save_slots)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
-    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
-    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
-    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
-    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [FakeCartTool()])
+    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
+    monkeypatch.setattr(service, "_tool_display_names", lambda: {"save_to_cart_tool": "장바구니에 담는 중..."})
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
 
     request = TStationChatRequest(
@@ -187,11 +193,13 @@ async def _assert_add_to_cart_quantity_turn_builds_preorder_confirmation(monkeyp
         if event:
             events.append(event)
 
-    assert not [event for event in events if event.get("type") in {"message", "token"}]
-    pre_order = next(event for event in events if event.get("template") == "preOrder")
-    assert pre_order["data"]["isReadyToAddToCart"] is True
-    assert pre_order["data"]["metadata"]["goodsNo"] == "G0001"
-    assert pre_order["data"]["metadata"]["ordQty"] == 4
+    tool_events = [event for event in events if event.get("type") == "tool"]
+    assert tool_events
+    assert tool_events[0]["tool"] == "save_to_cart_tool"
+    assert "장바구니에 담았어요" in next(
+        event["content"] for event in events if event.get("type") == "message"
+    )
+    assert persisted_tool_calls[0]["name"] == "save_to_cart_tool"
     assert saved_slots[0].pending_intent == "cart"
     assert saved_slots[0].goal_type == "add_to_cart"
 

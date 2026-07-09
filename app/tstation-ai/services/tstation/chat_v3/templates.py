@@ -375,7 +375,7 @@ def _looks_like_confirmation_turn(decision: RouteDecision | None) -> bool:
 def build_preorder_fallback(answer: str, slots: ConversationSlots, decision: RouteDecision | None) -> dict | None:
     if not _looks_like_confirmation_turn(decision):
         return None
-    if not (_ready_order_slots(slots) or _ready_cart_slots(slots)):
+    if not _ready_order_slots(slots):
         return None
     return build_preorder_data_event(
         answer,
