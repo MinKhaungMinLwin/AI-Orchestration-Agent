@@ -199,6 +199,7 @@ def fe_slot_patch(request: TStationChatRequest) -> dict:
     ui_action = request.ui_action or {}
     action_type = str(ui_action.get("action_type") or ui_action.get("cta_action") or "").strip()
     merged: dict = {}
+    has_chip_slots = False
     for source in (
         request.slots,
         ui_action.get("slots"),
@@ -206,8 +207,20 @@ def fe_slot_patch(request: TStationChatRequest) -> dict:
     ):
         if isinstance(source, dict):
             merged.update(source)
+            has_chip_slots = has_chip_slots or source is chip_metadata.get("slots")
     normalized = {_FE_KEY_ALIASES.get(key, key): value for key, value in merged.items()}
-    normalized.update(_vehicle_size_patch(merged, allow_selected_size=action_type != "select_vehicle_candidate"))
+    vehicle_size_values = _vehicle_size_patch(
+        merged,
+        allow_selected_size=not (
+            action_type == "select_vehicle_candidate"
+            or (
+                not action_type
+                and not has_chip_slots
+                and any(key in normalized for key in ("car_no", "car_lnc_cd", "mbr_car_reg_seq"))
+            )
+        ),
+    )
+    normalized.update(vehicle_size_values)
     return {
         field: _coerce(field, value)
         for field, value in normalized.items()
