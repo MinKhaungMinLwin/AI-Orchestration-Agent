@@ -112,6 +112,32 @@ def test_fe_vehicle_patch_preserves_staggered_sizes_without_selecting_one() -> N
     assert slots.tire_size_rear == "255/50R18"
 
 
+def test_fe_vehicle_ui_action_preserves_staggered_sizes_without_selecting_one() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "select car"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-fe-ui-action-test",
+        ui_action={
+            "action_type": "select_vehicle_candidate",
+            "slots": {
+                "carNo": "29조3345",
+                "carLncCd": "W000003",
+                "tireSize": "225/40R19",
+                "tireSizeRe": "255/35R19",
+            },
+        },
+    )
+
+    slots = apply_fe_slots(ConversationSlots(), request)
+
+    assert slots.car_no == "29조3345"
+    assert slots.car_lnc_cd == "W000003"
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "225/40R19"
+    assert slots.tire_size_rear == "255/35R19"
+
+
 def test_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch))
 

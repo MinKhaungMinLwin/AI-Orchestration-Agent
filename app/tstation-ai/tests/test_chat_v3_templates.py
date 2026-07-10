@@ -430,6 +430,8 @@ def test_listcar_template_builds_directly_from_registered_car_tool(monkeypatch):
     assert event["data"]["metadata"][0]["tireSize"] == "225/55R18"
     assert event["data"]["metadata"][0]["ctaAction"] == "select_vehicle_candidate"
     assert event["data"]["metadata"][0]["sourceIntent"] == "stock_store_search"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["carLncCd"] == "W000001"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["tireSize"] == "225/55R18"
 
 
 def test_listcar_template_preserves_staggered_front_rear_sizes(monkeypatch):
@@ -466,6 +468,8 @@ def test_listcar_template_preserves_staggered_front_rear_sizes(monkeypatch):
     assert event["data"]["metadata"][0]["tireSize"] == "225/50R18"
     assert event["data"]["metadata"][0]["tireSizeRe"] == "255/50R18"
     assert event["data"]["metadata"][0]["availableSizes"] == ["225/50R18", "255/50R18"]
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["tireSize"] == "225/50R18"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["tireSizeRe"] == "255/50R18"
 
 
 def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):

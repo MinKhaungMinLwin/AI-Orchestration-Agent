@@ -778,6 +778,7 @@ class CarMeta(BaseModel):
     source_intent: str | None = None
     expectedContractIntent: str | None = None
     expected_contract_intent: str | None = None
+    ui_action: dict | None = None
 
 
 class CarItem(BaseModel):
