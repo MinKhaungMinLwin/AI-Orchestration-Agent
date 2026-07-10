@@ -51,6 +51,9 @@ _ADD_TO_CART_INTENT = "add_to_cart"
 _CART_CONFIRMATION_INTENT = "cart_confirmation"
 _ORDER_PREVIEW_TOOL = "present_order_preview_tool"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
+_FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
+_REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
+_CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
 
 
 def _tool_display_names() -> dict[str, str]:
@@ -124,6 +127,38 @@ def _ready_cart_slots(slots: ConversationSlots) -> bool:
         and slots.ord_qty
         and (slots.pending_intent == "cart" or slots.goal_type == "add_to_cart")
     )
+
+
+def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
+    front_size = str(slots.tire_size_front or "").strip()
+    rear_size = str(slots.tire_size_rear or "").strip()
+    selected_size = str(slots.tire_size or "").strip()
+    if not front_size or not rear_size or front_size == rear_size or selected_size:
+        return None
+
+    base_slots = slots.model_dump(mode="json", exclude_none=True)
+    front_slots = {**base_slots, "tire_size": front_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
+    rear_slots = {**base_slots, "tire_size": rear_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
+    answer = (
+        f"차량의 앞/뒤 타이어 사이즈가 다릅니다. 전륜 **{front_size}**, 후륜 **{rear_size}** 중 "
+        "어떤 사이즈로 진행할까요?"
+    )
+    chips = [
+        {"label": _FRONT_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": front_slots}},
+        {"label": _REAR_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": rear_slots}},
+        {"label": _CUSTOM_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+    ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": answer,
+            "quickReplies": chips,
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+        },
+        "source_domain": "DISCOVERY",
+        "assistant_response_source": "code_chat_v3_staggered_tire_size_choice",
+    }
 
 
 def _add_to_cart_tool_normalizer(slots: ConversationSlots, *, enabled: bool) -> Callable[[dict], dict]:
@@ -397,6 +432,46 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     slots = _normalize_add_to_cart_slots(decision, slots)
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
+
+    staggered_size_event = _staggered_tire_size_choice_event(slots) if domain in {"DISCOVERY", "TRANSACTION"} else None
+    if staggered_size_event:
+        answer = str(staggered_size_event["data"]["assistantResponse"])
+        chips = staggered_size_event["data"]["quickReplies"]
+        result["answer"] = answer
+        if _tokens_enabled():
+            yield sse.token(answer)
+        yield sse.message(answer)
+        yield sse.sse(staggered_size_event)
+        _update_trace_monitoring(
+            route_domains=domains,
+            tool_calls=[],
+            final_template="quickReply",
+            trace_id=request.tracing_id,
+            parent_span_id=parent_span_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            answer=answer,
+            user_text=user_text,
+            message_id=message_id,
+            route_intents=list(decision.intents if decision else []),
+            fallback_used=True,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            trace_observation=parent_span,
+        )
+        if parent_span is not None:
+            parent_span.end()
+        _flush_trace()
+        for event in sse.done():
+            yield event
+        await save_slots(request.session_id, slots, user_id=request.user_id)
+        await memory.persist_turn_context(
+            request.session_id,
+            tool_calls=[],
+            quick_reply_domains=[chip["domain"] for chip in chips],
+            predicted_domains=staggered_size_event["data"]["predictedDomains"],
+            user_id=request.user_id,
+        )
+        return
 
     if _is_confirmed_cart_turn(decision, slots):
         tool = next((candidate for candidate in tools_for_domains(["TRANSACTION"]) if candidate.name == _SAVE_TO_CART_TOOL), None)

@@ -432,6 +432,42 @@ def test_listcar_template_builds_directly_from_registered_car_tool(monkeypatch):
     assert event["data"]["metadata"][0]["sourceIntent"] == "stock_store_search"
 
 
+def test_listcar_template_preserves_staggered_front_rear_sizes(monkeypatch):
+    def fail_if_llm_builder_is_used():
+        raise AssertionError("listCar template should be built directly from registered-car tool output")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_if_llm_builder_is_used)
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "56모2162",
+                    "car_lnc_cd": "W000003",
+                    "car_maker": "BMW",
+                    "car_nm": "3 Series",
+                    "car_model_det": "3 Series GT",
+                    "tire_size_fr": "225/50R18",
+                    "tire_size_re": "255/50R18",
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "Registered cars found. Please select one.",
+            [{"name": "get_my_cars_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "listCar"
+    assert event["data"]["metadata"][0]["tireSize"] == "225/50R18"
+    assert event["data"]["metadata"][0]["tireSizeRe"] == "255/50R18"
+    assert event["data"]["metadata"][0]["availableSizes"] == ["225/50R18", "255/50R18"]
+
+
 def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
 

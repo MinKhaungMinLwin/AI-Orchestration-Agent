@@ -1002,10 +1002,11 @@ def build_listcar_data_event(answer: str, call: dict, slots: ConversationSlots |
         car_info = " ".join(part for part in (car_maker, car_model) if part).strip() or car_no
         available_sizes = _car_available_sizes(row)
         multiple_sizes = len(available_sizes) > 1
-        tire_size = None if multiple_sizes else (normalize_tire_size(_get_str(row, "tire_size_fr", "tireSize")) or None)
-        tire_size_re = (
-            None if multiple_sizes else (normalize_tire_size(_get_str(row, "tire_size_re", "tireSizeRe")) or None)
-        )
+        front_size = normalize_tire_size(_get_str(row, "tire_size_fr", "tireSize")) or None
+        rear_size = normalize_tire_size(_get_str(row, "tire_size_re", "tireSizeRe")) or None
+        staggered_sizes = bool(front_size and rear_size and front_size != rear_size)
+        tire_size = front_size if staggered_sizes or not multiple_sizes else None
+        tire_size_re = rear_size if staggered_sizes or not multiple_sizes else None
         items.append(
             CarItem(
                 licensePlate=car_no,
