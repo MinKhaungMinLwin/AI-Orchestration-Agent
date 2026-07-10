@@ -43,6 +43,9 @@ _SINGLE_ROW_FIELDS: dict[str, str] = {
 
 # FE payloads use camelCase in places; normalize to slot field names.
 _FE_KEY_ALIASES = {
+    "carNo": "car_no",
+    "licensePlate": "car_no",
+    "carLncCd": "car_lnc_cd",
     "goodsId": "goods_no",
     "goodsNo": "goods_no",
     "shopId": "shop_id",

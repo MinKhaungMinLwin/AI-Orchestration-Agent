@@ -1007,6 +1007,17 @@ def build_listcar_data_event(answer: str, call: dict, slots: ConversationSlots |
         staggered_sizes = bool(front_size and rear_size and front_size != rear_size)
         tire_size = front_size if staggered_sizes or not multiple_sizes else None
         tire_size_re = rear_size if staggered_sizes or not multiple_sizes else None
+        ui_action_slots = {
+            "carNo": car_no,
+            "sourceIntent": source_intent,
+        }
+        car_lnc_cd = _get_str(row, "car_lnc_cd", "carLncCd") or None
+        if car_lnc_cd:
+            ui_action_slots["carLncCd"] = car_lnc_cd
+        if tire_size:
+            ui_action_slots["tireSize"] = tire_size
+        if tire_size_re:
+            ui_action_slots["tireSizeRe"] = tire_size_re
         items.append(
             CarItem(
                 licensePlate=car_no,
@@ -1019,8 +1030,8 @@ def build_listcar_data_event(answer: str, call: dict, slots: ConversationSlots |
             CarMeta(
                 carNo=car_no,
                 car_no=car_no,
-                carLncCd=_get_str(row, "car_lnc_cd", "carLncCd") or None,
-                car_lnc_cd=_get_str(row, "car_lnc_cd", "carLncCd") or None,
+                carLncCd=car_lnc_cd,
+                car_lnc_cd=car_lnc_cd,
                 mbrCarRegSeq=_get_str(row, "mbr_car_reg_seq", "mbr_car_unif_no", "mbrCarRegSeq") or None,
                 mbr_car_reg_seq=_get_str(row, "mbr_car_reg_seq", "mbr_car_unif_no", "mbrCarRegSeq") or None,
                 carMaker=car_maker or None,
@@ -1046,6 +1057,15 @@ def build_listcar_data_event(answer: str, call: dict, slots: ConversationSlots |
                 source_intent=source_intent,
                 expectedContractIntent=source_intent,
                 expected_contract_intent=source_intent,
+                ui_action={
+                    "action_type": "select_vehicle_candidate",
+                    "cta_action": "select_vehicle_candidate",
+                    "entity_type": "vehicle",
+                    "entity_id": car_no,
+                    "expected_behavior": "slot_fill",
+                    "expected_contract_intent": source_intent,
+                    "slots": ui_action_slots,
+                },
             )
         )
 
