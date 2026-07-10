@@ -60,7 +60,7 @@ _FE_KEY_ALIASES = {
 }
 
 
-def _vehicle_size_patch(merged: dict) -> dict:
+def _vehicle_size_patch(merged: dict, *, allow_selected_size: bool = True) -> dict:
     front_raw = (
         merged.get("tire_size_front")
         or merged.get("tire_size_fr")
@@ -81,7 +81,7 @@ def _vehicle_size_patch(merged: dict) -> dict:
     if front_size and rear_size and front_size != rear_size:
         values = {"tire_size": None, "tire_size_front": front_size, "tire_size_rear": rear_size}
         explicit_selected_size = normalize_tire_size(str(merged.get("tire_size") or ""))
-        if explicit_selected_size in {front_size, rear_size}:
+        if allow_selected_size and explicit_selected_size in {front_size, rear_size}:
             values["tire_size"] = explicit_selected_size
         return values
     selected_size = front_size or rear_size
@@ -196,16 +196,18 @@ def _snake_to_camel(field: str) -> str:
 def fe_slot_patch(request: TStationChatRequest) -> dict:
     """Slot values the FE sent with this turn (card click / chip metadata)."""
     chip_metadata = (request.chip_context or {}).get("metadata") or {}
+    ui_action = request.ui_action or {}
+    action_type = str(ui_action.get("action_type") or ui_action.get("cta_action") or "").strip()
     merged: dict = {}
     for source in (
         request.slots,
-        (request.ui_action or {}).get("slots"),
+        ui_action.get("slots"),
         chip_metadata.get("slots") if isinstance(chip_metadata, dict) else None,
     ):
         if isinstance(source, dict):
             merged.update(source)
     normalized = {_FE_KEY_ALIASES.get(key, key): value for key, value in merged.items()}
-    normalized.update(_vehicle_size_patch(merged))
+    normalized.update(_vehicle_size_patch(merged, allow_selected_size=action_type != "select_vehicle_candidate"))
     return {
         field: _coerce(field, value)
         for field, value in normalized.items()
