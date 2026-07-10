@@ -178,6 +178,26 @@ def test_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch: pytest.M
     asyncio.run(_assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch))
 
 
+def test_staggered_vehicle_size_guard_survives_router_car_no_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(
+        _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
+            monkeypatch,
+            slots=ConversationSlots(
+                car_no="29조3345",
+                tire_size_front="225/40R19",
+                tire_size_rear="255/35R19",
+            ),
+            decision=RouteDecision(
+                domain=Domain.DISCOVERY,
+                intents=["tire_recommend"],
+                slots_patch=SlotsPatch(car_no="29조3345"),
+            ),
+            expected_front_size="225/40R19",
+            expected_rear_size="255/35R19",
+        )
+    )
+
+
 def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
     normalize = service._add_to_cart_tool_normalizer(slots, enabled=True)
@@ -202,14 +222,21 @@ def test_add_to_cart_preview_tool_call_redirects_with_tool_args() -> None:
     assert normalized["args"] == {"goods_no": "G0001", "ord_qty": 2}
 
 
-async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch: pytest.MonkeyPatch) -> None:
-    slots = ConversationSlots(
-        tire_size_front="225/50R18",
-        tire_size_rear="255/50R18",
+async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    slots: ConversationSlots | None = None,
+    decision: RouteDecision | None = None,
+    expected_front_size: str = "225/50R18",
+    expected_rear_size: str = "255/50R18",
+) -> None:
+    slots = slots or ConversationSlots(
+        tire_size_front=expected_front_size,
+        tire_size_rear=expected_rear_size,
         pending_intent="order",
         goal_type="place_order",
     )
-    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["quick_order_reservation"])
+    decision = decision or RouteDecision(domain=Domain.TRANSACTION, intents=["quick_order_reservation"])
     saved_slots = []
     persisted_domains = []
 
@@ -252,15 +279,15 @@ async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch:
     data_events = [event for event in events if event.get("type") == "data"]
     assert data_events
     assert data_events[0]["template"] == "quickReply"
-    assert "225/50R18" in data_events[0]["data"]["assistantResponse"]
-    assert "255/50R18" in data_events[0]["data"]["assistantResponse"]
+    assert expected_front_size in data_events[0]["data"]["assistantResponse"]
+    assert expected_rear_size in data_events[0]["data"]["assistantResponse"]
     assert [chip["label"] for chip in data_events[0]["data"]["quickReplies"]] == [
         "앞바퀴사이즈",
         "뒷바퀴사이즈",
         "다른 사이즈 입력",
     ]
-    assert data_events[0]["data"]["quickReplies"][0]["metadata"]["slots"]["tire_size"] == "225/50R18"
-    assert data_events[0]["data"]["quickReplies"][1]["metadata"]["slots"]["tire_size"] == "255/50R18"
+    assert data_events[0]["data"]["quickReplies"][0]["metadata"]["slots"]["tire_size"] == expected_front_size
+    assert data_events[0]["data"]["quickReplies"][1]["metadata"]["slots"]["tire_size"] == expected_rear_size
     assert saved_slots[0].tire_size is None
     assert persisted_domains == ["DISCOVERY", "DISCOVERY", "DISCOVERY"]
 

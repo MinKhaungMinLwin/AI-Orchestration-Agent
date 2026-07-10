@@ -429,12 +429,17 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             yield event
         return
 
-    slots = apply_patch(slots, decision.slots_patch if decision else None)
-    slots = _normalize_add_to_cart_slots(decision, slots)
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
+    recovered_staggered_size_event = (
+        _staggered_tire_size_choice_event(slots) if domain in {"DISCOVERY", "TRANSACTION"} else None
+    )
+    slots = apply_patch(slots, decision.slots_patch if decision else None)
+    slots = _normalize_add_to_cart_slots(decision, slots)
 
-    staggered_size_event = _staggered_tire_size_choice_event(slots) if domain in {"DISCOVERY", "TRANSACTION"} else None
+    staggered_size_event = recovered_staggered_size_event or (
+        _staggered_tire_size_choice_event(slots) if domain in {"DISCOVERY", "TRANSACTION"} else None
+    )
     if staggered_size_event:
         answer = str(staggered_size_event["data"]["assistantResponse"])
         chips = staggered_size_event["data"]["quickReplies"]
