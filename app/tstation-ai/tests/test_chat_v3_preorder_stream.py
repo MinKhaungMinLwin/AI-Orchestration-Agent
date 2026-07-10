@@ -281,6 +281,23 @@ def test_staggered_vehicle_card_click_guard_blocks_recommendation_flow(monkeypat
     asyncio.run(_assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(monkeypatch))
 
 
+def test_staggered_vehicle_size_guard_does_not_depend_on_router_domain(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(
+        _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
+            monkeypatch,
+            slots=ConversationSlots(
+                car_no="29ì¡°3345",
+                car_model="BMW 3 Series M340i A/T",
+                tire_size_front="225/40R19",
+                tire_size_rear="255/35R19",
+            ),
+            decision=RouteDecision(domain=Domain.LEADING, intents=["vehicle_selection"]),
+            expected_front_size="225/40R19",
+            expected_rear_size="255/35R19",
+        )
+    )
+
+
 def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
     normalize = service._add_to_cart_tool_normalizer(slots, enabled=True)
