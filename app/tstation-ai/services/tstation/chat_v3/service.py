@@ -60,6 +60,7 @@ _FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
 _REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
 _CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
 _SELECTED_TIRE_SIZE_KEYS = {"tire_size", "tireSize"}
+_TRANSACTION_SLOT_FILL_FIELDS = {"region", "shop_id", "shop_name", "requested_cal_day", "rsv_hour"}
 
 
 def _tool_display_names() -> dict[str, str]:
@@ -213,6 +214,12 @@ def _request_has_selected_tire_size(request: TStationChatRequest) -> bool:
     )
 
 
+def _fills_transaction_slot(decision: RouteDecision | None) -> bool:
+    if decision is None or decision.slots_patch is None:
+        return False
+    return bool(_TRANSACTION_SLOT_FILL_FIELDS.intersection(decision.slots_patch.non_empty()))
+
+
 def _staggered_simultaneous_purchase_event(
     decision: RouteDecision | None,
     slots: ConversationSlots,
@@ -228,6 +235,8 @@ def _staggered_simultaneous_purchase_event(
     if not front_size or not rear_size or front_size == rear_size:
         return None
     if selected_size and selected_size not in {front_size, rear_size}:
+        return None
+    if selected_size and _fills_transaction_slot(decision):
         return None
 
     base_slots = slots.model_dump(mode="json", exclude_none=True)
@@ -577,7 +586,11 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         )
         return
 
-    staggered_size_event = recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
+    staggered_size_event = (
+        _staggered_tire_size_choice_event(slots)
+        if _fills_transaction_slot(decision)
+        else recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
+    )
     if staggered_size_event:
         answer = str(staggered_size_event["data"]["assistantResponse"])
         chips = staggered_size_event["data"]["quickReplies"]

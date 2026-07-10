@@ -124,7 +124,7 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   수량을 함께 말했으면 slots_patch.ord_qty 도 채우세요. 장바구니 담기는 사용자의 명확한 요청 자체가 실행 의사이므로
   확인 카드(preOrder)를 요구하지 않는 직접 실행 흐름입니다.
 - 현재 확인된 슬롯에 서로 다른 tire_size_front/tire_size_rear 가 있고 사용자가 앞/뒤 두 규격을 동시에/함께/한 번에
-  구매할 수 있는지 묻는다면 domain=TRANSACTION, intents 에 "staggered_simultaneous_purchase_inquiry" 를 포함하세요.
+  구매할 수 있는지 묻거나 그렇게 구매/진행하고 싶다고 말하면 domain=TRANSACTION, intents 에 "staggered_simultaneous_purchase_inquiry" 를 포함하세요.
   이 의도는 상품 검색이나 주문 실행이 아니라 전/후륜 규격 상이 차량의 구매 진행 방식 확인입니다.
 - 직전 응답이 장바구니 확인 카드나 장바구니 담기 안내였고, 현재 확인된 대화 슬롯에 장바구니 실행에 필요한 상품·수량과
   장바구니 목적이 이미 있으며, 사용자의 마지막 발화가 장바구니 담기를 승인/진행하는 의미라면
