@@ -59,32 +59,6 @@ _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
     "staggered_simultaneous_purchase_inquiry",
 }
-_SIZE_DEPENDENT_DISCOVERY_INTENTS = {
-    "best_seller",
-    "best_sellers",
-    "check_compatibility",
-    "compatibility",
-    "newest_product",
-    "newest_products",
-    "product_search",
-    "tire_recommend",
-    "vehicle_resolved_recommendation",
-    "vehicle_selection",
-}
-_SIZE_DEPENDENT_TRANSACTION_INTENTS = {
-    "add_to_cart",
-    "cart_confirmation",
-    "final_price",
-    "inventory",
-    "place_order",
-    "price",
-    "price_inquiry",
-    "quick_order_reservation",
-    "stock",
-    "stock_check",
-    "stock_store_search",
-    "store_search",
-}
 _FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
 _REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
 _CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
@@ -252,31 +226,6 @@ def _staggered_sizes(slots: ConversationSlots) -> tuple[str, str]:
         if front_size and rear_size:
             return front_size, rear_size
     return "", ""
-
-
-def _is_size_dependent_flow(decision: RouteDecision | None) -> bool:
-    if decision is None:
-        return False
-    intents = {str(intent or "").strip() for intent in decision.intents}
-    if intents.intersection(_SIZE_DEPENDENT_DISCOVERY_INTENTS | _SIZE_DEPENDENT_TRANSACTION_INTENTS):
-        return True
-    if decision.needs_selection_card and (
-        decision.domain == Domain.DISCOVERY or Domain.DISCOVERY in decision.extra_domains
-    ):
-        return True
-    return False
-
-
-def _requires_staggered_size_selection(slots: ConversationSlots, decision: RouteDecision | None) -> bool:
-    front_size, rear_size = _staggered_sizes(slots)
-    selected_size = str(slots.tire_size or "").strip()
-    return bool(
-        front_size
-        and rear_size
-        and front_size != rear_size
-        and not selected_size
-        and _is_size_dependent_flow(decision)
-    )
 
 
 def _request_has_selected_tire_size(request: TStationChatRequest) -> bool:
@@ -669,11 +618,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
 
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
-    recovered_staggered_size_event = (
-        _staggered_tire_size_choice_event(slots)
-        if _requires_staggered_size_selection(slots, decision)
-        else None
-    )
+    recovered_staggered_size_event = _staggered_tire_size_choice_event(slots)
     slots = apply_patch(slots, decision.slots_patch if decision else None)
     slots = _normalize_add_to_cart_slots(decision, slots)
 
@@ -724,8 +669,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
 
     staggered_size_event = (
         _staggered_tire_size_choice_event(slots)
-        if _requires_staggered_size_selection(slots, decision)
-        else recovered_staggered_size_event
+        if _fills_transaction_slot(decision)
+        else recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
     )
     if staggered_size_event:
         answer = str(staggered_size_event["data"]["assistantResponse"])

@@ -367,27 +367,6 @@ def test_staggered_vehicle_size_guard_does_not_depend_on_router_domain(monkeypat
     )
 
 
-@pytest.mark.parametrize(
-    "decision",
-    [
-        RouteDecision(domain=Domain.DISCOVERY, intents=["product_search"]),
-        RouteDecision(domain=Domain.DISCOVERY, intents=["best_seller"]),
-        RouteDecision(domain=Domain.TRANSACTION, intents=["price_inquiry"]),
-        RouteDecision(domain=Domain.TRANSACTION, intents=["stock_check"]),
-        RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"]),
-    ],
-)
-def test_staggered_vehicle_size_guard_blocks_size_dependent_flows(
-    monkeypatch: pytest.MonkeyPatch,
-    decision: RouteDecision,
-) -> None:
-    asyncio.run(_assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch, decision=decision))
-
-
-def test_staggered_vehicle_size_guard_allows_general_explanation(monkeypatch: pytest.MonkeyPatch) -> None:
-    asyncio.run(_assert_staggered_vehicle_size_guard_allows_general_explanation(monkeypatch))
-
-
 def test_staggered_simultaneous_purchase_inquiry_does_not_run_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(monkeypatch))
 
@@ -517,75 +496,6 @@ async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
     assert data_events[0]["data"]["quickReplies"][1]["metadata"]["slots"]["tire_size"] == expected_rear_size
     assert saved_slots[0].tire_size is None
     assert persisted_domains == ["DISCOVERY", "DISCOVERY", "DISCOVERY"]
-
-
-async def _assert_staggered_vehicle_size_guard_allows_general_explanation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    slots = ConversationSlots(
-        car_no="29ì¡°3345",
-        tire_size_front="225/40R19",
-        tire_size_rear="255/35R19",
-    )
-    saved_slots = []
-
-    class FakeExecutor:
-        def __init__(self, *args, **kwargs) -> None:
-            self.final_text = "Front and rear sizes can differ by vehicle design."
-            self.tool_calls = []
-
-        async def stream(self):
-            yield service.sse.token("Front and rear sizes can differ by vehicle design.")
-
-    async def fake_route_request(*args, **kwargs):
-        return RouteDecision(domain=Domain.SUPPORT, intents=["vehicle_size_explanation"], needs_selection_card=False)
-
-    async def fake_load_slots(session_id):
-        return slots
-
-    async def fake_save_slots(session_id, next_slots, user_id=None):
-        saved_slots.append(next_slots)
-
-    async def fake_verify_answer(answer, tool_calls, trace_config):
-        return answer
-
-    async def fake_noop(*args, **kwargs):
-        return None
-
-    async def fake_chips(*args, **kwargs):
-        return []
-
-    monkeypatch.setattr(service, "route_request", fake_route_request)
-    monkeypatch.setattr(service, "load_slots", fake_load_slots)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
-    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
-    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
-    monkeypatch.setattr(service, "save_slots", fake_save_slots)
-    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
-    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
-    monkeypatch.setattr(service.templates, "build_rich_data_event", fake_noop)
-    monkeypatch.setattr(service.composer, "suggest_quick_replies", fake_chips)
-    monkeypatch.setattr(service, "_flush_trace", lambda: None)
-
-    request = TStationChatRequest(
-        messages=[{"role": "user", "content": "why are the front and rear tire sizes different?"}],
-        stream=True,
-        user_id="test-user",
-        session_id="staggered-general-explanation-test",
-    )
-
-    events = []
-    async for line in service._run_turn(request, {}):
-        event = _parse_sse_event(line)
-        if event:
-            events.append(event)
-
-    messages = [event["content"] for event in events if event.get("type") == "message"]
-    assert messages == ["Front and rear sizes can differ by vehicle design."]
-    data_events = [event for event in events if event.get("type") == "data"]
-    assert data_events
-    assert [chip["label"] for chip in data_events[0]["data"]["quickReplies"]] == []
-    assert saved_slots[0].tire_size is None
 
 
 async def _assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
