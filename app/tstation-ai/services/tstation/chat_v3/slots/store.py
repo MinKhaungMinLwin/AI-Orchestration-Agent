@@ -84,6 +84,17 @@ def slots_context_block(slots: ConversationSlots) -> str | None:
     values = {k: v for k, v in slots.model_dump(mode="json").items() if v is not None}
     if not values:
         return None
+    if (
+        slots.tire_size
+        and slots.tire_size_front
+        and slots.tire_size_rear
+        and slots.tire_size_front != slots.tire_size_rear
+        and slots.tire_size in {slots.tire_size_front, slots.tire_size_rear}
+    ):
+        values["staggered_tire_purchase_guidance"] = (
+            "전/후륜 규격이 다른 차량은 도구로 확인되지 않은 상태에서 두 규격을 한 번에 구매 가능하다고 "
+            "단정하지 말고, 현재 채팅 흐름은 선택한 규격 하나씩 상품 추천/구매를 진행한다고 안내하세요."
+        )
     return "## CONVERSATION SLOTS (known context from earlier turns)\n" + json.dumps(
         values, ensure_ascii=False, separators=(",", ":")
     )
