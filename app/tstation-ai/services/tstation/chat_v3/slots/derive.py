@@ -41,6 +41,8 @@ _SINGLE_ROW_FIELDS: dict[str, str] = {
     "get_store_install_availability_tool": "shop_id",
 }
 
+_VEHICLE_LIST_TOOLS = {"get_my_cars_tool", "get_user_vehicles_tool"}
+
 # FE payloads use camelCase in places; normalize to slot field names.
 _FE_KEY_ALIASES = {
     "carNo": "car_no",
@@ -107,6 +109,44 @@ def _single_row(parsed: object) -> dict | None:
     return None
 
 
+def _rows_from_vehicle_output(parsed: object) -> list[dict]:
+    data = parsed.get("data", parsed) if isinstance(parsed, dict) else parsed
+    if isinstance(data, dict):
+        rows = data.get("items") or data.get("vehicles")
+        return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    return [row for row in data if isinstance(row, dict)] if isinstance(data, list) else []
+
+
+def _compact_identifier(value: object) -> str:
+    return "".join(str(value or "").split())
+
+
+def _vehicle_candidate_from_row(row: dict) -> dict:
+    values: dict = {}
+    for field, *keys in (
+        ("car_no", "car_no", "carNo", "licensePlate"),
+        ("car_lnc_cd", "car_lnc_cd", "carLncCd"),
+        ("mbr_car_reg_seq", "mbr_car_reg_seq", "mbr_car_unif_no", "mbrCarRegSeq"),
+        ("car_model", "car_model_det", "carModelDet", "car_nm", "carName", "car_model", "carModel"),
+        ("car_type", "car_type", "carType"),
+        ("vehicle_type", "vehicle_type", "vehicleType"),
+    ):
+        value = next((row.get(key) for key in keys if row.get(key) not in (None, "")), None)
+        if value not in (None, ""):
+            values[field] = str(value)
+    values.update(_vehicle_size_patch(row))
+    return {key: value for key, value in values.items() if value not in (None, "", [], {})}
+
+
+def _vehicle_candidates_from_tool_output(output: str) -> list[dict]:
+    try:
+        rows = _rows_from_vehicle_output(json.loads(output))
+    except (ValueError, TypeError):
+        return []
+    candidates = [_vehicle_candidate_from_row(row) for row in rows]
+    return [candidate for candidate in candidates if candidate.get("car_no")]
+
+
 def _coerce(field: str, value: object) -> object:
     if field == "ord_qty" and isinstance(value, str) and value.isdigit():
         return int(value)
@@ -119,12 +159,17 @@ def derive_slots_from_tool_calls(slots: ConversationSlots, tool_calls: list[dict
     for call in tool_calls:
         name = call.get("name") or ""
         args = call.get("args") or {}
+        output = str(call.get("output") or "")
         for field in _INPUT_FIELDS.get(name, ()):
             if args.get(field) not in (None, ""):
                 values[field] = _coerce(field, args[field])
 
+        if name in _VEHICLE_LIST_TOOLS:
+            candidates = _vehicle_candidates_from_tool_output(output)
+            if candidates:
+                values["vehicle_candidates"] = candidates
+
         single_field = _SINGLE_ROW_FIELDS.get(name)
-        output = str(call.get("output") or "")
         if single_field and not output.startswith("Tool error"):
             try:
                 row = _single_row(json.loads(output))
@@ -174,3 +219,19 @@ def apply_fe_slots(slots: ConversationSlots, request: TStationChatRequest) -> Co
         return slots
     logger.info("[CHAT_V3] FE slot patch: %s", values)
     return slots.apply_runtime_values(values, source="chat_v3:fe_patch")
+
+
+def apply_text_vehicle_selection(slots: ConversationSlots, user_text: str) -> ConversationSlots:
+    candidates = slots.vehicle_candidates or []
+    selected = _compact_identifier(user_text)
+    if not selected or not candidates:
+        return slots
+    matches = [
+        candidate
+        for candidate in candidates
+        if _compact_identifier(candidate.get("car_no")) == selected
+    ]
+    if len(matches) != 1:
+        return slots
+    logger.info("[CHAT_V3] text vehicle selection patch: %s", matches[0])
+    return slots.apply_runtime_values(matches[0], source="chat_v3:text_vehicle_selection")

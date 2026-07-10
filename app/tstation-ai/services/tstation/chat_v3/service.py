@@ -31,7 +31,7 @@ from services.tstation.chat_v3.prompts.persona import (
 from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision
-from services.tstation.chat_v3.slots.derive import apply_fe_slots, derive_slots_from_tool_calls
+from services.tstation.chat_v3.slots.derive import apply_fe_slots, apply_text_vehicle_selection, derive_slots_from_tool_calls
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
 from services.tstation.common.cta_urls import CTAUrls
@@ -375,6 +375,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     yield sse.status("생각 중...")
     slots = await load_slots(request.session_id)
     slots = apply_fe_slots(slots, request)  # card-click payload: goods_no/shop_id/…
+    slots = apply_text_vehicle_selection(slots, user_text)
     decision = await route_request(
         request,
         trace_config=_trace_config(
@@ -757,9 +758,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if parent_span is not None:
         parent_span.end()
     _flush_trace()
-    yield sse.agent_flow("[DONE]", "success")
-    for event in sse.done():
-        yield event
 
     slots = derive_slots_from_tool_calls(slots, executor.tool_calls)
     await save_slots(request.session_id, slots, user_id=request.user_id)
@@ -770,6 +768,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         predicted_domains=predicted_domains,
         user_id=request.user_id,
     )
+    yield sse.agent_flow("[DONE]", "success")
+    for event in sse.done():
+        yield event
 
 
 async def _run_turn_safe(request: TStationChatRequest, result: dict):

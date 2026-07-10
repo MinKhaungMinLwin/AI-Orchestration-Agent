@@ -171,6 +171,7 @@ class ConversationSlots(BaseModel):
     car_type: Optional[str] = None       # raw registered vehicle type, e.g. "SUV"
     vehicle_type: Optional[str] = None   # normalized recommendation filter, e.g. "suv"
     mbr_car_reg_seq: Optional[str] = None  # member car registration sequence
+    vehicle_candidates: Optional[list[dict[str, Any]]] = None  # last registered-car candidates shown to the user
     pending_vehicle_lookup_car_no: Optional[str] = None  # unmatched plate awaiting owner name
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
     availability_intent: Optional[AvailabilityIntent] = None  # e.g. "today_install"

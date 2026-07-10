@@ -55,7 +55,7 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/2"
 
 from services.tstation.chat_v3 import service  # noqa: E402
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
-from services.tstation.chat_v3.slots.derive import apply_fe_slots  # noqa: E402
+from services.tstation.chat_v3.slots.derive import apply_fe_slots, apply_text_vehicle_selection, derive_slots_from_tool_calls  # noqa: E402
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 
 
@@ -130,6 +130,42 @@ def test_fe_vehicle_ui_action_preserves_staggered_sizes_without_selecting_one() 
     )
 
     slots = apply_fe_slots(ConversationSlots(), request)
+
+    assert slots.car_no == "29조3345"
+    assert slots.car_lnc_cd == "W000003"
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "225/40R19"
+    assert slots.tire_size_rear == "255/35R19"
+
+
+def test_text_vehicle_selection_recovers_staggered_sizes_from_previous_candidates() -> None:
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3345",
+                    "car_lnc_cd": "W000003",
+                    "car_model_det": "3-series(G20 F/L2) M340i A/T",
+                    "tire_size_fr": "225/40R19",
+                    "tire_size_re": "255/35R19",
+                },
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W000004",
+                    "car_model_det": "Jetta",
+                    "tire_size_fr": "225/45R17",
+                    "tire_size_re": "225/45R17",
+                },
+            ]
+        },
+    }
+    slots = derive_slots_from_tool_calls(
+        ConversationSlots(),
+        [{"name": "get_my_cars_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+    )
+
+    slots = apply_text_vehicle_selection(slots, "29조3345")
 
     assert slots.car_no == "29조3345"
     assert slots.car_lnc_cd == "W000003"
