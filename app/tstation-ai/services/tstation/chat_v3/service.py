@@ -63,6 +63,7 @@ _FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
 _REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
 _CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
 _SELECTED_TIRE_SIZE_KEYS = {"tire_size", "tireSize"}
+_TRANSACTION_SLOT_FILL_FIELDS = {"region", "shop_id", "shop_name", "requested_cal_day", "rsv_hour"}
 
 
 def _tool_display_names() -> dict[str, str]:
@@ -138,6 +139,21 @@ def _ready_cart_slots(slots: ConversationSlots) -> bool:
     )
 
 
+def _staggered_size_chip_slots(slots: ConversationSlots, *, tire_size: str, front_size: str, rear_size: str) -> dict:
+    values = {
+        "car_no": slots.car_no,
+        "car_lnc_cd": slots.car_lnc_cd,
+        "mbr_car_reg_seq": slots.mbr_car_reg_seq,
+        "car_model": slots.car_model,
+        "car_type": slots.car_type,
+        "vehicle_type": slots.vehicle_type,
+        "tire_size": tire_size,
+        "tire_size_front": front_size,
+        "tire_size_rear": rear_size,
+    }
+    return {key: value for key, value in values.items() if value not in (None, "", [], {})}
+
+
 def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
     front_size = str(slots.tire_size_front or "").strip()
     rear_size = str(slots.tire_size_rear or "").strip()
@@ -145,9 +161,18 @@ def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
     if not front_size or not rear_size or front_size == rear_size or selected_size:
         return None
 
-    base_slots = slots.model_dump(mode="json", exclude_none=True)
-    front_slots = {**base_slots, "tire_size": front_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
-    rear_slots = {**base_slots, "tire_size": rear_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
+    front_slots = _staggered_size_chip_slots(
+        slots,
+        tire_size=front_size,
+        front_size=front_size,
+        rear_size=rear_size,
+    )
+    rear_slots = _staggered_size_chip_slots(
+        slots,
+        tire_size=rear_size,
+        front_size=front_size,
+        rear_size=rear_size,
+    )
     car_model = str(slots.car_model or "").strip()
     car_no = str(slots.car_no or "").strip()
     if car_model or car_no:
@@ -216,6 +241,34 @@ def _request_has_selected_tire_size(request: TStationChatRequest) -> bool:
     )
 
 
+def _fills_transaction_slot(decision: RouteDecision | None) -> bool:
+    if decision is None or decision.slots_patch is None:
+        return False
+    return bool(_TRANSACTION_SLOT_FILL_FIELDS.intersection(decision.slots_patch.non_empty()))
+
+
+def _generic_staggered_simultaneous_purchase_event() -> dict:
+    answer = "\n".join([
+        "전/후륜 규격이 다른 경우, 현재 채팅에서는 두 규격을 한 번에 함께 구매 가능하다고 안내하지 않습니다.",
+        "먼저 앞바퀴 또는 뒷바퀴 중 하나의 규격을 선택해서 상품 추천/구매를 진행해 주세요.",
+        "아직 앞/뒤 타이어 규격이 확인되지 않았다면 실제 규격을 알려주시면 한 규격씩 확인해드릴게요.",
+    ])
+    chips = [
+        {"label": _CUSTOM_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+    ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": answer,
+            "quickReplies": chips,
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+        },
+        "source_domain": "TRANSACTION",
+        "assistant_response_source": "code_chat_v3_generic_staggered_simultaneous_purchase",
+    }
+
+
 def _staggered_simultaneous_purchase_event(
     decision: RouteDecision | None,
     slots: ConversationSlots,
@@ -229,13 +282,24 @@ def _staggered_simultaneous_purchase_event(
     front_size, rear_size = _staggered_sizes(slots)
     selected_size = str(slots.tire_size or "").strip()
     if not front_size or not rear_size or front_size == rear_size:
-        return None
+        return _generic_staggered_simultaneous_purchase_event()
     if selected_size and selected_size not in {front_size, rear_size}:
         return None
+    if selected_size and _fills_transaction_slot(decision):
+        return None
 
-    base_slots = slots.model_dump(mode="json", exclude_none=True)
-    front_slots = {**base_slots, "tire_size": front_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
-    rear_slots = {**base_slots, "tire_size": rear_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
+    front_slots = _staggered_size_chip_slots(
+        slots,
+        tire_size=front_size,
+        front_size=front_size,
+        rear_size=rear_size,
+    )
+    rear_slots = _staggered_size_chip_slots(
+        slots,
+        tire_size=rear_size,
+        front_size=front_size,
+        rear_size=rear_size,
+    )
     answer = "\n".join([
         "전/후륜 규격이 다른 차량이라 두 규격을 한 번에 함께 구매 가능한지는 상품과 장착 매장 조건을 각각 확인해야 해요.",
         "현재 채팅에서는 선택한 규격 하나씩 추천/구매를 진행할 수 있습니다.",
@@ -434,14 +498,7 @@ def _update_trace_monitoring(
                 trace_context=trace_context,
                 name="customer_monitoring",
                 input=truncate_for_trace(user_text) if user_text is not None else None,
-                output={
-                    "final_status": monitoring_payload["metadata"].get("final_status"),
-                    "error_reason": monitoring_payload["metadata"].get("error_reason"),
-                    "primary_domain": monitoring_payload["metadata"].get("primary_domain"),
-                    "primary_af": monitoring_payload["metadata"].get("primary_af"),
-                    "primary_tool": monitoring_payload["metadata"].get("primary_tool"),
-                    "final_template": final_template,
-                },
+                output=truncate_for_trace(answer) if answer is not None else None,
                 metadata={
                     **monitoring_payload["metadata"],
                     "session_id": session_id,
@@ -610,7 +667,11 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         )
         return
 
-    staggered_size_event = recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
+    staggered_size_event = (
+        _staggered_tire_size_choice_event(slots)
+        if _fills_transaction_slot(decision)
+        else recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
+    )
     if staggered_size_event:
         answer = str(staggered_size_event["data"]["assistantResponse"])
         chips = staggered_size_event["data"]["quickReplies"]

@@ -231,6 +231,38 @@ def test_staggered_selected_size_context_blocks_simultaneous_purchase_overclaim(
     assert "선택한 규격 하나씩 상품 추천/구매를 진행" in context
 
 
+def test_staggered_size_choice_chips_do_not_carry_cart_state() -> None:
+    slots = ConversationSlots(
+        car_no="29ì¡°3345",
+        car_lnc_cd="W063680",
+        car_model="BMW 3 Series M340i A/T",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+        goods_no="G0001",
+        ord_qty=2,
+        pending_intent="cart",
+        goal_type="add_to_cart",
+        shop_id="S0001",
+        requested_cal_day="20260710",
+    )
+
+    event = service._staggered_tire_size_choice_event(slots)
+
+    assert event is not None
+    for chip in event["data"]["quickReplies"][:2]:
+        chip_slots = chip["metadata"]["slots"]
+        assert chip_slots["car_no"] == "29ì¡°3345"
+        assert chip_slots["tire_size"] in {"225/40R19", "255/35R19"}
+        assert chip_slots["tire_size_front"] == "225/40R19"
+        assert chip_slots["tire_size_rear"] == "255/35R19"
+        assert "goods_no" not in chip_slots
+        assert "ord_qty" not in chip_slots
+        assert "pending_intent" not in chip_slots
+        assert "goal_type" not in chip_slots
+        assert "shop_id" not in chip_slots
+        assert "requested_cal_day" not in chip_slots
+
+
 def test_vehicle_card_slots_clear_stale_selected_size_for_staggered_vehicle() -> None:
     request = TStationChatRequest(
         messages=[{"role": "user", "content": "select car"}],
@@ -358,8 +390,18 @@ def test_staggered_simultaneous_purchase_inquiry_recovers_candidate_sizes(monkey
     )
 
 
+def test_generic_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asyncio.run(_assert_generic_staggered_simultaneous_purchase_inquiry_does_not_run_tools(monkeypatch))
+
+
 def test_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(monkeypatch))
+
+
+def test_staggered_region_followup_bypasses_simultaneous_purchase_guard(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_staggered_region_followup_bypasses_simultaneous_purchase_guard(monkeypatch))
 
 
 def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
@@ -522,6 +564,59 @@ async def _assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
     assert persisted_domains == ["DISCOVERY", "DISCOVERY", "DISCOVERY"]
 
 
+async def _assert_generic_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved_slots = []
+    persisted_domains = []
+
+    class ForbiddenExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("generic staggered purchase inquiry must not run product/order tools")
+
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(domain=Domain.TRANSACTION, intents=["staggered_simultaneous_purchase_inquiry"])
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots()
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        saved_slots.append(next_slots)
+
+    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
+        persisted_domains.extend(quick_reply_domains)
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "앞뒤바퀴 사이즈가 다른데 한번에 구매할수 있어?"}],
+        stream=True,
+        user_id="test-user",
+        session_id="generic-staggered-simultaneous-purchase-test",
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert data_events
+    assert data_events[0]["template"] == "quickReply"
+    answer = data_events[0]["data"]["assistantResponse"]
+    assert "가능합니다" not in answer
+    assert "구매할 수 있습니다" not in answer
+    assert "한 번에 함께 구매 가능하다고 안내하지 않습니다" in answer
+    assert saved_slots == [ConversationSlots()]
+    assert persisted_domains == ["DISCOVERY"]
+
+
 async def _assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -590,6 +685,87 @@ async def _assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_g
     assert data_events
     assert "한 번에 함께 구매 가능한지는" not in data_events[0]["data"]["assistantResponse"]
     assert "225/40R19 기준으로 추천해드릴게요." in data_events[0]["data"]["assistantResponse"]
+
+
+async def _assert_staggered_region_followup_bypasses_simultaneous_purchase_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slots = ConversationSlots(
+        car_no="29조3345",
+        tire_size="255/35R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+        goods_no="G0001",
+        ord_qty=2,
+        pending_intent="cart",
+        goal_type="add_to_cart",
+    )
+    saved_slots = []
+
+    class FakeExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.final_text = "Continuing with the selected rear tire in Bundang."
+            self.tool_calls = []
+
+        async def stream(self):
+            yield service.sse.token("Continuing with the selected rear tire in Bundang.")
+
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(
+            domain=Domain.TRANSACTION,
+            intents=["staggered_simultaneous_purchase_inquiry"],
+            slots_patch=SlotsPatch(region="분당"),
+        )
+
+    async def fake_load_slots(session_id):
+        return slots
+
+    async def fake_verify_answer(answer, tool_calls, trace_config):
+        return answer
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        saved_slots.append(next_slots)
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    async def fake_chips(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
+    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service.templates, "build_rich_data_event", fake_noop)
+    monkeypatch.setattr(service.composer, "suggest_quick_replies", fake_chips)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "분당"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-region-followup-test",
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    messages = [event["content"] for event in events if event.get("type") == "message"]
+    assert messages == ["Continuing with the selected rear tire in Bundang."]
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert data_events
+    answer = data_events[0]["data"]["assistantResponse"]
+    assert "한 번에 함께 구매 가능한지는" not in answer
+    assert "225/40R19" not in answer
+    assert saved_slots[0].tire_size == "255/35R19"
+    assert saved_slots[0].region == "분당"
 
 
 async def _assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(
