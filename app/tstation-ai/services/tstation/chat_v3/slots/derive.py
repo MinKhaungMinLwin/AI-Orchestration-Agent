@@ -43,6 +43,8 @@ _SINGLE_ROW_FIELDS: dict[str, str] = {
 
 _VEHICLE_LIST_TOOLS = {"get_my_cars_tool", "get_user_vehicles_tool"}
 
+_TRIM_LIST_TOOLS = {"get_car_trims_tool"}
+
 # FE payloads use camelCase in places; normalize to slot field names.
 _FE_KEY_ALIASES = {
     "carNo": "car_no",
@@ -166,6 +168,40 @@ def _vehicle_candidates_from_tool_output(output: str) -> list[dict]:
     return [candidate for candidate in candidates if candidate.get("car_no")]
 
 
+def _trim_values_from_tool_output(output: str) -> dict:
+    """Sizes resolved by a car-model trim lookup, lifted when unambiguous.
+
+    One trim resolves the vehicle (sizes + car_lnc_cd + model); several trims
+    resolve sizes only when every trim shares the same front/rear pair.
+    Staggered pairs keep tire_size unset so the size-choice guard asks first.
+    """
+    try:
+        parsed = json.loads(output)
+    except (ValueError, TypeError):
+        return {}
+    data = parsed.get("data", parsed) if isinstance(parsed, dict) else parsed
+    if not isinstance(data, dict):
+        return {}
+    rows = [row for row in data.get("items") or [] if isinstance(row, dict)]
+    if not rows:
+        return {}
+    size_patches = [_vehicle_size_patch(row) for row in rows]
+    size_patch = size_patches[0]
+    if not size_patch or any(patch != size_patch for patch in size_patches[1:]):
+        return {}
+    values = {key: value for key, value in size_patch.items() if value is not None}
+    if not values:
+        return {}
+    if len(rows) == 1:
+        car_lnc_cd = str(rows[0].get("car_lnc_cd") or "").strip()
+        if car_lnc_cd:
+            values["car_lnc_cd"] = car_lnc_cd
+        car_model = str(data.get("car_model_det") or rows[0].get("car_nm") or "").strip()
+        if car_model:
+            values["car_model"] = car_model
+    return values
+
+
 def _coerce(field: str, value: object) -> object:
     if field == "ord_qty" and isinstance(value, str) and value.isdigit():
         return int(value)
@@ -175,6 +211,7 @@ def _coerce(field: str, value: object) -> object:
 def derive_slots_from_tool_calls(slots: ConversationSlots, tool_calls: list[dict]) -> ConversationSlots:
     """Stage goods_no/shop_id/… resolved by this turn's tool activity."""
     values: dict = {}
+    trim_resolved = False
     for call in tool_calls:
         name = call.get("name") or ""
         args = call.get("args") or {}
@@ -187,6 +224,12 @@ def derive_slots_from_tool_calls(slots: ConversationSlots, tool_calls: list[dict
             candidates = _vehicle_candidates_from_tool_output(output)
             if candidates:
                 values["vehicle_candidates"] = candidates
+
+        if name in _TRIM_LIST_TOOLS and not output.startswith("Tool error"):
+            trim_values = _trim_values_from_tool_output(output)
+            if trim_values:
+                values.update(trim_values)
+                trim_resolved = True
 
         single_field = _SINGLE_ROW_FIELDS.get(name)
         if single_field and not output.startswith("Tool error"):
@@ -204,7 +247,8 @@ def derive_slots_from_tool_calls(slots: ConversationSlots, tool_calls: list[dict
     if not values:
         return slots
     logger.info("[CHAT_V3] tool-derived slots: %s", values)
-    return slots.apply_runtime_values(values, source="chat_v3:tool_derived")
+    updated = slots.apply_runtime_values(values, source="chat_v3:tool_derived")
+    return _clear_unconfirmed_staggered_size(updated, values) if trim_resolved else updated
 
 
 def _snake_to_camel(field: str) -> str:

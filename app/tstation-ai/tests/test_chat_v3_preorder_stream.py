@@ -322,6 +322,79 @@ def test_text_vehicle_selection_recovers_staggered_sizes_from_previous_candidate
     assert slots.tire_size_rear == "255/35R19"
 
 
+def _trim_tool_call(items: list[dict], car_model_det: str = "더 뉴 팰리세이드") -> dict:
+    output = {"status": "success", "data": {"car_model_det": car_model_det, "items": items}}
+    return {"name": "get_car_trims_tool", "args": {"car_model_det": car_model_det}, "output": json.dumps(output, ensure_ascii=False)}
+
+
+def test_trim_lookup_lifts_staggered_sizes_into_slots() -> None:
+    slots = derive_slots_from_tool_calls(
+        ConversationSlots(),
+        [_trim_tool_call([
+            {"car_lnc_cd": "W063680", "car_nm": "3.8 AWD", "tire_size_fr": "245/50R20", "tire_size_re": "255/50R20"},
+        ])],
+    )
+
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "245/50R20"
+    assert slots.tire_size_rear == "255/50R20"
+    assert slots.car_lnc_cd == "W063680"
+    assert slots.car_model == "더 뉴 팰리세이드"
+
+
+def test_trim_lookup_lifts_same_size_trim_directly() -> None:
+    slots = derive_slots_from_tool_calls(
+        ConversationSlots(),
+        [_trim_tool_call([
+            {"car_lnc_cd": "W000004", "car_nm": "2.5 GDI", "tire_size_fr": "225/45R17", "tire_size_re": "225/45R17"},
+        ])],
+    )
+
+    assert slots.tire_size == "225/45R17"
+
+
+def test_trim_lookup_lifts_uniform_staggered_sizes_across_trims() -> None:
+    slots = derive_slots_from_tool_calls(
+        ConversationSlots(),
+        [_trim_tool_call([
+            {"car_lnc_cd": "W000001", "car_nm": "3.8 AWD", "tire_size_fr": "245/50R20", "tire_size_re": "255/50R20"},
+            {"car_lnc_cd": "W000002", "car_nm": "3.8 2WD", "tire_size_fr": "245/50R20", "tire_size_re": "255/50R20"},
+        ])],
+    )
+
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "245/50R20"
+    assert slots.tire_size_rear == "255/50R20"
+    assert slots.car_lnc_cd is None
+
+
+def test_trim_lookup_skips_ambiguous_trim_sizes() -> None:
+    slots = derive_slots_from_tool_calls(
+        ConversationSlots(),
+        [_trim_tool_call([
+            {"car_lnc_cd": "W000001", "car_nm": "3.8 AWD", "tire_size_fr": "245/50R20", "tire_size_re": "255/50R20"},
+            {"car_lnc_cd": "W000002", "car_nm": "2.2 2WD", "tire_size_fr": "235/60R18", "tire_size_re": "235/60R18"},
+        ])],
+    )
+
+    assert slots.tire_size is None
+    assert slots.tire_size_front is None
+    assert slots.tire_size_rear is None
+
+
+def test_trim_lookup_clears_stale_selected_size_for_staggered_trim() -> None:
+    slots = derive_slots_from_tool_calls(
+        ConversationSlots(tire_size="225/45R17"),
+        [_trim_tool_call([
+            {"car_lnc_cd": "W063680", "car_nm": "3.8 AWD", "tire_size_fr": "245/50R20", "tire_size_re": "255/50R20"},
+        ])],
+    )
+
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "245/50R20"
+    assert slots.tire_size_rear == "255/50R20"
+
+
 def test_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch))
 
@@ -1020,3 +1093,75 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
     ]
     assert pre_order_events
     assert "assistantResponse" not in pre_order_events[0]["data"]
+
+
+def test_staggered_trim_lookup_pauses_before_recommendation(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_staggered_trim_lookup_pauses_before_recommendation(monkeypatch))
+
+
+async def _assert_staggered_trim_lookup_pauses_before_recommendation(monkeypatch: pytest.MonkeyPatch) -> None:
+    decision = RouteDecision(domain=Domain.DISCOVERY, intents=["tire_recommend"])
+    saved_slots = []
+    persisted = {}
+
+    class FakeExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.final_text = "245/50R20 기준으로 추천드릴게요."
+            self.tool_calls = [_trim_tool_call([
+                {"car_lnc_cd": "W063680", "car_nm": "3.8 AWD", "tire_size_fr": "245/50R20", "tire_size_re": "255/50R20"},
+            ])]
+
+        async def stream(self):
+            yield service.sse.token("245/50R20 기준으로 추천드릴게요.")
+
+    async def fail_verify_answer(*args, **kwargs):
+        raise AssertionError("staggered trim resolution must pause before QC/answer composition")
+
+    async def fake_route_request(*args, **kwargs):
+        return decision
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots()
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        saved_slots.append(next_slots)
+
+    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
+        persisted["tool_calls"] = tool_calls
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
+    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fail_verify_answer)
+    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "팰리세이드 타이어 추천해줘"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-trim-pause-test",
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert data_events
+    chip_labels = [chip["label"] for chip in data_events[0]["data"]["quickReplies"]]
+    assert chip_labels[:2] == ["앞바퀴사이즈", "뒷바퀴사이즈"]
+    assert "245/50R20" in data_events[0]["data"]["assistantResponse"]
+    assert "255/50R20" in data_events[0]["data"]["assistantResponse"]
+    assert saved_slots and saved_slots[0].tire_size is None
+    assert saved_slots[0].tire_size_front == "245/50R20"
+    assert saved_slots[0].tire_size_rear == "255/50R20"
+    assert persisted["tool_calls"] and persisted["tool_calls"][0]["name"] == "get_car_trims_tool"
