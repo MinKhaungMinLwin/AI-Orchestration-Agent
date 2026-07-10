@@ -13,7 +13,8 @@ import uuid
 
 import httpx
 from celery_app import celery_app
-from tasks.faq_sync_task import _persist_faq_data, _run_incremental_sync
+from faq_dataset import ORACLE_FAQ_SOURCE
+from tasks.faq_sync_task import _run_incremental_sync
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ def _fetch_faq_from_be(base_url: str, token: str = "") -> tuple[list[dict], bool
                 "metadata": {
                     "category_lv1": item.get("lrcl_cd") or "",
                     "category_lv2": item.get("mdcl_cd") or "",
-                    "source": "tstation-be",
+                    "source": ORACLE_FAQ_SOURCE,
                     "lang": "ko",
                     "document_type": "faq_qa",
                 },
@@ -115,16 +116,14 @@ def faq_fetch_task(self):
         result = _run_incremental_sync(
             documents,
             settings.QDRANT_COLLECTION_FAQ,
-            delete_missing=not is_partial,
+            # This sync owns only the Oracle-sourced points. The FAQ files are
+            # merged into the incoming set by `apply_file_overlays`, and are
+            # outside this scope, so they can never be deleted here.
+            delete_scope=None if is_partial else frozenset({ORACLE_FAQ_SOURCE}),
         )
     except Exception as exc:
         logger.exception("[faq_fetch_task] Ingestion failed")
         raise self.retry(exc=exc)
-
-    try:
-        _persist_faq_data(documents)
-    except Exception:
-        logger.warning("[faq_fetch_task] Could not persist faq_data.json — skipping file backup")
 
     logger.info(
         "[faq_fetch_task] Sync complete: upserted=%d collection=%s",

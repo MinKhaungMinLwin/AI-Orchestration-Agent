@@ -509,9 +509,13 @@ class QdrantService:
             logger.exception(f"Failed to delete collection {collection_name}")
             raise
 
-    def get_all_content_hashes(self, collection_name: str) -> dict[str, str]:
-        """Scroll all points and return {point_id: content_hash} for incremental sync."""
-        hashes: dict[str, str] = {}
+    def get_all_point_metadata(self, collection_name: str) -> dict[str, dict[str, str]]:
+        """Scroll all points and return {point_id: {content_hash, source}}.
+
+        `content_hash` drives the incremental upsert diff; `source` decides which
+        points a given sync is allowed to delete.
+        """
+        points: dict[str, dict[str, str]] = {}
         offset = None
         while True:
             result, next_offset = self.client.scroll(
@@ -522,12 +526,15 @@ class QdrantService:
                 with_payload=["metadata"],
             )
             for point in result:
-                h = ((point.payload or {}).get("metadata") or {}).get("content_hash", "")
-                hashes[str(point.id)] = h
+                meta = ((point.payload or {}).get("metadata") or {})
+                points[str(point.id)] = {
+                    "content_hash": meta.get("content_hash", ""),
+                    "source": meta.get("source", ""),
+                }
             if next_offset is None:
                 break
             offset = next_offset
-        return hashes
+        return points
 
     def delete_points(self, collection_name: str, point_ids: list[str]) -> None:
         """Delete specific points by ID."""
