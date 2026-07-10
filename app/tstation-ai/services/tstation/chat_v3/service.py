@@ -220,6 +220,28 @@ def _fills_transaction_slot(decision: RouteDecision | None) -> bool:
     return bool(_TRANSACTION_SLOT_FILL_FIELDS.intersection(decision.slots_patch.non_empty()))
 
 
+def _generic_staggered_simultaneous_purchase_event() -> dict:
+    answer = "\n".join([
+        "전/후륜 규격이 다른 경우, 현재 채팅에서는 두 규격을 한 번에 함께 구매 가능하다고 안내하지 않습니다.",
+        "먼저 앞바퀴 또는 뒷바퀴 중 하나의 규격을 선택해서 상품 추천/구매를 진행해 주세요.",
+        "아직 앞/뒤 타이어 규격이 확인되지 않았다면 실제 규격을 알려주시면 한 규격씩 확인해드릴게요.",
+    ])
+    chips = [
+        {"label": _CUSTOM_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+    ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": answer,
+            "quickReplies": chips,
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+        },
+        "source_domain": "TRANSACTION",
+        "assistant_response_source": "code_chat_v3_generic_staggered_simultaneous_purchase",
+    }
+
+
 def _staggered_simultaneous_purchase_event(
     decision: RouteDecision | None,
     slots: ConversationSlots,
@@ -233,7 +255,7 @@ def _staggered_simultaneous_purchase_event(
     front_size, rear_size = _staggered_sizes(slots)
     selected_size = str(slots.tire_size or "").strip()
     if not front_size or not rear_size or front_size == rear_size:
-        return None
+        return _generic_staggered_simultaneous_purchase_event()
     if selected_size and selected_size not in {front_size, rear_size}:
         return None
     if selected_size and _fills_transaction_slot(decision):
