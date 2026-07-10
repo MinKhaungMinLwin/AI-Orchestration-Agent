@@ -241,11 +241,19 @@ def _run_incremental_sync(
             "q_text": q_text,
             "a_text": a_text,
             "content_hash": c_hash,
+            "source": meta.get("source", ""),
         }
 
-    # Compare with existing points in Qdrant
+    # Compare with existing points in Qdrant. `content_hash` covers question+answer
+    # only, so a point whose provenance changed (e.g. indexed before `metadata.source`
+    # was stamped) must also be rewritten — otherwise `delete_scope` can never match it.
     existing = qdrant_svc.get_all_point_metadata(live_collection)
-    to_upsert = [pid for pid, v in incoming.items() if existing.get(pid, {}).get("content_hash") != v["content_hash"]]
+    to_upsert = [
+        pid
+        for pid, v in incoming.items()
+        if existing.get(pid, {}).get("content_hash") != v["content_hash"]
+        or existing.get(pid, {}).get("source") != v["source"]
+    ]
     to_delete = (
         [pid for pid, meta in existing.items() if pid not in incoming and meta.get("source") in delete_scope]
         if delete_scope
