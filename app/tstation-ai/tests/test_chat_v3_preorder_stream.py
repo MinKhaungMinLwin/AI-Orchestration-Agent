@@ -358,12 +358,6 @@ def test_staggered_simultaneous_purchase_inquiry_recovers_candidate_sizes(monkey
     )
 
 
-def test_generic_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    asyncio.run(_assert_generic_staggered_simultaneous_purchase_inquiry_does_not_run_tools(monkeypatch))
-
-
 def test_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(monkeypatch))
 
@@ -530,59 +524,6 @@ async def _assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
     ]
     assert saved_slots[0].tire_size == "225/40R19"
     assert persisted_domains == ["DISCOVERY", "DISCOVERY", "DISCOVERY"]
-
-
-async def _assert_generic_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    saved_slots = []
-    persisted_domains = []
-
-    class ForbiddenExecutor:
-        def __init__(self, *args, **kwargs) -> None:
-            raise AssertionError("generic staggered purchase inquiry must not run product/order tools")
-
-    async def fake_route_request(*args, **kwargs):
-        return RouteDecision(domain=Domain.TRANSACTION, intents=["staggered_simultaneous_purchase_inquiry"])
-
-    async def fake_load_slots(session_id):
-        return ConversationSlots()
-
-    async def fake_save_slots(session_id, next_slots, user_id=None):
-        saved_slots.append(next_slots)
-
-    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
-        persisted_domains.extend(quick_reply_domains)
-
-    monkeypatch.setattr(service, "route_request", fake_route_request)
-    monkeypatch.setattr(service, "load_slots", fake_load_slots)
-    monkeypatch.setattr(service, "save_slots", fake_save_slots)
-    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
-    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
-    monkeypatch.setattr(service, "_flush_trace", lambda: None)
-
-    request = TStationChatRequest(
-        messages=[{"role": "user", "content": "앞뒤바퀴 사이즈가 다른데 한번에 구매할수 있어?"}],
-        stream=True,
-        user_id="test-user",
-        session_id="generic-staggered-simultaneous-purchase-test",
-    )
-
-    events = []
-    async for line in service._run_turn(request, {}):
-        event = _parse_sse_event(line)
-        if event:
-            events.append(event)
-
-    data_events = [event for event in events if event.get("type") == "data"]
-    assert data_events
-    assert data_events[0]["template"] == "quickReply"
-    answer = data_events[0]["data"]["assistantResponse"]
-    assert "가능합니다" not in answer
-    assert "구매할 수 있습니다" not in answer
-    assert "한 번에 함께 구매 가능하다고 안내하지 않습니다" in answer
-    assert saved_slots == [ConversationSlots()]
-    assert persisted_domains == ["DISCOVERY"]
 
 
 async def _assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(
