@@ -5,6 +5,7 @@ Turn pipeline (all decisions LLM-made, zero regex):
                                  → pass:  tool loop → QC → quick replies
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -19,6 +20,8 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
 from services.tstation.chat_v3 import composer, context, memory, monitoring, qc, sse, templates
 from services.tstation.chat_v3.executor import ToolLoopExecutor, _tool_output_text
+from services.tstation.chat_v3.token_usage import TurnTokenUsage
+from services.tstation.quota_service import record_monthly_tokens
 from services.tstation.chat_v3.prompts.persona import (
     ERROR_RESPONSE,
     ORDER_HISTORY_GUIDANCE,
@@ -446,8 +449,9 @@ def _trace_config(
     prompt_name: str,
     tags: list[str],
     parent_span_id: str | None = None,
+    usage_tracker: TurnTokenUsage | None = None,
 ) -> dict:
-    return build_trace_config(
+    config = build_trace_config(
         run_name=run_name,
         session_id=request.session_id,
         user_id=request.user_id,
@@ -457,6 +461,31 @@ def _trace_config(
         extra_metadata={"runtime": "chat_v3"},
         prompt_name=prompt_name,
     )
+    if usage_tracker is not None:
+        config.setdefault("callbacks", []).append(usage_tracker.callback())
+    return config
+
+
+async def _record_real_usage(request: TStationChatRequest, usage_tracker: TurnTokenUsage) -> None:
+    """Report this turn's real LLM token usage to the shared monthly quota counter.
+
+    chat_v3 self-reports real usage (summed from actual usage_metadata across
+    every LLM call this turn) instead of the text-length estimate used by
+    legacy/llm_first — see api/tstation/chat_message.py, which skips its own
+    estimate-based increment whenever chat_v3 is the active runtime.
+    """
+    if not request.user_id or not usage_tracker.total_tokens:
+        return
+    try:
+        await asyncio.to_thread(
+            record_monthly_tokens,
+            request.user_id,
+            usage_tracker.total_tokens,
+            request.tracing_id or "",
+            settings.MONTHLY_TOKEN_LIMIT,
+        )
+    except Exception:
+        logger.debug("[CHAT_V3] quota usage recording failed", exc_info=True)
 
 
 def _flush_trace() -> None:
@@ -547,6 +576,7 @@ def _update_trace_monitoring(
 
 async def _run_turn(request: TStationChatRequest, result: dict):
     t0 = time.perf_counter()
+    usage_tracker = TurnTokenUsage()
     set_tstation_be_token(request.access_token)
     set_tstation_origin_host(request.origin_host)
     user_text = context.last_user_text(request)
@@ -590,6 +620,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             prompt_name="chat_v3_router",
             tags=["router"],
             parent_span_id=parent_span_id,
+            usage_tracker=usage_tracker,
         ),
         known_slots=slots,
     )
@@ -631,6 +662,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         if parent_span is not None:
             parent_span.end()
         _flush_trace()
+        await _record_real_usage(request, usage_tracker)
         for event in sse.done():
             yield event
         return
@@ -677,6 +709,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         if parent_span is not None:
             parent_span.end()
         _flush_trace()
+        await _record_real_usage(request, usage_tracker)
         for event in sse.done():
             yield event
         await save_slots(request.session_id, slots, user_id=request.user_id)
@@ -721,6 +754,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         if parent_span is not None:
             parent_span.end()
         _flush_trace()
+        await _record_real_usage(request, usage_tracker)
         for event in sse.done():
             yield event
         await save_slots(request.session_id, slots, user_id=request.user_id)
@@ -751,6 +785,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                         prompt_name="chat_v3_confirmed_cart_tool",
                         tags=["tool_loop", "cart_confirmation"],
                         parent_span_id=parent_span_id,
+                        usage_tracker=usage_tracker,
                     ),
                 )
                 output_text = _tool_output_text(output)
@@ -797,6 +832,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         if parent_span is not None:
             parent_span.end()
         _flush_trace()
+        await _record_real_usage(request, usage_tracker)
         yield sse.agent_flow("[DONE]", "success")
         for event in sse.done():
             yield event
@@ -842,6 +878,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             prompt_name="chat_v3_chat",
             tags=["tool_loop"],
             parent_span_id=parent_span_id,
+            usage_tracker=usage_tracker,
         ),
         tool_call_normalizer=_add_to_cart_tool_normalizer(
             slots,
@@ -877,6 +914,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             prompt_name="chat_v3_qc",
             tags=["qc"],
             parent_span_id=parent_span_id,
+            usage_tracker=usage_tracker,
         ),
     )
     if isinstance(qc_result, str):
@@ -929,6 +967,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 prompt_name="chat_v3_template_builder",
                 tags=["template"],
                 parent_span_id=parent_span_id,
+                usage_tracker=usage_tracker,
             ),
             slots=slots,
             previous_slots=slots_before_harvest,
@@ -968,6 +1007,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                     prompt_name="chat_v3_quick_replies",
                     tags=["quick_reply"],
                     parent_span_id=parent_span_id,
+                    usage_tracker=usage_tracker,
                 ),
                 flow_hint=templates.booking_flow_hint(slots),
             )
@@ -1018,6 +1058,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if parent_span is not None:
         parent_span.end()
     _flush_trace()
+    await _record_real_usage(request, usage_tracker)
 
     slots = derive_slots_from_tool_calls(slots, executor.tool_calls)
     await save_slots(request.session_id, slots, user_id=request.user_id)

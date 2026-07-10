@@ -134,13 +134,8 @@ _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 def _update_quota_score(user_id: str, tokens: int, trace_id: str, limit: int) -> None:
-    from services.tstation.quota_service import add_monthly_tokens, post_langfuse_score
-    new_total = add_monthly_tokens(user_id, tokens)
-    logger.info("[QUOTA] %s: %d / %d tokens this month", user_id, new_total, limit)
-    post_langfuse_score(
-        trace_id, "monthly_tokens_used", float(new_total),
-        f"{new_total:,} / {limit:,} tokens this month",
-    )
+    from services.tstation.quota_service import record_monthly_tokens
+    record_monthly_tokens(user_id, tokens, trace_id, limit)
 
 
 def get_current_time() -> str:
@@ -419,7 +414,10 @@ async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict 
     )
 
     # ── Token quota increment (fire-and-forget) ───────────────────────────────
-    if user_id:
+    # chat_v3 reports its own real per-turn usage (services/tstation/chat_v3/service.py)
+    # at the end of the turn — skip the estimate here to avoid double-counting.
+    from services.tstation.chat_v3 import enabled as _chat_v3_enabled
+    if user_id and not _chat_v3_enabled():
         from services.tstation.quota_service import estimate_tokens
         from config.env import settings
         input_tokens = estimate_tokens(chat_body.content)
