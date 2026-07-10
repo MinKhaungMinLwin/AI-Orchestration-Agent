@@ -8,6 +8,7 @@ None and the turn falls back to the plain quickReply event.
 
 import json
 import logging
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
@@ -1451,6 +1452,33 @@ def ensure_quantity_options(answer: str, slots: ConversationSlots | None, decisi
     if not quantity_quick_replies(slots, decision) or _has_all_quantity_options(answer):
         return answer
     return compact_answer_spacing(f"{answer}\n수량은 1개, 2개, 3개, 4개 중에서 선택해 주세요.")
+
+
+# 답변이 수량 입력을 요청하는데 slot 기반 booking_flow_hint 가 매장/지역 chip 을
+# 지시하면 answer 와 chip 이 어긋난다 (예: "수량이 필요해요" + 매장 후보 chip).
+# 사용자에게 보이는 answer 텍스트를 기준으로 수량 chip 을 결정적으로 강제한다.
+_QTY_QUESTION_RE = re.compile(
+    r"주문\s*수량"
+    r"|몇\s*개\s*(?:주문|구매|확인|예약|받|살|쓸|장바구니|결제|보내|들여|선택|필요)"
+    r"|수량(?:을\s*(?:알려|선택|입력|말씀)|이\s*(?:어떻|필요)|은\s*몇)"
+    r"|수량\s*[:：]"
+    r"|\d\s*개로\s*(?:장바구니에\s*)?(?:담아|주문|진행)[^.\n]{0,12}까요"
+)
+# 앞/뒤 규격이 다른 차량은 축당 최대 2개까지만 담을 수 있다.
+_STAGGERED_MAX_TWO_RE = re.compile(
+    r"(?:앞/뒤|전/후륜|전륜.*후륜|앞.*뒤|규격.*달라|사이즈.*달라).{0,80}최대\s*2\s*개"
+    r"|최대\s*2\s*개.{0,80}(?:앞/뒤|전/후륜|전륜.*후륜|앞.*뒤|규격.*달라|사이즈.*달라)",
+    re.DOTALL,
+)
+
+
+def enforce_quantity_chips(answer: str, chips: list[dict]) -> list[dict]:
+    """answer 가 수량을 묻고 있으면 chip 을 수량 chip(1개~4개)으로 교체."""
+    text = str(answer or "")
+    if not _QTY_QUESTION_RE.search(text):
+        return chips
+    limit = 2 if _STAGGERED_MAX_TWO_RE.search(text) else 4
+    return [dict(chip) for chip in _QUANTITY_QUICK_REPLIES[:limit]]
 
 
 def format_location_answer(answer: str, tool_calls: list[dict]) -> str:

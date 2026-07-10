@@ -981,6 +981,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 ),
                 flow_hint=templates.booking_flow_hint(slots),
             )
+        # booking_flow_hint 는 slot 기준이라 answer 가 수량을 묻는 turn 에서도 매장
+        # chip 을 지시할 수 있다 — answer 텍스트 기준으로 수량 chip 을 강제한다.
+        chips = templates.enforce_quantity_chips(answer, chips)
         quick_reply_event = {
             "type": "data",
             "template": "quickReply",

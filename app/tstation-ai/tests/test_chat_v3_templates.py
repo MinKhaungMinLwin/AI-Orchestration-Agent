@@ -850,6 +850,39 @@ def test_confirmed_quantity_does_not_use_quantity_quick_replies():
     assert templates.quantity_quick_replies(slots, decision) == []
 
 
+def test_enforce_quantity_chips_replaces_off_topic_chips_when_answer_asks_quantity():
+    answer = (
+        "확인했습니다. **벤투스 S2 AS 245/45R18** 상품이 있습니다.\n"
+        "장바구니에 담으려면 수량이 필요해요.\n"
+        "보통 승용차는 **4개**를 많이 담는데, **4개로 장바구니에 담아드릴까요?**"
+    )
+    store_chips = [
+        {"label": "서울 강남점", "domain": "TRANSACTION"},
+        {"label": "부산 해운대점", "domain": "TRANSACTION"},
+    ]
+
+    chips = templates.enforce_quantity_chips(answer, store_chips)
+
+    assert [chip["label"] for chip in chips] == ["1개", "2개", "3개", "4개"]
+
+
+def test_enforce_quantity_chips_keeps_chips_when_answer_is_not_asking_quantity():
+    chips = [{"label": "장바구니 확인", "domain": "TRANSACTION"}]
+
+    assert templates.enforce_quantity_chips("이미 장바구니에 담겨있는 상품이에요.", chips) is chips
+    assert (
+        templates.enforce_quantity_chips("수량 4개로 확정했어요. 이제 장착할 매장을 알려주세요.", chips) is chips
+    )
+
+
+def test_enforce_quantity_chips_limits_to_two_for_staggered_fitment():
+    answer = "앞/뒤 규격이 달라 축당 최대 2개까지 가능해요. 몇 개 주문하시겠어요?"
+
+    chips = templates.enforce_quantity_chips(answer, [])
+
+    assert [chip["label"] for chip in chips] == ["1개", "2개"]
+
+
 def test_preorder_fallback_builds_ready_order_card_from_slots():
     slots = ConversationSlots(
         goods_no="G000000309783",
