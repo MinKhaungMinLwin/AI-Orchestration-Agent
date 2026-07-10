@@ -65,6 +65,25 @@ def test_plain_price_query_does_not_volunteer_smart_pay() -> None:
     assert "명시하지 않은 단순 가격 문의" in _guidance()
 
 
+def test_output_format_forces_the_four_tire_basis_line() -> None:
+    """Post-deploy the model printed only the monthly figures and dropped the basis
+    line, leaving the user unable to check where 52,400원/month came from."""
+    guidance = _guidance()
+    assert "스마트페이 기준금액(4개): {smart_pay_total_4ea}원" in guidance
+    assert "12개월 할부: 월 {monthly_12}원" in guidance
+    assert "24개월 할부: 월 {monthly_24}원" in guidance
+    assert "기준금액 줄을 절대 생략하지 마세요" in guidance
+    assert "상품마다 세 줄을 반복하세요" in guidance
+
+
+def test_prompt_never_contains_a_real_per_tire_basis_amount() -> None:
+    """A worked example quoting smrt_pay_prc would hand the model the exact number it
+    is forbidden to print. Observed values: 157,200 (V12 에보2), 161,700 (S2 AS)."""
+    guidance = _guidance()
+    for leaked in ("157,200", "161,700"):
+        assert leaked not in guidance
+
+
 def test_guidance_is_injected_on_transaction_turns() -> None:
     source = SERVICE.read_text(encoding="utf-8")
     transaction_block = source.split('if "TRANSACTION" in domains:', 1)[1].split('if "DISCOVERY"', 1)[0]
