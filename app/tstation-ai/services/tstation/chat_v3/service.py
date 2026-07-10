@@ -52,6 +52,10 @@ _ADD_TO_CART_INTENT = "add_to_cart"
 _CART_CONFIRMATION_INTENT = "cart_confirmation"
 _ORDER_PREVIEW_TOOL = "present_order_preview_tool"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
+_STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
+    "simultaneous_purchase_inquiry",
+    "staggered_simultaneous_purchase_inquiry",
+}
 _FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
 _REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
 _CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
@@ -176,6 +180,61 @@ def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
         },
         "source_domain": "DISCOVERY",
         "assistant_response_source": "code_chat_v3_staggered_tire_size_choice",
+    }
+
+
+def _staggered_sizes(slots: ConversationSlots) -> tuple[str, str]:
+    front_size = str(slots.tire_size_front or "").strip()
+    rear_size = str(slots.tire_size_rear or "").strip()
+    if front_size and rear_size:
+        return front_size, rear_size
+    car_no = str(slots.car_no or "").strip()
+    for candidate in slots.vehicle_candidates or []:
+        if car_no and str(candidate.get("car_no") or "").strip() != car_no:
+            continue
+        front_size = str(candidate.get("tire_size_front") or "").strip()
+        rear_size = str(candidate.get("tire_size_rear") or "").strip()
+        if front_size and rear_size:
+            return front_size, rear_size
+    return "", ""
+
+
+def _staggered_simultaneous_purchase_event(decision: RouteDecision | None, slots: ConversationSlots) -> dict | None:
+    if decision is None or not _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS.intersection(decision.intents):
+        return None
+    front_size, rear_size = _staggered_sizes(slots)
+    selected_size = str(slots.tire_size or "").strip()
+    if not front_size or not rear_size or front_size == rear_size:
+        return None
+    if selected_size and selected_size not in {front_size, rear_size}:
+        return None
+
+    base_slots = slots.model_dump(mode="json", exclude_none=True)
+    front_slots = {**base_slots, "tire_size": front_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
+    rear_slots = {**base_slots, "tire_size": rear_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
+    answer = "\n".join([
+        "전/후륜 규격이 다른 차량이라 두 규격을 한 번에 함께 구매 가능한지는 상품과 장착 매장 조건을 각각 확인해야 해요.",
+        "현재 채팅에서는 선택한 규격 하나씩 추천/구매를 진행할 수 있습니다.",
+        f"- 앞 타이어: **{front_size}**",
+        f"- 뒤 타이어: **{rear_size}**",
+        "",
+        "먼저 진행할 규격을 선택해 주세요.",
+    ])
+    chips = [
+        {"label": _FRONT_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": front_slots}},
+        {"label": _REAR_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": rear_slots}},
+        {"label": _CUSTOM_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+    ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": answer,
+            "quickReplies": chips,
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+        },
+        "source_domain": "TRANSACTION",
+        "assistant_response_source": "code_chat_v3_staggered_simultaneous_purchase",
     }
 
 
@@ -452,6 +511,46 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     recovered_staggered_size_event = _staggered_tire_size_choice_event(slots)
     slots = apply_patch(slots, decision.slots_patch if decision else None)
     slots = _normalize_add_to_cart_slots(decision, slots)
+
+    staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(decision, slots)
+    if staggered_simultaneous_purchase_event:
+        answer = str(staggered_simultaneous_purchase_event["data"]["assistantResponse"])
+        chips = staggered_simultaneous_purchase_event["data"]["quickReplies"]
+        result["answer"] = answer
+        if _tokens_enabled():
+            yield sse.token(answer)
+        yield sse.message(answer)
+        yield sse.sse(staggered_simultaneous_purchase_event)
+        _update_trace_monitoring(
+            route_domains=domains,
+            tool_calls=[],
+            final_template="quickReply",
+            trace_id=request.tracing_id,
+            parent_span_id=parent_span_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            answer=answer,
+            user_text=user_text,
+            message_id=message_id,
+            route_intents=list(decision.intents if decision else []),
+            fallback_used=True,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            trace_observation=parent_span,
+        )
+        if parent_span is not None:
+            parent_span.end()
+        _flush_trace()
+        for event in sse.done():
+            yield event
+        await save_slots(request.session_id, slots, user_id=request.user_id)
+        await memory.persist_turn_context(
+            request.session_id,
+            tool_calls=[],
+            quick_reply_domains=[chip["domain"] for chip in chips],
+            predicted_domains=staggered_simultaneous_purchase_event["data"]["predictedDomains"],
+            user_id=request.user_id,
+        )
+        return
 
     staggered_size_event = recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
     if staggered_size_event:
