@@ -1014,6 +1014,8 @@ def build_listcar_data_event(answer: str, call: dict, slots: ConversationSlots |
         car_lnc_cd = _get_str(row, "car_lnc_cd", "carLncCd") or None
         if car_lnc_cd:
             ui_action_slots["carLncCd"] = car_lnc_cd
+        if car_model:
+            ui_action_slots["carModelDet"] = car_model
         if tire_size:
             ui_action_slots["tireSize"] = tire_size
         if tire_size_re:

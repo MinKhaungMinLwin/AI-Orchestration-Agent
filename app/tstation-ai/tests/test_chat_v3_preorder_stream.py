@@ -173,6 +173,7 @@ def test_vehicle_card_slots_ignore_premature_selected_size_for_staggered_vehicle
             "carNo": "29ì¡°3345",
             "carLncCd": "W063680",
             "mbr_car_reg_seq": "2000003099",
+            "carModelDet": "3-series(G20 F/L2) M340i A/T",
             "tire_size": "225/40R19",
             "tireSize": "225/40R19",
             "tireSizeRe": "255/35R19",
@@ -183,6 +184,7 @@ def test_vehicle_card_slots_ignore_premature_selected_size_for_staggered_vehicle
 
     assert slots.car_no == "29ì¡°3345"
     assert slots.car_lnc_cd == "W063680"
+    assert slots.car_model == "3-series(G20 F/L2) M340i A/T"
     assert slots.mbr_car_reg_seq == "2000003099"
     assert slots.tire_size is None
     assert slots.tire_size_front == "225/40R19"
@@ -415,6 +417,7 @@ async def _assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(
             "carNo": "29ì¡°3345",
             "carLncCd": "W063680",
             "mbr_car_reg_seq": "2000003099",
+            "carModelDet": "3-series(G20 F/L2) M340i A/T",
             "tire_size": "225/40R19",
             "tireSize": "225/40R19",
             "tireSizeRe": "255/35R19",
@@ -432,6 +435,8 @@ async def _assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(
     assert data_events[0]["template"] == "quickReply"
     assert "225/40R19" in data_events[0]["data"]["assistantResponse"]
     assert "255/35R19" in data_events[0]["data"]["assistantResponse"]
+    assert "3-series(G20 F/L2) M340i A/T" in data_events[0]["data"]["assistantResponse"]
+    assert "29ì¡°3345" in data_events[0]["data"]["assistantResponse"]
     assert saved_slots[0].tire_size is None
 
 
