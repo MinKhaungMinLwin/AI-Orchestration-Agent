@@ -217,9 +217,13 @@ def test_update_trace_monitoring_records_customer_event_with_turn_metadata(monke
     assert events
     metadata = events[0]["metadata"]
     assert events[0]["trace_context"] == {"trace_id": "trace-1", "parent_span_id": "span-1"}
+    assert events[0]["input"] == "주문할래"
+    assert events[0]["output"] == "주문 내용을 확인해 주세요."
     assert metadata["message_id"] == "message-1"
     assert metadata["route_intents"] == ["place_order", "product_search"]
     assert metadata["error_reason"] == "none"
+    assert metadata["final_status"] == "success"
+    assert metadata["final_template"] == "preOrder"
     assert "intent:place_order" in metadata["tags"]
     assert scores[0]["name"] == "customer_final_status"
     assert scores[0]["value"] == "success"

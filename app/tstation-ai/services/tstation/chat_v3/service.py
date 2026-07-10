@@ -414,14 +414,7 @@ def _update_trace_monitoring(
                 trace_context=trace_context,
                 name="customer_monitoring",
                 input=truncate_for_trace(user_text) if user_text is not None else None,
-                output={
-                    "final_status": monitoring_payload["metadata"].get("final_status"),
-                    "error_reason": monitoring_payload["metadata"].get("error_reason"),
-                    "primary_domain": monitoring_payload["metadata"].get("primary_domain"),
-                    "primary_af": monitoring_payload["metadata"].get("primary_af"),
-                    "primary_tool": monitoring_payload["metadata"].get("primary_tool"),
-                    "final_template": final_template,
-                },
+                output=truncate_for_trace(answer) if answer is not None else None,
                 metadata={
                     **monitoring_payload["metadata"],
                     "session_id": session_id,
