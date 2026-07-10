@@ -59,6 +59,7 @@ _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
 _FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
 _REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
 _CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
+_SELECTED_TIRE_SIZE_KEYS = {"tire_size", "tireSize"}
 
 
 def _tool_display_names() -> dict[str, str]:
@@ -199,8 +200,28 @@ def _staggered_sizes(slots: ConversationSlots) -> tuple[str, str]:
     return "", ""
 
 
-def _staggered_simultaneous_purchase_event(decision: RouteDecision | None, slots: ConversationSlots) -> dict | None:
+def _request_has_selected_tire_size(request: TStationChatRequest) -> bool:
+    chip_metadata = (request.chip_context or {}).get("metadata") or {}
+    sources = [
+        request.slots,
+        (request.ui_action or {}).get("slots"),
+        chip_metadata.get("slots") if isinstance(chip_metadata, dict) else None,
+    ]
+    return any(
+        isinstance(source, dict) and any(source.get(key) not in (None, "") for key in _SELECTED_TIRE_SIZE_KEYS)
+        for source in sources
+    )
+
+
+def _staggered_simultaneous_purchase_event(
+    decision: RouteDecision | None,
+    slots: ConversationSlots,
+    *,
+    size_selected_from_ui: bool = False,
+) -> dict | None:
     if decision is None or not _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS.intersection(decision.intents):
+        return None
+    if size_selected_from_ui:
         return None
     front_size, rear_size = _staggered_sizes(slots)
     selected_size = str(slots.tire_size or "").strip()
@@ -512,7 +533,11 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     slots = apply_patch(slots, decision.slots_patch if decision else None)
     slots = _normalize_add_to_cart_slots(decision, slots)
 
-    staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(decision, slots)
+    staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
+        decision,
+        slots,
+        size_selected_from_ui=_request_has_selected_tire_size(request),
+    )
     if staggered_simultaneous_purchase_event:
         answer = str(staggered_simultaneous_purchase_event["data"]["assistantResponse"])
         chips = staggered_simultaneous_purchase_event["data"]["quickReplies"]
