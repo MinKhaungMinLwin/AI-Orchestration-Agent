@@ -104,6 +104,18 @@ def _vehicle_size_patch(merged: dict, *, allow_selected_size: bool = True) -> di
     return values
 
 
+def _clear_unconfirmed_staggered_size(slots: ConversationSlots, values: dict) -> ConversationSlots:
+    if (
+        "tire_size" not in values
+        and slots.tire_size
+        and slots.tire_size_front
+        and slots.tire_size_rear
+        and slots.tire_size_front != slots.tire_size_rear
+    ):
+        return slots.model_copy(update={"tire_size": None})
+    return slots
+
+
 def _single_row(parsed: object) -> dict | None:
     data = parsed.get("data", parsed) if isinstance(parsed, dict) else parsed
     if isinstance(data, dict):
@@ -240,7 +252,8 @@ def apply_fe_slots(slots: ConversationSlots, request: TStationChatRequest) -> Co
     if not values:
         return slots
     logger.info("[CHAT_V3] FE slot patch: %s", values)
-    return slots.apply_runtime_values(values, source="chat_v3:fe_patch")
+    updated = slots.apply_runtime_values(values, source="chat_v3:fe_patch")
+    return _clear_unconfirmed_staggered_size(updated, values)
 
 
 def apply_text_vehicle_selection(slots: ConversationSlots, user_text: str) -> ConversationSlots:
@@ -256,4 +269,5 @@ def apply_text_vehicle_selection(slots: ConversationSlots, user_text: str) -> Co
     if len(matches) != 1:
         return slots
     logger.info("[CHAT_V3] text vehicle selection patch: %s", matches[0])
-    return slots.apply_runtime_values(matches[0], source="chat_v3:text_vehicle_selection")
+    updated = slots.apply_runtime_values(matches[0], source="chat_v3:text_vehicle_selection")
+    return _clear_unconfirmed_staggered_size(updated, matches[0])
