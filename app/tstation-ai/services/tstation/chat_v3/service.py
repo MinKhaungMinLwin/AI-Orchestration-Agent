@@ -140,10 +140,27 @@ def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
     base_slots = slots.model_dump(mode="json", exclude_none=True)
     front_slots = {**base_slots, "tire_size": front_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
     rear_slots = {**base_slots, "tire_size": rear_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
-    answer = (
-        f"차량의 앞/뒤 타이어 사이즈가 다릅니다. 전륜 **{front_size}**, 후륜 **{rear_size}** 중 "
-        "어떤 사이즈로 진행할까요?"
-    )
+    car_model = str(slots.car_model or "").strip()
+    car_no = str(slots.car_no or "").strip()
+    if car_model or car_no:
+        vehicle_name = car_model or car_no
+        detail_lines = [f"선택하신 차량은 **{vehicle_name}**입니다."]
+        if car_no and car_no != vehicle_name:
+            detail_lines.append(f"- 차량번호: **{car_no}**")
+        if car_model and car_model != vehicle_name:
+            detail_lines.append(f"- 모델: **{car_model}**")
+        detail_lines.extend([
+            f"- 앞 타이어: **{front_size}**",
+            f"- 뒤 타이어: **{rear_size}**",
+            "",
+            "이 차량은 앞/뒤 타이어 규격이 다른 차량이라, 타이어 추천이나 구매 시 어떤 사이즈로 진행할지 먼저 확인해드릴게요.",
+        ])
+        answer = "\n".join(detail_lines)
+    else:
+        answer = (
+            f"차량의 앞/뒤 타이어 사이즈가 다릅니다. 전륜 **{front_size}**, 후륜 **{rear_size}** 중 "
+            "어떤 사이즈로 진행할까요?"
+        )
     chips = [
         {"label": _FRONT_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": front_slots}},
         {"label": _REAR_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": rear_slots}},

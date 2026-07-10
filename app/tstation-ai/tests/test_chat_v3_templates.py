@@ -470,6 +470,7 @@ def test_listcar_template_preserves_staggered_front_rear_sizes(monkeypatch):
     assert event["data"]["metadata"][0]["availableSizes"] == ["225/50R18", "255/50R18"]
     assert event["data"]["metadata"][0]["ui_action"]["slots"]["tireSize"] == "225/50R18"
     assert event["data"]["metadata"][0]["ui_action"]["slots"]["tireSizeRe"] == "255/50R18"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["carModelDet"] == "3 Series GT"
 
 
 def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
