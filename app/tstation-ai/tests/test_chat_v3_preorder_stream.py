@@ -163,6 +163,58 @@ def test_vehicle_candidate_ui_action_ignores_premature_selected_size_for_stagger
     assert slots.tire_size_rear == "255/35R19"
 
 
+def test_vehicle_card_slots_ignore_premature_selected_size_for_staggered_vehicle() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "select car"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-fe-card-selected-size-test",
+        slots={
+            "carNo": "29ì¡°3345",
+            "carLncCd": "W063680",
+            "mbr_car_reg_seq": "2000003099",
+            "tire_size": "225/40R19",
+            "tireSize": "225/40R19",
+            "tireSizeRe": "255/35R19",
+        },
+    )
+
+    slots = apply_fe_slots(ConversationSlots(), request)
+
+    assert slots.car_no == "29ì¡°3345"
+    assert slots.car_lnc_cd == "W063680"
+    assert slots.mbr_car_reg_seq == "2000003099"
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "225/40R19"
+    assert slots.tire_size_rear == "255/35R19"
+
+
+def test_staggered_size_chip_slots_apply_selected_size() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "ì•žë°”í€´ì‚¬ì´ì¦ˆ"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-size-chip-selected-size-test",
+        chip_context={
+            "metadata": {
+                "slots": {
+                    "carNo": "29ì¡°3345",
+                    "carLncCd": "W063680",
+                    "tire_size": "225/40R19",
+                    "tireSize": "225/40R19",
+                    "tireSizeRe": "255/35R19",
+                }
+            }
+        },
+    )
+
+    slots = apply_fe_slots(ConversationSlots(), request)
+
+    assert slots.tire_size == "225/40R19"
+    assert slots.tire_size_front == "225/40R19"
+    assert slots.tire_size_rear == "255/35R19"
+
+
 def test_text_vehicle_selection_recovers_staggered_sizes_from_previous_candidates() -> None:
     tool_output = {
         "status": "success",
@@ -221,6 +273,10 @@ def test_staggered_vehicle_size_guard_survives_router_car_no_patch(monkeypatch: 
             expected_rear_size="255/35R19",
         )
     )
+
+
+def test_staggered_vehicle_card_click_guard_blocks_recommendation_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(monkeypatch))
 
 
 def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
@@ -315,6 +371,68 @@ async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
     assert data_events[0]["data"]["quickReplies"][1]["metadata"]["slots"]["tire_size"] == expected_rear_size
     assert saved_slots[0].tire_size is None
     assert persisted_domains == ["DISCOVERY", "DISCOVERY", "DISCOVERY"]
+
+
+async def _assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved_slots = []
+
+    class ForbiddenExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("staggered vehicle card click must choose front/rear size before recommendation flow")
+
+    async def fake_route_request(*args, **kwargs):
+        known_slots = kwargs["known_slots"]
+        assert known_slots.car_no == "29ì¡°3345"
+        assert known_slots.tire_size is None
+        assert known_slots.tire_size_front == "225/40R19"
+        assert known_slots.tire_size_rear == "255/35R19"
+        return RouteDecision(domain=Domain.DISCOVERY, intents=["vehicle_resolved_recommendation"])
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots()
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        saved_slots.append(next_slots)
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "select car"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-card-click-guard-test",
+        slots={
+            "carNo": "29ì¡°3345",
+            "carLncCd": "W063680",
+            "mbr_car_reg_seq": "2000003099",
+            "tire_size": "225/40R19",
+            "tireSize": "225/40R19",
+            "tireSizeRe": "255/35R19",
+        },
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert data_events
+    assert data_events[0]["template"] == "quickReply"
+    assert "225/40R19" in data_events[0]["data"]["assistantResponse"]
+    assert "255/35R19" in data_events[0]["data"]["assistantResponse"]
+    assert saved_slots[0].tire_size is None
 
 
 def test_cart_preview_tool_call_is_preserved_when_guard_disabled() -> None:
