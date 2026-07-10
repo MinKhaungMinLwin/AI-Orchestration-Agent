@@ -138,6 +138,31 @@ def test_fe_vehicle_ui_action_preserves_staggered_sizes_without_selecting_one() 
     assert slots.tire_size_rear == "255/35R19"
 
 
+def test_vehicle_candidate_ui_action_ignores_premature_selected_size_for_staggered_vehicle() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "select car"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-fe-ui-action-selected-size-test",
+        ui_action={
+            "action_type": "select_vehicle_candidate",
+            "slots": {
+                "carNo": "29조3345",
+                "carLncCd": "W000003",
+                "tire_size": "225/40R19",
+                "tireSize": "225/40R19",
+                "tireSizeRe": "255/35R19",
+            },
+        },
+    )
+
+    slots = apply_fe_slots(ConversationSlots(), request)
+
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "225/40R19"
+    assert slots.tire_size_rear == "255/35R19"
+
+
 def test_text_vehicle_selection_recovers_staggered_sizes_from_previous_candidates() -> None:
     tool_output = {
         "status": "success",
