@@ -13,6 +13,7 @@ import logging
 
 from schemas.tstation.slots import ConversationSlots
 from schemas.tstation.chat import TStationChatRequest
+from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,48 @@ _FE_KEY_ALIASES = {
     "shopId": "shop_id",
     "ordQty": "ord_qty",
     "tireSize": "tire_size",
+    "tireSizeFr": "tire_size_front",
+    "tireSizeFront": "tire_size_front",
+    "tireSizeRe": "tire_size_rear",
+    "tireSizeRear": "tire_size_rear",
 }
+
+
+def _vehicle_size_patch(merged: dict) -> dict:
+    front_raw = (
+        merged.get("tire_size_front")
+        or merged.get("tire_size_fr")
+        or merged.get("tireSizeFront")
+        or merged.get("tireSizeFr")
+        or merged.get("tireSize")
+    )
+    rear_raw = (
+        merged.get("tire_size_rear")
+        or merged.get("tire_size_re")
+        or merged.get("tireSizeRear")
+        or merged.get("tireSizeRe")
+    )
+    front_size = normalize_tire_size(str(front_raw or ""))
+    rear_size = normalize_tire_size(str(rear_raw or ""))
+    if not front_size and not rear_size:
+        return {}
+    if front_size and rear_size and front_size != rear_size:
+        values = {"tire_size": None, "tire_size_front": front_size, "tire_size_rear": rear_size}
+        explicit_selected_size = normalize_tire_size(str(merged.get("tire_size") or ""))
+        if explicit_selected_size in {front_size, rear_size}:
+            values["tire_size"] = explicit_selected_size
+        return values
+    selected_size = front_size or rear_size
+    values = {"tire_size": selected_size}
+    if front_size and rear_size:
+        values.update({"tire_size_front": selected_size, "tire_size_rear": selected_size})
+    elif front_size and any(
+        key in merged for key in ("tire_size_front", "tire_size_fr", "tireSizeFront", "tireSizeFr")
+    ):
+        values["tire_size_front"] = front_size
+    elif rear_size:
+        values["tire_size_rear"] = rear_size
+    return values
 
 
 def _single_row(parsed: object) -> dict | None:
@@ -115,6 +157,7 @@ def fe_slot_patch(request: TStationChatRequest) -> dict:
         if isinstance(source, dict):
             merged.update(source)
     normalized = {_FE_KEY_ALIASES.get(key, key): value for key, value in merged.items()}
+    normalized.update(_vehicle_size_patch(merged))
     return {
         field: _coerce(field, value)
         for field, value in normalized.items()

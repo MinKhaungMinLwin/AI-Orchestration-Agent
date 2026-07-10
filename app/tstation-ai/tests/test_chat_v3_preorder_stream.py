@@ -55,6 +55,7 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/2"
 
 from services.tstation.chat_v3 import service  # noqa: E402
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
+from services.tstation.chat_v3.slots.derive import apply_fe_slots  # noqa: E402
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 
 
@@ -95,6 +96,26 @@ def test_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypatch: pytes
     asyncio.run(_assert_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypatch))
 
 
+def test_fe_vehicle_patch_preserves_staggered_sizes_without_selecting_one() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "select car"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-fe-slot-test",
+        slots={"tireSize": "225/50R18", "tireSizeRe": "255/50R18"},
+    )
+
+    slots = apply_fe_slots(ConversationSlots(), request)
+
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "225/50R18"
+    assert slots.tire_size_rear == "255/50R18"
+
+
+def test_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch))
+
+
 def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
     normalize = service._add_to_cart_tool_normalizer(slots, enabled=True)
@@ -117,6 +138,69 @@ def test_add_to_cart_preview_tool_call_redirects_with_tool_args() -> None:
 
     assert normalized["name"] == "save_to_cart_tool"
     assert normalized["args"] == {"goods_no": "G0001", "ord_qty": 2}
+
+
+async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    slots = ConversationSlots(
+        tire_size_front="225/50R18",
+        tire_size_rear="255/50R18",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["quick_order_reservation"])
+    saved_slots = []
+    persisted_domains = []
+
+    class ForbiddenExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            raise AssertionError("staggered vehicle must choose front/rear size before purchase flow")
+
+    async def fake_route_request(*args, **kwargs):
+        return decision
+
+    async def fake_load_slots(session_id):
+        return slots
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        saved_slots.append(next_slots)
+
+    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
+        persisted_domains.extend(quick_reply_domains)
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "order tires for my car"}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-guard-test",
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert data_events
+    assert data_events[0]["template"] == "quickReply"
+    assert "225/50R18" in data_events[0]["data"]["assistantResponse"]
+    assert "255/50R18" in data_events[0]["data"]["assistantResponse"]
+    assert [chip["label"] for chip in data_events[0]["data"]["quickReplies"]] == [
+        "앞바퀴사이즈",
+        "뒷바퀴사이즈",
+        "다른 사이즈 입력",
+    ]
+    assert data_events[0]["data"]["quickReplies"][0]["metadata"]["slots"]["tire_size"] == "225/50R18"
+    assert data_events[0]["data"]["quickReplies"][1]["metadata"]["slots"]["tire_size"] == "255/50R18"
+    assert saved_slots[0].tire_size is None
+    assert persisted_domains == ["DISCOVERY", "DISCOVERY", "DISCOVERY"]
 
 
 def test_cart_preview_tool_call_is_preserved_when_guard_disabled() -> None:
