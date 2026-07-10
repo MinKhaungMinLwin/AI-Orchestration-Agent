@@ -14,6 +14,7 @@ from kiwipiepy import Kiwi
 logger = logging.getLogger(__name__)
 
 _TTL: float = 3600.0  # rebuild every hour; FAQ sync is weekly
+_COUNT_CHECK_INTERVAL: float = 60.0  # how often a cheap point-count drift check may run
 _RRF_K: int = 60
 
 def _kiwi_model_path() -> str | None:
@@ -49,6 +50,7 @@ class Bm25FaqIndex:
         self._point_ids: list[str] = []
         self._payloads: dict[str, dict] = {}
         self._built_at: float = 0.0
+        self._count_checked_at: float = 0.0
         self._build_lock = threading.Lock()
 
     @classmethod
@@ -60,16 +62,54 @@ class Bm25FaqIndex:
         return cls._instance
 
     def ensure_built(self, qdrant_client, collection_name: str) -> None:
-        """Build or refresh the index if needed. Concurrent callers serialise on _build_lock."""
-        if not self._needs_rebuild():
-            return
-        with self._build_lock:
-            if not self._needs_rebuild():
-                return
-            self._build(qdrant_client, collection_name)
+        """Build or refresh the index if needed. Concurrent callers serialise on _build_lock.
 
-    def _needs_rebuild(self) -> bool:
-        return self._bm25_question is None or (time.monotonic() - self._built_at) >= _TTL
+        Never raises: the collection may not exist yet (ingestion has not run), and a
+        keyword index is an optimisation — hybrid search degrades to semantic-only.
+        Leaving the index unbuilt means the next call retries, so it self-heals as
+        soon as the collection appears.
+        """
+        if not self._needs_rebuild(qdrant_client, collection_name):
+            return
+        built_at = self._built_at
+        with self._build_lock:
+            if self._built_at != built_at:  # another thread rebuilt while we waited
+                return
+            try:
+                self._build(qdrant_client, collection_name)
+            except Exception:
+                logger.warning(
+                    "[Bm25FaqIndex] Build from '%s' failed; keyword search disabled until it succeeds",
+                    collection_name,
+                    exc_info=True,
+                )
+
+    def _needs_rebuild(self, qdrant_client=None, collection_name: str = "") -> bool:
+        if self._bm25_question is None:
+            return True
+        now = time.monotonic()
+        if now - self._built_at >= _TTL:
+            return True
+        # The ingestion service may repopulate the collection at any time — notably
+        # right after a deploy, when this service booted first. A cheap point-count
+        # check (rate-limited) picks that up in seconds instead of a full TTL.
+        if qdrant_client is None or now - self._count_checked_at < _COUNT_CHECK_INTERVAL:
+            return False
+        self._count_checked_at = now
+        try:
+            live_count = qdrant_client.count(collection_name, exact=True).count
+        except Exception:
+            logger.debug("[Bm25FaqIndex] point-count check failed for '%s'", collection_name, exc_info=True)
+            return False
+        if live_count == len(self._point_ids):
+            return False
+        logger.info(
+            "[Bm25FaqIndex] '%s' changed (indexed=%d live=%d) — rebuilding",
+            collection_name,
+            len(self._point_ids),
+            live_count,
+        )
+        return True
 
     def _build(self, qdrant_client, collection_name: str) -> None:
         from rank_bm25 import BM25Plus

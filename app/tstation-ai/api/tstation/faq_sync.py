@@ -34,6 +34,10 @@ async def sync_faq(
     Upsert is idempotent: submitting the same FAQ `id` updates the existing
     vector point rather than creating a duplicate.
 
+    The push is purely additive — documents absent from the body are left alone.
+    Deleting FAQs is done by the source that owns them: edit the FAQ files and
+    redeploy, or remove the entry from Oracle and wait for the periodic fetch.
+
     Parameters:
     - Body (JSON array): list of FAQ items to sync (max 500)
 

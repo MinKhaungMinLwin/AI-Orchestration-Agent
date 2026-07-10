@@ -8,15 +8,34 @@ _DATA_DIR = Path(__file__).parent / "data"
 PRIMARY_FAQ_FILE = _DATA_DIR / "faq_data.json"
 LOCAL_FAQ_FILE = _DATA_DIR / "local_faq.json"
 
+# `metadata.source` values. Every Qdrant point carries one, and it decides who
+# is allowed to delete it during a sync (see `_run_incremental_sync`).
+PRIMARY_FAQ_SOURCE = "faq_data"
+LOCAL_FAQ_SOURCE = "local_faq"
+ORACLE_FAQ_SOURCE = "tstation-be"
 
-def _load_json_array(path: Path) -> list[dict]:
+# The two hand-edited files. Only a sync that reconciles these files may delete
+# their points; the periodic Oracle fetch must never touch them.
+FILE_FAQ_SOURCES = frozenset({PRIMARY_FAQ_SOURCE, LOCAL_FAQ_SOURCE})
+
+
+def _load_json_array(path: Path, source: str) -> list[dict]:
     if not path.exists():
         return []
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, list):
         raise ValueError(f"FAQ dataset must be a JSON array: {path}")
-    docs = [item for item in data if isinstance(item, dict)]
+
+    docs = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        # Stamp provenance so the sync can tell file-owned points from Oracle ones.
+        metadata = dict(item.get("metadata") or {})
+        metadata.setdefault("source", source)
+        docs.append({**item, "metadata": metadata})
+
     logger.info("[faq_dataset] Loaded %d document(s) from %s", len(docs), path.name)
     return docs
 
@@ -47,33 +66,34 @@ def merge_faq_documents(base_documents: list[dict], overlay_documents: list[dict
     return merged
 
 
-def load_combined_faq_documents(*, include_local_overlay: bool = True) -> list[dict]:
-    base_documents = _load_json_array(PRIMARY_FAQ_FILE)
-    if not include_local_overlay:
-        return base_documents
-
-    overlay_documents = _load_json_array(LOCAL_FAQ_FILE)
+def load_file_faq_documents() -> list[dict]:
+    """Both hand-edited FAQ files, merged by `id` (local_faq wins on collision)."""
+    base_documents = _load_json_array(PRIMARY_FAQ_FILE, PRIMARY_FAQ_SOURCE)
+    overlay_documents = _load_json_array(LOCAL_FAQ_FILE, LOCAL_FAQ_SOURCE)
     merged = merge_faq_documents(base_documents, overlay_documents)
     logger.info(
-        "[faq_dataset] Combined FAQ documents: base=%d overlay=%d merged=%d",
+        "[faq_dataset] File FAQ documents: %s=%d %s=%d merged=%d",
+        PRIMARY_FAQ_SOURCE,
         len(base_documents),
+        LOCAL_FAQ_SOURCE,
         len(overlay_documents),
         len(merged),
     )
     return merged
 
 
-def load_local_overlay_documents() -> list[dict]:
-    return _load_json_array(LOCAL_FAQ_FILE)
+def apply_file_overlays(base_documents: list[dict]) -> list[dict]:
+    """Layer both FAQ files on top of `base_documents` (typically the Oracle set).
 
-
-def apply_local_overlay(base_documents: list[dict]) -> list[dict]:
-    overlay_documents = load_local_overlay_documents()
-    merged = merge_faq_documents(base_documents, overlay_documents)
+    Called from every ingestion path, so the file-backed FAQs are always part of
+    the incoming document set — that is what keeps a sync from deleting them.
+    """
+    file_documents = load_file_faq_documents()
+    merged = merge_faq_documents(base_documents, file_documents)
     logger.info(
-        "[faq_dataset] Applied local overlay: base=%d overlay=%d merged=%d",
+        "[faq_dataset] Applied file overlays: base=%d files=%d merged=%d",
         len(base_documents),
-        len(overlay_documents),
+        len(file_documents),
         len(merged),
     )
     return merged

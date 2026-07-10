@@ -44,41 +44,42 @@ def init_services():
 
 
 def main():
-    """ENTRYPOINT — reconcile the local_faq.json overlay into Qdrant on startup.
+    """ENTRYPOINT — reconcile the two hand-edited FAQ files into Qdrant on startup.
 
-    local_faq.json is the LOCAL OVERLAY: the FAQ base is fetched from Oracle by
-    the periodic `faq_fetch_task`; local_faq.json is merged on top by `id`.
-    On every container start we upsert only the overlay entries whose content
-    changed (content-hash diff inside `_run_incremental_sync`), so the deploy
-    flow "edit local_faq.json → rebuild/redeploy" is enough to refresh exactly
-    those points — no manual re-embed, no waiting for the beat cycle.
+    faq_data.json and local_faq.json are both human-owned; they are merged by `id`
+    (local_faq wins on collision) and layered on top of the Oracle FAQ set that the
+    periodic `faq_fetch_task` maintains. On every container start we upsert only the
+    entries whose content changed (content-hash diff inside `_run_incremental_sync`),
+    so the deploy flow "edit a FAQ file → rebuild/redeploy" refreshes exactly those
+    points — no manual re-embed, no waiting for the beat cycle.
 
-    `delete_missing=False`: never touch Oracle-sourced base points. (Removing an
-    entry from local_faq.json therefore does NOT delete it from Qdrant here — a
-    full Oracle fetch reconciles deletions.) Unchanged overlay → zero writes.
+    `delete_scope=FILE_FAQ_SOURCES`: this sync owns the file-backed points, so
+    removing an entry from a file also removes it from Qdrant. Oracle-sourced
+    points are outside the scope and are never touched here.
     """
-    logger.info("Starting FAQ overlay reconcile from local_faq.json")
+    logger.info("Starting FAQ reconcile from faq_data.json + local_faq.json")
 
     from config.env import settings
-    from faq_dataset import load_local_overlay_documents
+    from faq_dataset import FILE_FAQ_SOURCES, load_file_faq_documents
     from tasks.faq_sync_task import _run_incremental_sync
 
     # Fail fast on unhealthy dependencies before doing any work.
     init_services()
 
-    overlay = load_local_overlay_documents()
-    if not overlay:
-        logger.info("No local_faq.json overlay found — nothing to reconcile")
+    documents = load_file_faq_documents()
+    if not documents:
+        logger.info("No FAQ files found — nothing to reconcile")
         return
 
     result = _run_incremental_sync(
-        overlay,
+        documents,
         settings.QDRANT_COLLECTION_FAQ,
-        delete_missing=False,
+        delete_scope=FILE_FAQ_SOURCES,
     )
     logger.info(
-        "Overlay reconcile complete: upserted=%d collection=%s",
+        "FAQ file reconcile complete: upserted=%d deleted=%d collection=%s",
         result.get("upserted_count", 0),
+        result.get("deleted_count", 0),
         result.get("collection_name", ""),
     )
 

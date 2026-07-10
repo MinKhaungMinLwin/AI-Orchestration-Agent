@@ -10,14 +10,11 @@ import hashlib
 import json
 import logging
 import os
-import tempfile
 import time
 import uuid
 
 from celery_app import celery_app, redis as task_redis
-from faq_dataset import PRIMARY_FAQ_FILE, apply_local_overlay
-
-_DATA_FILE = PRIMARY_FAQ_FILE
+from faq_dataset import apply_file_overlays
 
 logger = logging.getLogger(__name__)
 
@@ -74,33 +71,6 @@ def _update_redis_status(task_id: str, status: str, result: dict | None = None, 
 
 
 # ---------------------------------------------------------------------------
-# Local persistence (keeps bootstrap in sync with API updates)
-# ---------------------------------------------------------------------------
-
-def _persist_faq_data(documents: list[dict]) -> None:
-    """
-    Atomically overwrite the local FAQ data file with the latest documents.
-
-    Uses write-to-temp + os.replace() so the file is never partially written.
-    After this call, the next service restart will bootstrap from the updated data.
-    """
-    _DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=_DATA_FILE.parent, suffix=".json.tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(documents, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, _DATA_FILE)
-        logger.info("[faq_sync_task] Persisted %d documents to %s", len(documents), _DATA_FILE)
-    except Exception:
-        # Clean up temp file if something went wrong
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-
-
-# ---------------------------------------------------------------------------
 # Core ingestion logic (separated for testability)
 # ---------------------------------------------------------------------------
 
@@ -124,9 +94,9 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
         api_key=settings.QDRANT_API_KEY or None,
     )
 
-    # Keep the local overlay indexed even when the primary FAQ data is refreshed
+    # Keep the file-backed FAQs indexed even when the incoming set is refreshed
     # via API sync or periodic fetch.
-    documents = apply_local_overlay(documents)
+    documents = apply_file_overlays(documents)
 
     # Normalise to unified schema — resolves representative_question/question,
     # representative_answer/answer, and fills in missing metadata fields.
@@ -214,10 +184,16 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
 def _run_incremental_sync(
     documents: list[dict],
     collection_name: str,
-    delete_missing: bool = True,
+    delete_scope: frozenset[str] | None = None,
 ) -> dict:
     """
-    Incremental FAQ sync: only embed and upsert changed/new docs, delete removed ones when safe.
+    Incremental FAQ sync: only embed and upsert changed/new docs.
+
+    `delete_scope` is the set of `metadata.source` values this sync owns. A point
+    missing from `documents` is deleted only when its source is in that set, so a
+    sync can never garbage-collect another source's points. Pass None to disable
+    deletion entirely (e.g. a partial fetch, or an additive API push).
+
     Falls back to full _run_ingestion if the target collection does not exist yet.
     """
     from config.env import settings
@@ -242,8 +218,8 @@ def _run_incremental_sync(
 
     qdrant_svc.ensure_payload_text_index(live_collection, "question")
 
-    # Keep the local overlay indexed even when the fetched base FAQ set changes.
-    documents = apply_local_overlay(documents)
+    # Keep the file-backed FAQs indexed even when the fetched base FAQ set changes.
+    documents = apply_file_overlays(documents)
     documents = [DocumentProcessor._normalize_document(doc, idx) for idx, doc in enumerate(documents)]
 
     # Build incoming map: point_id → entry
@@ -267,18 +243,22 @@ def _run_incremental_sync(
             "content_hash": c_hash,
         }
 
-    # Compare with existing hashes in Qdrant
-    existing_hashes = qdrant_svc.get_all_content_hashes(live_collection)
-    to_upsert = [pid for pid, v in incoming.items() if existing_hashes.get(pid) != v["content_hash"]]
-    to_delete = [pid for pid in existing_hashes if pid not in incoming] if delete_missing else []
+    # Compare with existing points in Qdrant
+    existing = qdrant_svc.get_all_point_metadata(live_collection)
+    to_upsert = [pid for pid, v in incoming.items() if existing.get(pid, {}).get("content_hash") != v["content_hash"]]
+    to_delete = (
+        [pid for pid, meta in existing.items() if pid not in incoming and meta.get("source") in delete_scope]
+        if delete_scope
+        else []
+    )
 
     logger.info(
-        "[incremental_sync] total=%d upsert=%d delete=%d unchanged=%d delete_missing=%s",
+        "[incremental_sync] total=%d upsert=%d delete=%d unchanged=%d delete_scope=%s",
         len(incoming),
         len(to_upsert),
         len(to_delete),
         len(incoming) - len(to_upsert),
-        delete_missing,
+        sorted(delete_scope) if delete_scope else None,
     )
 
     if not to_upsert and not to_delete:
@@ -330,7 +310,10 @@ def _run_incremental_sync(
 )
 def faq_sync_task(self, task_id: str, documents: list[dict], collection_name: str):
     """
-    Async FAQ ingestion task.
+    Async FAQ ingestion task — additive upsert of the pushed documents.
+
+    `delete_scope=None`: a push carries only the caller's documents, so it must
+    never delete points it simply did not mention (Oracle's, or the FAQ files').
 
     Args:
         task_id: QueueRes task_id (for Redis status updates)
@@ -345,8 +328,7 @@ def faq_sync_task(self, task_id: str, documents: list[dict], collection_name: st
     _update_redis_status(task_id, "PROCESSING")
 
     try:
-        result = _run_ingestion(documents, collection_name)
-        _persist_faq_data(documents)
+        result = _run_incremental_sync(documents, collection_name, delete_scope=None)
 
         logger.info(
             "[faq_sync_task] SUCCESS task_id=%s upserted=%d",

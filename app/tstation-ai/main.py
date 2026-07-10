@@ -35,6 +35,9 @@ async def lifespan(app: FastAPI):
         f"gateway={settings.AI_GATEWAY_BASE_URL}"
     )
     # Warm up BM25 index so the first user request has no cold-start delay.
+    # Best-effort only: this service must boot regardless of whether the ingestion
+    # service has populated the FAQ collection yet. `ensure_built` retries on the
+    # first search, so a warmup miss costs latency, never correctness.
     if getattr(settings, "FAQ_SEARCH_MODE", "hybrid") == "hybrid":
         from services.tstation.rag.bm25_index import get_bm25_index
         from services.tstation.rag.qdrant_service import get_qdrant_service
@@ -48,7 +51,10 @@ async def lifespan(app: FastAPI):
             get_bm25_index().ensure_built(qdrant.client, settings.QDRANT_COLLECTION_FAQ)
             logger.info("[BM25] index warmup complete (%s)", settings.QDRANT_COLLECTION_FAQ)
 
-        await anyio.to_thread.run_sync(_warmup_bm25)
+        try:
+            await anyio.to_thread.run_sync(_warmup_bm25)
+        except Exception:
+            logger.warning("[BM25] warmup skipped — index will build on first search", exc_info=True)
 
     # Tracer is already initialised at import time; flush on shutdown.
     yield
