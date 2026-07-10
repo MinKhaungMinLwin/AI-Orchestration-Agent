@@ -139,21 +139,6 @@ def _ready_cart_slots(slots: ConversationSlots) -> bool:
     )
 
 
-def _staggered_size_chip_slots(slots: ConversationSlots, *, tire_size: str, front_size: str, rear_size: str) -> dict:
-    values = {
-        "car_no": slots.car_no,
-        "car_lnc_cd": slots.car_lnc_cd,
-        "mbr_car_reg_seq": slots.mbr_car_reg_seq,
-        "car_model": slots.car_model,
-        "car_type": slots.car_type,
-        "vehicle_type": slots.vehicle_type,
-        "tire_size": tire_size,
-        "tire_size_front": front_size,
-        "tire_size_rear": rear_size,
-    }
-    return {key: value for key, value in values.items() if value not in (None, "", [], {})}
-
-
 def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
     front_size = str(slots.tire_size_front or "").strip()
     rear_size = str(slots.tire_size_rear or "").strip()
@@ -161,18 +146,9 @@ def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
     if not front_size or not rear_size or front_size == rear_size or selected_size:
         return None
 
-    front_slots = _staggered_size_chip_slots(
-        slots,
-        tire_size=front_size,
-        front_size=front_size,
-        rear_size=rear_size,
-    )
-    rear_slots = _staggered_size_chip_slots(
-        slots,
-        tire_size=rear_size,
-        front_size=front_size,
-        rear_size=rear_size,
-    )
+    base_slots = slots.model_dump(mode="json", exclude_none=True)
+    front_slots = {**base_slots, "tire_size": front_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
+    rear_slots = {**base_slots, "tire_size": rear_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
     car_model = str(slots.car_model or "").strip()
     car_no = str(slots.car_no or "").strip()
     if car_model or car_no:
@@ -288,18 +264,9 @@ def _staggered_simultaneous_purchase_event(
     if selected_size and _fills_transaction_slot(decision):
         return None
 
-    front_slots = _staggered_size_chip_slots(
-        slots,
-        tire_size=front_size,
-        front_size=front_size,
-        rear_size=rear_size,
-    )
-    rear_slots = _staggered_size_chip_slots(
-        slots,
-        tire_size=rear_size,
-        front_size=front_size,
-        rear_size=rear_size,
-    )
+    base_slots = slots.model_dump(mode="json", exclude_none=True)
+    front_slots = {**base_slots, "tire_size": front_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
+    rear_slots = {**base_slots, "tire_size": rear_size, "tire_size_front": front_size, "tire_size_rear": rear_size}
     answer = "\n".join([
         "전/후륜 규격이 다른 차량이라 두 규격을 한 번에 함께 구매 가능한지는 상품과 장착 매장 조건을 각각 확인해야 해요.",
         "현재 채팅에서는 선택한 규격 하나씩 추천/구매를 진행할 수 있습니다.",

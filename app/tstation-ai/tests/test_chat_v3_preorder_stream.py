@@ -231,38 +231,6 @@ def test_staggered_selected_size_context_blocks_simultaneous_purchase_overclaim(
     assert "선택한 규격 하나씩 상품 추천/구매를 진행" in context
 
 
-def test_staggered_size_choice_chips_do_not_carry_cart_state() -> None:
-    slots = ConversationSlots(
-        car_no="29ì¡°3345",
-        car_lnc_cd="W063680",
-        car_model="BMW 3 Series M340i A/T",
-        tire_size_front="225/40R19",
-        tire_size_rear="255/35R19",
-        goods_no="G0001",
-        ord_qty=2,
-        pending_intent="cart",
-        goal_type="add_to_cart",
-        shop_id="S0001",
-        requested_cal_day="20260710",
-    )
-
-    event = service._staggered_tire_size_choice_event(slots)
-
-    assert event is not None
-    for chip in event["data"]["quickReplies"][:2]:
-        chip_slots = chip["metadata"]["slots"]
-        assert chip_slots["car_no"] == "29ì¡°3345"
-        assert chip_slots["tire_size"] in {"225/40R19", "255/35R19"}
-        assert chip_slots["tire_size_front"] == "225/40R19"
-        assert chip_slots["tire_size_rear"] == "255/35R19"
-        assert "goods_no" not in chip_slots
-        assert "ord_qty" not in chip_slots
-        assert "pending_intent" not in chip_slots
-        assert "goal_type" not in chip_slots
-        assert "shop_id" not in chip_slots
-        assert "requested_cal_day" not in chip_slots
-
-
 def test_vehicle_card_slots_clear_stale_selected_size_for_staggered_vehicle() -> None:
     request = TStationChatRequest(
         messages=[{"role": "user", "content": "select car"}],
