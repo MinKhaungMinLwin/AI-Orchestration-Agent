@@ -23,6 +23,7 @@ from services.tstation.chat_v3.prompts.persona import (
     ERROR_RESPONSE,
     ORDER_HISTORY_GUIDANCE,
     RESERVATION_HISTORY_GUIDANCE,
+    SMART_PAY_GUIDANCE,
     STORE_SEARCH_FLOW_GUIDANCE,
     SYSTEM_PROMPT,
     TRANSACTION_WRITE_GUIDANCE,
@@ -482,6 +483,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         extra_context.append(STORE_SEARCH_FLOW_GUIDANCE)
         extra_context.append(ORDER_HISTORY_GUIDANCE)
         extra_context.append(RESERVATION_HISTORY_GUIDANCE)
+        extra_context.append(SMART_PAY_GUIDANCE)
     if "DISCOVERY" in domains:
         extra_context.append(VEHICLE_LOOKUP_GUIDANCE)
     static_faq_context = _static_faq_policy_context(decision)
