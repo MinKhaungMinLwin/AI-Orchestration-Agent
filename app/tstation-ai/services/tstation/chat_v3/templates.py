@@ -181,6 +181,20 @@ def _set_if_present(slots: ConversationSlots, field: str, value: Any) -> None:
     setattr(slots, field, value)
 
 
+_PRICE_STALE_FIELDS = ("payment_amount", "price_basis", "price_source_tool", "price_facts", "coupon_facts")
+
+
+def _set_product_slot(slots: ConversationSlots, field: str, value: Any) -> None:
+    """Selecting a different product/size invalidates conflicting saved price values — the price must be re-queried for the new selection."""
+    if value in (None, ""):
+        return
+    changed = getattr(slots, field) not in (None, "") and getattr(slots, field) != value
+    setattr(slots, field, value)
+    if changed:
+        for stale_field in _PRICE_STALE_FIELDS:
+            setattr(slots, stale_field, None)
+
+
 def _single_product(data: dict[str, Any]) -> dict[str, Any] | None:
     payload = data.get("data") if isinstance(data.get("data"), dict) else data
     items = payload.get("items") if isinstance(payload, dict) else None
@@ -414,7 +428,7 @@ def harvest_order_slots(slots: ConversationSlots, tool_calls: list[dict]) -> Con
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
         parsed = _parse_json(call.get("output"))
 
-        _set_if_present(slots, "goods_no", args.get("goods_no"))
+        _set_product_slot(slots, "goods_no", args.get("goods_no"))
         _set_if_present(slots, "ord_qty", _as_int(args.get("ord_qty")))
         _set_if_present(slots, "shop_id", args.get("shop_id"))
         _set_if_present(slots, "requested_cal_day", args.get("rsv_date") or args.get("requested_cal_day"))
@@ -424,10 +438,10 @@ def harvest_order_slots(slots: ConversationSlots, tool_calls: list[dict]) -> Con
         if name in _PRODUCT_TOOLS:
             item = _matching_single_product(parsed, slots)
             if item:
-                _set_if_present(slots, "goods_no", item.get("goods_no"))
+                _set_product_slot(slots, "goods_no", item.get("goods_no"))
                 _set_if_present(slots, "tire_model", item.get("goods_nm"))
                 _set_if_present(slots, "pending_product_name", item.get("goods_nm"))
-                _set_if_present(slots, "tire_size", normalize_tire_size(str(item.get("tire_size_1") or "")))
+                _set_product_slot(slots, "tire_size", normalize_tire_size(str(item.get("tire_size_1") or "")))
 
         if name in _STORE_SEARCH_TOOLS:
             store = _single_store(parsed)

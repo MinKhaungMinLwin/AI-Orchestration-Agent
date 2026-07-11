@@ -19,7 +19,7 @@ from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
 from services.tstation.chat_v3 import composer, context, memory, monitoring, qc, sse, templates
-from services.tstation.chat_v3.executor import ToolLoopExecutor, _tool_output_text
+from services.tstation.chat_v3.executor import ToolLoopExecutor
 from services.tstation.chat_v3.token_usage import TurnTokenUsage
 from services.tstation.quota_service import record_monthly_tokens
 from services.tstation.chat_v3.prompts.persona import (
@@ -45,7 +45,6 @@ from services.tstation.chat_v3.slots.derive import (
 )
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
-from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
 from services.tstation.policies.cta_registry import normalize_quickreply_ctas
 from services.tstation.policies.internal_product_code_policy import sanitize_internal_product_codes
@@ -59,8 +58,6 @@ _STREAM_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 _ADD_TO_CART_INTENT = "add_to_cart"
-_CART_CONFIRMATION_INTENT = "cart_confirmation"
-_ORDER_PREVIEW_TOOL = "present_order_preview_tool"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
 _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
@@ -83,25 +80,6 @@ def _tokens_enabled() -> bool:
     return bool(getattr(settings, "AI_CHAT_V3_STREAM_TOKENS", True))
 
 
-def _is_confirmed_cart_turn(
-    decision: RouteDecision | None,
-    slots: ConversationSlots,
-) -> bool:
-    if decision is None:
-        return False
-    cart_confirmation_intent = _CART_CONFIRMATION_INTENT in decision.intents
-    ready_cart_reaffirmed = (
-        _ADD_TO_CART_INTENT in decision.intents
-        and slots.goods_no
-        and slots.ord_qty
-    )
-    return bool(
-        (cart_confirmation_intent or ready_cart_reaffirmed)
-        and slots.goods_no
-        and slots.ord_qty
-    )
-
-
 def _normalize_add_to_cart_slots(decision: RouteDecision | None, slots: ConversationSlots) -> ConversationSlots:
     if decision is None or _ADD_TO_CART_INTENT not in decision.intents:
         return slots
@@ -112,38 +90,11 @@ def _normalize_add_to_cart_slots(decision: RouteDecision | None, slots: Conversa
     )
 
 
-def _cart_tool_args(slots: ConversationSlots) -> dict:
-    args = {"goods_no": slots.goods_no, "ord_qty": slots.ord_qty}
-    if slots.car_lnc_cd:
-        args["car_lnc_cd"] = slots.car_lnc_cd
-    return args
-
-
-def _cart_tool_args_from_mapping(args: dict, slots: ConversationSlots) -> dict | None:
-    goods_no = str(args.get("goods_no") or slots.goods_no or "").strip()
-    ord_qty = _as_int(args.get("ord_qty") or slots.ord_qty)
-    if not goods_no or ord_qty is None:
-        return None
-    cart_args: dict[str, object] = {"goods_no": goods_no, "ord_qty": ord_qty}
-    car_lnc_cd = str(args.get("car_lnc_cd") or slots.car_lnc_cd or "").strip()
-    if car_lnc_cd:
-        cart_args["car_lnc_cd"] = car_lnc_cd
-    return cart_args
-
-
 def _as_int(value: object) -> int | None:
     try:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def _ready_cart_slots(slots: ConversationSlots) -> bool:
-    return bool(
-        slots.goods_no
-        and slots.ord_qty
-        and (slots.pending_intent == "cart" or slots.goal_type == "add_to_cart")
-    )
 
 
 def _staggered_size_chip_slots(slots: ConversationSlots, *, tire_size: str, front_size: str, rear_size: str) -> dict:
@@ -296,31 +247,47 @@ def _staggered_simultaneous_purchase_event(
     }
 
 
-def _add_to_cart_tool_normalizer(slots: ConversationSlots, *, enabled: bool) -> Callable[[dict], dict]:
-    def normalize(call: dict) -> dict:
-        if not enabled or (call.get("name") or "") != _ORDER_PREVIEW_TOOL:
-            return call
-        args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        cart_args = _cart_tool_args_from_mapping(args, slots)
-        if cart_args is None:
-            return call
+_CART_BUTTON_ACTION = "add_to_cart"
+_CART_ACTION_KEYS = ("cta_action", "ctaAction", "actionId", "action_id")
 
-        normalized = dict(call)
-        normalized["name"] = _SAVE_TO_CART_TOOL
-        normalized["args"] = cart_args
-        return normalized
 
-    return normalize
+def _request_has_cart_button_action(request: TStationChatRequest) -> bool:
+    chip_metadata = (request.chip_context or {}).get("metadata") or {}
+    ui_action = request.ui_action or {}
+    ui_metadata = ui_action.get("metadata") if isinstance(ui_action.get("metadata"), dict) else {}
+    sources = [chip_metadata, ui_action, ui_metadata]
+    return any(
+        isinstance(source, dict)
+        and any(str(source.get(key) or "").strip() == _CART_BUTTON_ACTION for key in _CART_ACTION_KEYS)
+        for source in sources
+    )
+
+
+def _cart_write_guard(decision: RouteDecision | None, request: TStationChatRequest) -> Callable[[dict], str | None]:
+    """Save_to_cart_tool only runs on an explicit add-to-cart
+    request in the current turn or the Add-to-Cart button — enforced in code, not
+    only in prompts."""
+    allowed = bool(decision and _ADD_TO_CART_INTENT in decision.intents) or _request_has_cart_button_action(request)
+
+    def guard(call: dict) -> str | None:
+        if (call.get("name") or "") != _SAVE_TO_CART_TOOL or allowed:
+            return None
+        return (
+            "save_to_cart_tool is only allowed when the user explicitly asked to add to cart "
+            "in the current turn or pressed the add-to-cart button. Do not add to cart now — "
+            "ask the user whether they want to add the item to the cart instead."
+        )
+
+    return guard
 
 
 _QTY_CAPPED_TOOLS = {_SAVE_TO_CART_TOOL, "quick_order_tool"}
 
 
-def _staggered_qty_tool_normalizer(slots: ConversationSlots, inner: Callable[[dict], dict]) -> Callable[[dict], dict]:
+def _staggered_qty_tool_normalizer(slots: ConversationSlots) -> Callable[[dict], dict]:
     """Cap quantities the LLM passes as tool args at 2 for staggered vehicles."""
 
     def normalize(call: dict) -> dict:
-        call = inner(call)
         if not is_staggered_vehicle(slots) or (call.get("name") or "") not in _QTY_CAPPED_TOOLS:
             return call
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
@@ -330,14 +297,6 @@ def _staggered_qty_tool_normalizer(slots: ConversationSlots, inner: Callable[[di
         return {**call, "args": {**args, "ord_qty": STAGGERED_MAX_ORD_QTY}}
 
     return normalize
-
-
-def _cart_tool_success(output_text: str) -> bool:
-    try:
-        parsed = json.loads(output_text)
-    except (TypeError, ValueError):
-        return False
-    return isinstance(parsed, dict) and parsed.get("status") == "success"
 
 
 def _allow_selection_cards(decision: RouteDecision | None) -> bool:
@@ -703,86 +662,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         )
         return
 
-    if _is_confirmed_cart_turn(decision, slots):
-        tool = next((candidate for candidate in tools_for_domains(["TRANSACTION"]) if candidate.name == _SAVE_TO_CART_TOOL), None)
-        args = _cart_tool_args(slots)
-        display = _tool_display_names().get(_SAVE_TO_CART_TOOL, _SAVE_TO_CART_TOOL)
-        yield sse.agent_flow("[V3 TRANSACTION FLOW]", "start")
-        yield sse.tool_start(_SAVE_TO_CART_TOOL, display)
-        if tool is None:
-            output_text = f"Unknown tool: {_SAVE_TO_CART_TOOL}"
-        else:
-            try:
-                output = await tool.ainvoke(
-                    args,
-                    config=_trace_config(
-                        request,
-                        run_name="chat_v3_confirmed_cart_tool",
-                        prompt_name="chat_v3_confirmed_cart_tool",
-                        tags=["tool_loop", "cart_confirmation"],
-                        parent_span_id=parent_span_id,
-                        usage_tracker=usage_tracker,
-                    ),
-                )
-                output_text = _tool_output_text(output)
-            except Exception as exc:
-                logger.exception("[CHAT_V3] confirmed cart tool failed")
-                output_text = f"Tool error: {exc}"
-        tool_call = {"name": _SAVE_TO_CART_TOOL, "args": args, "output": output_text}
-        success = _cart_tool_success(output_text)
-        yield sse.tool_result(_SAVE_TO_CART_TOOL, args, output_text[:4000])
-        yield sse.agent_flow(display, "success" if success else "error")
-        if success:
-            answer = "장바구니에 담았어요. 바로 주문하시겠어요?"
-            chips = [
-                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
-                {"label": "주문 내역 보기", "domain": "TRANSACTION", "url": CTAUrls.ORDER_HISTORY},
-            ]
-        else:
-            answer = "장바구니 담기 중 문제가 생겼어요. 다시 시도해 주세요."
-            chips = [{"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART}]
-        result["answer"] = answer
-        if _tokens_enabled():
-            yield sse.token(answer)
-        yield sse.message(answer)
-        yield sse.data_event(
-            "quickReply",
-            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": ["TRANSACTION"]},
-            source_domain="TRANSACTION",
-        )
-        _update_trace_monitoring(
-            route_domains=domains,
-            tool_calls=[tool_call],
-            final_template="quickReply",
-            trace_id=request.tracing_id,
-            parent_span_id=parent_span_id,
-            session_id=request.session_id,
-            user_id=request.user_id,
-            answer=answer,
-            user_text=user_text,
-            message_id=message_id,
-            route_intents=list(decision.intents if decision else []),
-            latency_ms=int((time.perf_counter() - t0) * 1000),
-            trace_observation=parent_span,
-        )
-        if parent_span is not None:
-            parent_span.end()
-        _flush_trace()
-        await _record_real_usage(request, usage_tracker)
-        yield sse.agent_flow("[DONE]", "success")
-        for event in sse.done():
-            yield event
-        slots = derive_slots_from_tool_calls(slots, [tool_call])
-        await save_slots(request.session_id, slots, user_id=request.user_id)
-        await memory.persist_turn_context(
-            request.session_id,
-            tool_calls=[tool_call],
-            quick_reply_domains=[chip["domain"] for chip in chips],
-            predicted_domains=["TRANSACTION"],
-            user_id=request.user_id,
-        )
-        return
-
     extra_context = []
     if "TRANSACTION" in domains:
         extra_context.append(TRANSACTION_WRITE_GUIDANCE)
@@ -816,13 +695,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             parent_span_id=parent_span_id,
             usage_tracker=usage_tracker,
         ),
-        tool_call_normalizer=_staggered_qty_tool_normalizer(
-            slots,
-            _add_to_cart_tool_normalizer(
-                slots,
-                enabled=bool(decision and {_ADD_TO_CART_INTENT, _CART_CONFIRMATION_INTENT}.intersection(decision.intents)),
-            ),
-        ),
+        tool_call_normalizer=_staggered_qty_tool_normalizer(slots),
+        tool_call_guard=_cart_write_guard(decision, request),
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")
     token_events: list[str] = []

@@ -78,28 +78,12 @@ def test_preorder_stream_does_not_emit_duplicate_message(monkeypatch: pytest.Mon
     asyncio.run(_assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch))
 
 
-def test_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    asyncio.run(_assert_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch))
+def test_cart_confirmation_turn_does_not_write_cart_directly(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_cart_turn_goes_through_executor(monkeypatch, intent="cart_confirmation"))
 
 
-def test_reaffirmed_add_to_cart_stream_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    asyncio.run(_assert_confirmed_cart_stream_executes_save_to_cart_tool(monkeypatch, intent="add_to_cart"))
-
-
-def test_reaffirmed_add_to_cart_with_same_quantity_executes_save_to_cart_tool(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    asyncio.run(
-        _assert_confirmed_cart_stream_executes_save_to_cart_tool(
-            monkeypatch,
-            intent="add_to_cart",
-            slots_patch=SlotsPatch(ord_qty=4),
-        )
-    )
-
-
-def test_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    asyncio.run(_assert_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypatch))
+def test_add_to_cart_intent_goes_through_executor_not_direct_cart(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_cart_turn_goes_through_executor(monkeypatch, intent="add_to_cart"))
 
 
 def test_fe_vehicle_patch_preserves_staggered_sizes_without_selecting_one() -> None:
@@ -347,7 +331,7 @@ def test_same_size_vehicle_ord_qty_is_not_clamped() -> None:
 
 def test_staggered_qty_tool_normalizer_caps_cart_and_order_args() -> None:
     slots = ConversationSlots(tire_size_front="225/40R19", tire_size_rear="255/35R19")
-    normalize = service._staggered_qty_tool_normalizer(slots, lambda call: call)
+    normalize = service._staggered_qty_tool_normalizer(slots)
 
     cart_call = normalize({"name": "save_to_cart_tool", "args": {"goods_no": "G0001", "ord_qty": 4}})
     order_call = normalize({"name": "quick_order_tool", "args": {"goods_no": "G0001", "ord_qty": 3, "shop_id": "C1"}})
@@ -358,7 +342,7 @@ def test_staggered_qty_tool_normalizer_caps_cart_and_order_args() -> None:
 
 def test_staggered_qty_tool_normalizer_ignores_same_size_vehicle() -> None:
     slots = ConversationSlots(tire_size_front="225/45R17", tire_size_rear="225/45R17")
-    normalize = service._staggered_qty_tool_normalizer(slots, lambda call: call)
+    normalize = service._staggered_qty_tool_normalizer(slots)
 
     call = normalize({"name": "save_to_cart_tool", "args": {"goods_no": "G0001", "ord_qty": 4}})
 
@@ -441,28 +425,69 @@ def test_staggered_region_followup_bypasses_simultaneous_purchase_guard(monkeypa
     asyncio.run(_assert_staggered_region_followup_bypasses_simultaneous_purchase_guard(monkeypatch))
 
 
-def test_duplicate_cart_preview_tool_call_redirects_to_save_to_cart() -> None:
-    slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
-    normalize = service._add_to_cart_tool_normalizer(slots, enabled=True)
-
-    normalized = normalize(
-        {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 4}, "id": "call-1"}
+def test_cart_write_guard_blocks_save_to_cart_without_explicit_request() -> None:
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["price_check"])
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "네"}], stream=True, user_id="u", session_id="s"
     )
+    guard = service._cart_write_guard(decision, request)
 
-    assert normalized["name"] == "save_to_cart_tool"
-    assert normalized["args"] == {"goods_no": "G0001", "ord_qty": 4}
-    assert normalized["id"] == "call-1"
+    assert guard({"name": "save_to_cart_tool", "args": {"goods_no": "G1", "ord_qty": 2}}) is not None
+    assert guard({"name": "get_final_price_tool", "args": {"goods_no": "G1"}}) is None
 
 
-def test_add_to_cart_preview_tool_call_redirects_with_tool_args() -> None:
+def test_cart_write_guard_allows_explicit_intent_or_cart_button() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "장바구니에 담아줘"}], stream=True, user_id="u", session_id="s"
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"])
+    assert service._cart_write_guard(decision, request)({"name": "save_to_cart_tool", "args": {}}) is None
+
+    button_request = TStationChatRequest(
+        messages=[{"role": "user", "content": "장바구니 담기"}],
+        stream=True,
+        user_id="u",
+        session_id="s",
+        chip_context={"metadata": {"cta_action": "add_to_cart"}},
+    )
+    no_intent = RouteDecision(domain=Domain.TRANSACTION, intents=[])
+    assert service._cart_write_guard(no_intent, button_request)({"name": "save_to_cart_tool", "args": {}}) is None
+
+
+def test_executor_guard_blocks_tool_invocation() -> None:
+    asyncio.run(_assert_executor_guard_blocks_tool_invocation())
+
+
+async def _assert_executor_guard_blocks_tool_invocation() -> None:
+    invoked = []
+
+    class FakeCartTool:
+        name = "save_to_cart_tool"
+
+        async def ainvoke(self, args, config=None):
+            invoked.append(args)
+            return {"status": "success"}
+
+    executor = service.ToolLoopExecutor(
+        [],
+        [FakeCartTool()],
+        {},
+        tool_call_guard=lambda call: "blocked" if call.get("name") == "save_to_cart_tool" else None,
+    )
+    events = []
+    async for event in executor._run_tool({"name": "save_to_cart_tool", "args": {"goods_no": "G1", "ord_qty": 1}, "id": "c1"}):
+        events.append(event)
+
+    assert not invoked, "guarded tool must not be invoked"
+    assert executor.tool_calls[0]["output"].startswith("Tool error: blocked_by_policy")
+
+
+def test_preview_tool_call_is_never_rewritten_to_cart_write() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
-    normalize = service._add_to_cart_tool_normalizer(slots, enabled=True)
-    call = {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 2}}
+    normalize = service._staggered_qty_tool_normalizer(slots)
+    call = {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 4}, "id": "call-1"}
 
-    normalized = normalize(call)
-
-    assert normalized["name"] == "save_to_cart_tool"
-    assert normalized["args"] == {"goods_no": "G0001", "ord_qty": 2}
+    assert normalize(call) is call
 
 
 async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
@@ -814,152 +839,60 @@ async def _assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(
     assert saved_slots[0].tire_size is None
 
 
-def test_cart_preview_tool_call_is_preserved_when_guard_disabled() -> None:
-    slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
-    normalize = service._add_to_cart_tool_normalizer(slots, enabled=False)
-    call = {"name": "present_order_preview_tool", "args": {"goods_no": "G0001", "ord_qty": 4}}
-
-    assert normalize(call) is call
-
-
-async def _assert_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+async def _assert_cart_turn_goes_through_executor(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    intent: str,
+) -> None:
+    """고객 요구사항: 어떤 intent 도 장바구니 쓰기를 직접 실행하지 않는다 —
+    save_to_cart_tool 은 항상 일반 tool executor 루프를 통해서만 호출된다."""
     slots = ConversationSlots(
         goods_no="G0001",
-        tire_size="225/45R17",
-        pending_product_name="Ventus V12 Evo2 225/45R17",
+        ord_qty=4,
+        pending_product_name="Ventus S2 AS 225/45R17",
     )
-    decision = RouteDecision(
-        domain=Domain.TRANSACTION,
-        intents=["add_to_cart"],
-        slots_patch=SlotsPatch(ord_qty=4),
-    )
-    saved_slots = []
-    persisted_tool_calls = []
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=[intent])
+    executor_created = []
 
-    class FakeCartTool:
-        name = "save_to_cart_tool"
-
-        async def ainvoke(self, args, config=None):
-            assert args == {"goods_no": "G0001", "ord_qty": 4}
-            return {"status": "success", "http_status": 200, "data": {"result": True}}
-
-    class ForbiddenExecutor:
+    class FakeExecutor:
         def __init__(self, *args, **kwargs) -> None:
-            raise AssertionError("add-to-cart request should execute save_to_cart_tool without preOrder")
+            executor_created.append(True)
+            self.final_text = "장바구니에 담아드릴까요?"
+            self.tool_calls = []
+
+        async def stream(self):
+            yield service.sse.token("장바구니에 담아드릴까요?")
 
     async def fake_route_request(*args, **kwargs):
-        assert kwargs["known_slots"].goods_no == "G0001"
         return decision
 
     async def fake_load_slots(session_id):
         return slots
 
-    async def fake_save_slots(session_id, next_slots, user_id=None):
-        saved_slots.append(next_slots)
-
-    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
-        persisted_tool_calls.extend(tool_calls)
+    async def fake_verify_answer(answer, tool_calls, trace_config):
+        return answer
 
     async def fake_noop(*args, **kwargs):
         return None
 
     monkeypatch.setattr(service, "route_request", fake_route_request)
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
-    monkeypatch.setattr(service, "save_slots", fake_save_slots)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [FakeCartTool()])
-    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
-    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
-    monkeypatch.setattr(service, "_tool_display_names", lambda: {"save_to_cart_tool": "장바구니에 담는 중..."})
-    monkeypatch.setattr(service, "_flush_trace", lambda: None)
-
-    request = TStationChatRequest(
-        messages=[
-            {"role": "assistant", "content": "Ventus V12 Evo2 225/45R17"},
-            {"role": "user", "content": "4개 장바구니에 담아줘"},
-        ],
-        stream=True,
-        user_id="test-user",
-        session_id="cart-preorder-stream-test",
-    )
-
-    events = []
-    async for line in service._run_turn(request, {}):
-        event = _parse_sse_event(line)
-        if event:
-            events.append(event)
-
-    tool_events = [event for event in events if event.get("type") == "tool"]
-    assert tool_events
-    assert tool_events[0]["tool"] == "save_to_cart_tool"
-    assert "장바구니에 담았어요" in next(
-        event["content"] for event in events if event.get("type") == "message"
-    )
-    assert persisted_tool_calls[0]["name"] == "save_to_cart_tool"
-    assert saved_slots[0].pending_intent == "cart"
-    assert saved_slots[0].goal_type == "add_to_cart"
-
-
-async def _assert_confirmed_cart_stream_executes_save_to_cart_tool(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    intent: str = "cart_confirmation",
-    slots_patch: SlotsPatch | None = None,
-) -> None:
-    slots = ConversationSlots(
-        goods_no="G0001",
-        ord_qty=4,
-        pending_product_name="Ventus S2 AS 225/45R17",
-    )
-    decision = RouteDecision(
-        domain=Domain.TRANSACTION,
-        intents=[intent],
-        slots_patch=slots_patch or SlotsPatch(),
-    )
-    saved_slots = []
-    persisted_tool_calls = []
-
-    class FakeCartTool:
-        name = "save_to_cart_tool"
-
-        async def ainvoke(self, args, config=None):
-            assert args == {"goods_no": "G0001", "ord_qty": 4}
-            return {"status": "success", "http_status": 200, "data": {"result": True}}
-
-    class ForbiddenExecutor:
-        def __init__(self, *args, **kwargs) -> None:
-            raise AssertionError("confirmed cart should execute save_to_cart_tool without re-running the LLM loop")
-
-    async def fake_route_request(*args, **kwargs):
-        assert kwargs["known_slots"].goods_no == "G0001"
-        assert kwargs["known_slots"].ord_qty == 4
-        return decision
-
-    async def fake_load_slots(session_id):
-        return slots
-
-    async def fake_save_slots(session_id, next_slots, user_id=None):
-        saved_slots.append(next_slots)
-
-    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
-        persisted_tool_calls.extend(tool_calls)
-
-    monkeypatch.setattr(service, "route_request", fake_route_request)
-    monkeypatch.setattr(service, "load_slots", fake_load_slots)
-    monkeypatch.setattr(service, "save_slots", fake_save_slots)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [FakeCartTool()])
-    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
-    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
-    monkeypatch.setattr(service, "_tool_display_names", lambda: {"save_to_cart_tool": "장바구니에 담는 중..."})
+    monkeypatch.setattr(service, "save_slots", fake_noop)
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
+    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
 
     request = TStationChatRequest(
         messages=[
             {"role": "assistant", "content": "맞으면 장바구니에 담아드릴게요."},
-            {"role": "user", "content": "네 담아줘"},
+            {"role": "user", "content": "네"},
         ],
         stream=True,
         user_id="test-user",
-        session_id="confirmed-cart-stream-test",
+        session_id=f"cart-executor-only-{intent}",
     )
 
     events = []
@@ -968,14 +901,11 @@ async def _assert_confirmed_cart_stream_executes_save_to_cart_tool(
         if event:
             events.append(event)
 
-    tool_events = [event for event in events if event.get("type") == "tool"]
-    assert tool_events
-    assert tool_events[0]["tool"] == "save_to_cart_tool"
-    assert "장바구니에 담았어요" in next(
-        event["content"] for event in events if event.get("type") == "message"
-    )
-    assert persisted_tool_calls[0]["name"] == "save_to_cart_tool"
-    assert saved_slots
+    assert executor_created, "cart turns must run the normal executor loop"
+    cart_tool_events = [
+        event for event in events if event.get("type") == "tool" and event.get("tool") == "save_to_cart_tool"
+    ]
+    assert not cart_tool_events, "no deterministic save_to_cart_tool call outside the executor"
 
 
 async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: pytest.MonkeyPatch) -> None:
