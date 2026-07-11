@@ -125,9 +125,12 @@ def test_router_prompt_routes_late_night_store_hours_to_static_policy():
     assert "get_stores_with_time_filter_tool 로 매장 목록을 확정하지 마세요" in static_faq_section
 
 
-def test_router_prompt_defines_cart_confirmation_intent():
+def test_router_prompt_requires_explicit_cart_request():
     assert "add_to_cart" in ROUTER_PROMPT
     assert "pending_intent=\"cart\"" in ROUTER_PROMPT
-    assert "cart_confirmation" in ROUTER_PROMPT
-    assert "확인 카드(preOrder)를 요구하지 않는 직접 실행 흐름" in ROUTER_PROMPT
-    assert "고정 문구가 아니라 승인/동의/진행 의도 기준" in ROUTER_PROMPT
+    # 고객 요구사항: 짧은 동의/수량 선택은 장바구니 요청이 아니며,
+    # cart_confirmation 자동 실행 규칙은 존재하지 않아야 한다.
+    assert "cart_confirmation" not in ROUTER_PROMPT
+    assert "명시적으로 장바구니 담기를 요청한 경우" in ROUTER_PROMPT
+    assert "짧은 동의 발화는 장바구니 담기 요청이" in ROUTER_PROMPT
+    assert "짧은 승인/동의 발화만으로 장바구니 담기를 실행 의도로 분류하지 마세요" in ROUTER_PROMPT
