@@ -104,6 +104,25 @@ def _vehicle_size_patch(merged: dict, *, allow_selected_size: bool = True) -> di
     return values
 
 
+# Staggered vehicles allow at most 2 tires per order, typed input included.
+STAGGERED_MAX_ORD_QTY = 2
+
+
+def is_staggered_vehicle(slots: ConversationSlots) -> bool:
+    front = str(slots.tire_size_front or "").strip()
+    rear = str(slots.tire_size_rear or "").strip()
+    return bool(front and rear and front != rear)
+
+
+def clamp_staggered_ord_qty(slots: ConversationSlots) -> ConversationSlots:
+    if not is_staggered_vehicle(slots):
+        return slots
+    qty = slots.ord_qty
+    if isinstance(qty, int) and qty > STAGGERED_MAX_ORD_QTY:
+        return slots.model_copy(update={"ord_qty": STAGGERED_MAX_ORD_QTY})
+    return slots
+
+
 def _clear_unconfirmed_staggered_size(slots: ConversationSlots, values: dict) -> ConversationSlots:
     if (
         "tire_size" not in values

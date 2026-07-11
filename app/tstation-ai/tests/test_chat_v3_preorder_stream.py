@@ -55,7 +55,12 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/2"
 
 from services.tstation.chat_v3 import service  # noqa: E402
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
-from services.tstation.chat_v3.slots.derive import apply_fe_slots, apply_text_vehicle_selection, derive_slots_from_tool_calls  # noqa: E402
+from services.tstation.chat_v3.slots.derive import (  # noqa: E402
+    apply_fe_slots,
+    apply_text_vehicle_selection,
+    clamp_staggered_ord_qty,
+    derive_slots_from_tool_calls,
+)
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 from services.tstation.chat_v3.slots.store import slots_context_block  # noqa: E402
 
@@ -322,6 +327,44 @@ def test_text_vehicle_selection_recovers_staggered_sizes_from_previous_candidate
     assert slots.tire_size_rear == "255/35R19"
 
 
+def test_staggered_ord_qty_is_clamped_to_two_even_when_typed() -> None:
+    slots = ConversationSlots(tire_size_front="225/40R19", tire_size_rear="255/35R19", ord_qty=4)
+
+    assert clamp_staggered_ord_qty(slots).ord_qty == 2
+
+
+def test_staggered_ord_qty_within_limit_is_kept() -> None:
+    slots = ConversationSlots(tire_size_front="225/40R19", tire_size_rear="255/35R19", ord_qty=1)
+
+    assert clamp_staggered_ord_qty(slots).ord_qty == 1
+
+
+def test_same_size_vehicle_ord_qty_is_not_clamped() -> None:
+    slots = ConversationSlots(tire_size_front="225/45R17", tire_size_rear="225/45R17", ord_qty=4)
+
+    assert clamp_staggered_ord_qty(slots).ord_qty == 4
+
+
+def test_staggered_qty_tool_normalizer_caps_cart_and_order_args() -> None:
+    slots = ConversationSlots(tire_size_front="225/40R19", tire_size_rear="255/35R19")
+    normalize = service._staggered_qty_tool_normalizer(slots, lambda call: call)
+
+    cart_call = normalize({"name": "save_to_cart_tool", "args": {"goods_no": "G0001", "ord_qty": 4}})
+    order_call = normalize({"name": "quick_order_tool", "args": {"goods_no": "G0001", "ord_qty": 3, "shop_id": "C1"}})
+
+    assert cart_call["args"]["ord_qty"] == 2
+    assert order_call["args"]["ord_qty"] == 2
+
+
+def test_staggered_qty_tool_normalizer_ignores_same_size_vehicle() -> None:
+    slots = ConversationSlots(tire_size_front="225/45R17", tire_size_rear="225/45R17")
+    normalize = service._staggered_qty_tool_normalizer(slots, lambda call: call)
+
+    call = normalize({"name": "save_to_cart_tool", "args": {"goods_no": "G0001", "ord_qty": 4}})
+
+    assert call["args"]["ord_qty"] == 4
+
+
 def test_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch))
 
@@ -482,14 +525,13 @@ async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
     assert expected_front_size in data_events[0]["data"]["assistantResponse"]
     assert expected_rear_size in data_events[0]["data"]["assistantResponse"]
     assert [chip["label"] for chip in data_events[0]["data"]["quickReplies"]] == [
-        "앞바퀴사이즈",
-        "뒷바퀴사이즈",
-        "다른 사이즈 입력",
+        f"앞 타이어 {expected_front_size}",
+        f"뒤 타이어 {expected_rear_size}",
     ]
     assert data_events[0]["data"]["quickReplies"][0]["metadata"]["slots"]["tire_size"] == expected_front_size
     assert data_events[0]["data"]["quickReplies"][1]["metadata"]["slots"]["tire_size"] == expected_rear_size
     assert saved_slots[0].tire_size is None
-    assert persisted_domains == ["DISCOVERY", "DISCOVERY", "DISCOVERY"]
+    assert persisted_domains == ["DISCOVERY", "DISCOVERY"]
 
 
 async def _assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
@@ -550,12 +592,11 @@ async def _assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
     assert "한 번에 함께 구매 가능한지는" in answer
     assert "선택한 규격 하나씩 추천/구매" in answer
     assert [chip["label"] for chip in data_events[0]["data"]["quickReplies"]] == [
-        "앞바퀴사이즈",
-        "뒷바퀴사이즈",
-        "다른 사이즈 입력",
+        "앞 타이어 225/40R19",
+        "뒤 타이어 255/35R19",
     ]
     assert saved_slots[0].tire_size == "225/40R19"
-    assert persisted_domains == ["DISCOVERY", "DISCOVERY", "DISCOVERY"]
+    assert persisted_domains == ["DISCOVERY", "DISCOVERY"]
 
 
 async def _assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(
@@ -769,8 +810,7 @@ async def _assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(
     assert data_events[0]["template"] == "quickReply"
     assert "225/40R19" in data_events[0]["data"]["assistantResponse"]
     assert "255/35R19" in data_events[0]["data"]["assistantResponse"]
-    assert "3-series(G20 F/L2) M340i A/T" in data_events[0]["data"]["assistantResponse"]
-    assert "29ì¡°3345" in data_events[0]["data"]["assistantResponse"]
+    assert "앞/뒤 타이어 규격이 다른 차량으로 확인되었습니다" in data_events[0]["data"]["assistantResponse"]
     assert saved_slots[0].tire_size is None
 
 

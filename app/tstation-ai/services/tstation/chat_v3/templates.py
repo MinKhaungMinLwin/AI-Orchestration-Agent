@@ -32,6 +32,7 @@ from services.tstation.agents.templates.schemas import (
     QnaCompleteTemplate,
 )
 from services.tstation.chat_v3.llm import get_router_llm
+from services.tstation.chat_v3.slots.derive import STAGGERED_MAX_ORD_QTY, is_staggered_vehicle
 from services.tstation.chat_v3.prompts.templates import TEMPLATE_BUILDER_PROMPT
 from services.tstation.chat_v3.router.schemas import RouteDecision
 from services.tstation.common.cta_urls import CTAUrls
@@ -1437,21 +1438,20 @@ def _is_quantity_required_flow(slots: ConversationSlots | None, decision: RouteD
     return False
 
 
-def _has_all_quantity_options(answer: str) -> bool:
-    text = str(answer or "")
-    return all(chip["label"] in text for chip in _QUANTITY_QUICK_REPLIES)
-
-
 def quantity_quick_replies(slots: ConversationSlots | None, decision: RouteDecision | None = None) -> list[dict[str, str]]:
     if not _is_quantity_required_flow(slots, decision):
         return []
-    return [dict(chip) for chip in _QUANTITY_QUICK_REPLIES]
+    # Staggered vehicles only offer 1개/2개 quantity options.
+    limit = STAGGERED_MAX_ORD_QTY if slots is not None and is_staggered_vehicle(slots) else len(_QUANTITY_QUICK_REPLIES)
+    return [dict(chip) for chip in _QUANTITY_QUICK_REPLIES[:limit]]
 
 
 def ensure_quantity_options(answer: str, slots: ConversationSlots | None, decision: RouteDecision | None = None) -> str:
-    if not quantity_quick_replies(slots, decision) or _has_all_quantity_options(answer):
+    chips = quantity_quick_replies(slots, decision)
+    if not chips or all(chip["label"] in str(answer or "") for chip in chips):
         return answer
-    return compact_answer_spacing(f"{answer}\n수량은 1개, 2개, 3개, 4개 중에서 선택해 주세요.")
+    labels = ", ".join(chip["label"] for chip in chips)
+    return compact_answer_spacing(f"{answer}\n수량은 {labels} 중에서 선택해 주세요.")
 
 
 # 답변이 수량 입력을 요청하는데 slot 기반 booking_flow_hint 가 매장/지역 chip 을

@@ -35,7 +35,14 @@ from services.tstation.chat_v3.prompts.persona import (
 from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision
-from services.tstation.chat_v3.slots.derive import apply_fe_slots, apply_text_vehicle_selection, derive_slots_from_tool_calls
+from services.tstation.chat_v3.slots.derive import (
+    STAGGERED_MAX_ORD_QTY,
+    apply_fe_slots,
+    apply_text_vehicle_selection,
+    clamp_staggered_ord_qty,
+    derive_slots_from_tool_calls,
+    is_staggered_vehicle,
+)
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
 from services.tstation.common.cta_urls import CTAUrls
@@ -59,9 +66,9 @@ _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
     "staggered_simultaneous_purchase_inquiry",
 }
-_FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
-_REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
-_CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
+# Staggered vehicles show exactly 2 buttons labeled with the size values.
+_FRONT_TIRE_CHIP_PREFIX = "앞 타이어"
+_REAR_TIRE_CHIP_PREFIX = "뒤 타이어"
 _SELECTED_TIRE_SIZE_KEYS = {"tire_size", "tireSize"}
 _TRANSACTION_SLOT_FILL_FIELDS = {"region", "shop_id", "shop_name", "requested_cal_day", "rsv_hour"}
 
@@ -173,31 +180,17 @@ def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
         front_size=front_size,
         rear_size=rear_size,
     )
-    car_model = str(slots.car_model or "").strip()
-    car_no = str(slots.car_no or "").strip()
-    if car_model or car_no:
-        vehicle_name = car_model or car_no
-        detail_lines = [f"선택하신 차량은 **{vehicle_name}**입니다."]
-        if car_no and car_no != vehicle_name:
-            detail_lines.append(f"- 차량번호: **{car_no}**")
-        if car_model and car_model != vehicle_name:
-            detail_lines.append(f"- 모델: **{car_model}**")
-        detail_lines.extend([
-            f"- 앞 타이어: **{front_size}**",
-            f"- 뒤 타이어: **{rear_size}**",
-            "",
-            "이 차량은 앞/뒤 타이어 규격이 다른 차량이라, 타이어 추천이나 구매 시 어떤 사이즈로 진행할지 먼저 확인해드릴게요.",
-        ])
-        answer = "\n".join(detail_lines)
-    else:
-        answer = (
-            f"차량의 앞/뒤 타이어 사이즈가 다릅니다. 전륜 **{front_size}**, 후륜 **{rear_size}** 중 "
-            "어떤 사이즈로 진행할까요?"
-        )
+    # notice message + exactly 2 front/rear size buttons.
+    answer = "\n".join([
+        "앞/뒤 타이어 규격이 다른 차량으로 확인되었습니다.",
+        f"- 앞 타이어: {front_size}",
+        f"- 뒤 타이어: {rear_size}",
+        "",
+        "계속 진행할 규격을 선택해 주세요.",
+    ])
     chips = [
-        {"label": _FRONT_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": front_slots}},
-        {"label": _REAR_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": rear_slots}},
-        {"label": _CUSTOM_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+        {"label": f"{_FRONT_TIRE_CHIP_PREFIX} {front_size}", "domain": "DISCOVERY", "metadata": {"slots": front_slots}},
+        {"label": f"{_REAR_TIRE_CHIP_PREFIX} {rear_size}", "domain": "DISCOVERY", "metadata": {"slots": rear_slots}},
     ]
     return {
         "type": "data",
@@ -287,9 +280,8 @@ def _staggered_simultaneous_purchase_event(
         "먼저 진행할 규격을 선택해 주세요.",
     ])
     chips = [
-        {"label": _FRONT_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": front_slots}},
-        {"label": _REAR_TIRE_CHIP_LABEL, "domain": "DISCOVERY", "metadata": {"slots": rear_slots}},
-        {"label": _CUSTOM_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
+        {"label": f"{_FRONT_TIRE_CHIP_PREFIX} {front_size}", "domain": "DISCOVERY", "metadata": {"slots": front_slots}},
+        {"label": f"{_REAR_TIRE_CHIP_PREFIX} {rear_size}", "domain": "DISCOVERY", "metadata": {"slots": rear_slots}},
     ]
     return {
         "type": "data",
@@ -317,6 +309,25 @@ def _add_to_cart_tool_normalizer(slots: ConversationSlots, *, enabled: bool) -> 
         normalized["name"] = _SAVE_TO_CART_TOOL
         normalized["args"] = cart_args
         return normalized
+
+    return normalize
+
+
+_QTY_CAPPED_TOOLS = {_SAVE_TO_CART_TOOL, "quick_order_tool"}
+
+
+def _staggered_qty_tool_normalizer(slots: ConversationSlots, inner: Callable[[dict], dict]) -> Callable[[dict], dict]:
+    """Cap quantities the LLM passes as tool args at 2 for staggered vehicles."""
+
+    def normalize(call: dict) -> dict:
+        call = inner(call)
+        if not is_staggered_vehicle(slots) or (call.get("name") or "") not in _QTY_CAPPED_TOOLS:
+            return call
+        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        qty = _as_int(args.get("ord_qty"))
+        if qty is None or qty <= STAGGERED_MAX_ORD_QTY:
+            return call
+        return {**call, "args": {**args, "ord_qty": STAGGERED_MAX_ORD_QTY}}
 
     return normalize
 
@@ -598,6 +609,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     domain = domains[0]
     recovered_staggered_size_event = _staggered_tire_size_choice_event(slots)
     slots = apply_patch(slots, decision.slots_patch if decision else None)
+    # Staggered vehicles: even a typed quantity is capped at 2.
+    slots = clamp_staggered_ord_qty(slots)
     slots = _normalize_add_to_cart_slots(decision, slots)
 
     staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
@@ -803,9 +816,12 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             parent_span_id=parent_span_id,
             usage_tracker=usage_tracker,
         ),
-        tool_call_normalizer=_add_to_cart_tool_normalizer(
+        tool_call_normalizer=_staggered_qty_tool_normalizer(
             slots,
-            enabled=bool(decision and {_ADD_TO_CART_INTENT, _CART_CONFIRMATION_INTENT}.intersection(decision.intents)),
+            _add_to_cart_tool_normalizer(
+                slots,
+                enabled=bool(decision and {_ADD_TO_CART_INTENT, _CART_CONFIRMATION_INTENT}.intersection(decision.intents)),
+            ),
         ),
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")
@@ -826,6 +842,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     # have their required args even when a later turn no longer re-calls the tools.
     slots_before_harvest = slots.model_copy()
     slots = templates.harvest_order_slots(slots, executor.tool_calls)
+    slots = clamp_staggered_ord_qty(slots)
 
     answer = executor.final_text.strip() or ERROR_RESPONSE
     qc_result = await qc.verify_answer(

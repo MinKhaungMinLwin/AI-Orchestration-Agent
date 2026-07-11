@@ -850,6 +850,41 @@ def test_confirmed_quantity_does_not_use_quantity_quick_replies():
     assert templates.quantity_quick_replies(slots, decision) == []
 
 
+def test_staggered_vehicle_quantity_quick_replies_offer_only_one_and_two():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        pending_intent="cart",
+        goal_type="add_to_cart",
+        tire_size="225/40R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"])
+
+    chips = templates.quantity_quick_replies(slots, decision)
+
+    assert chips == [
+        {"label": "1개", "domain": "TRANSACTION"},
+        {"label": "2개", "domain": "TRANSACTION"},
+    ]
+
+
+def test_staggered_vehicle_quantity_options_text_lists_one_and_two():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        pending_intent="cart",
+        goal_type="add_to_cart",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"])
+
+    answer = templates.ensure_quantity_options("수량을 선택해 주세요.", slots, decision)
+
+    assert "1개, 2개 중에서 선택해 주세요" in answer
+    assert "3개" not in answer
+
+
 def test_enforce_quantity_chips_replaces_off_topic_chips_when_answer_asks_quantity():
     answer = (
         "확인했습니다. **벤투스 S2 AS 245/45R18** 상품이 있습니다.\n"
