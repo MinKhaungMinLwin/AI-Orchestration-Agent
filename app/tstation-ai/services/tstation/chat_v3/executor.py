@@ -70,6 +70,40 @@ def _model_visible_tool_output(name: str, output_text: str) -> str:
     return redact_inventory_output_for_model(name, output_text)
 
 
+# The cart API returning HTTP success with data.result=false
+# is a FAILED add-to-cart and must never be surfaced as a success.
+_BUSINESS_RESULT_TOOLS = {"save_to_cart_tool"}
+
+
+def _normalize_business_failure(name: str, output_text: str) -> str:
+    if name not in _BUSINESS_RESULT_TOOLS:
+        return output_text
+    try:
+        parsed = json.loads(output_text)
+    except (TypeError, ValueError):
+        return output_text
+    if not isinstance(parsed, dict) or parsed.get("status") != "success":
+        return output_text
+    data = parsed.get("data")
+    if not isinstance(data, dict) or bool(data.get("result")):
+        return output_text
+    parsed["status"] = "error"
+    parsed["error"] = "cart_add_failed"
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def _output_flow_status(output_text: str) -> str:
+    if output_text.startswith("Tool error"):
+        return "error"
+    try:
+        parsed = json.loads(output_text)
+    except (TypeError, ValueError):
+        return "success"
+    if isinstance(parsed, dict) and parsed.get("status") == "error":
+        return "error"
+    return "success"
+
+
 class ToolLoopExecutor:
     """One conversation turn: LLM ↔ tools until the model answers in text."""
 
@@ -155,14 +189,14 @@ class ToolLoopExecutor:
         else:
             try:
                 output = await tool.ainvoke(args, config=self._trace_config)
-                output_text = _tool_output_text(output)
+                output_text = _normalize_business_failure(name, _tool_output_text(output))
             except Exception as exc:
                 logger.exception("[CHAT_V3] tool %s failed", name)
                 output_text = f"Tool error: {exc}"
         self.tool_calls.append({"name": name, "args": args, "output": output_text})
         model_visible_output = _model_visible_tool_output(name, output_text)
         yield sse.tool_result(name, args, model_visible_output[:_TOOL_OUTPUT_PREVIEW_CHARS])
-        yield sse.agent_flow(display, "error" if output_text.startswith("Tool error") else "success")
+        yield sse.agent_flow(display, _output_flow_status(output_text))
         self._messages.append(
             ToolMessage(content=model_visible_output[:_TOOL_OUTPUT_PREVIEW_CHARS], tool_call_id=call_id)
         )

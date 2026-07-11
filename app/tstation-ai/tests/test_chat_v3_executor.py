@@ -46,9 +46,15 @@ _TEST_ENV_DEFAULTS = {
 for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
+import asyncio  # noqa: E402
+import json  # noqa: E402
+
 from services.tstation.chat_v3.executor import (  # noqa: E402
+    ToolLoopExecutor,
     _model_visible_tool_output,
+    _normalize_business_failure,
     _normalize_tool_call,
+    _output_flow_status,
 )
 from services.tstation.chat_v3.tools.discovery import DISCOVERY_TOOLS  # noqa: E402
 from services.tstation.chat_v3.tools import tools_for_domain  # noqa: E402
@@ -99,3 +105,52 @@ def test_inventory_tool_output_is_redacted_only_for_model_visible_observation() 
     assert "status" not in visible
     assert "8" not in visible
     assert "available_quantity_redacted" in visible
+
+
+def test_cart_result_false_is_normalized_to_error() -> None:
+    output = json.dumps(
+        {"status": "success", "http_status": 200, "data": {"result": False, "message": "이미 장바구니에 담겨있는 상품입니다."}},
+        ensure_ascii=False,
+    )
+
+    normalized = _normalize_business_failure("save_to_cart_tool", output)
+    parsed = json.loads(normalized)
+
+    assert parsed["status"] == "error"
+    assert parsed["error"] == "cart_add_failed"
+    assert parsed["data"]["message"] == "이미 장바구니에 담겨있는 상품입니다."
+    assert _output_flow_status(normalized) == "error"
+
+
+def test_cart_result_true_stays_success() -> None:
+    output = json.dumps({"status": "success", "http_status": 200, "data": {"result": True}})
+
+    assert _normalize_business_failure("save_to_cart_tool", output) == output
+    assert _output_flow_status(output) == "success"
+
+
+def test_business_failure_normalization_only_applies_to_cart_tool() -> None:
+    output = json.dumps({"status": "success", "data": {"result": False}})
+
+    assert _normalize_business_failure("get_final_price_tool", output) == output
+
+
+def test_executor_records_cart_result_false_as_error() -> None:
+    asyncio.run(_assert_executor_records_cart_result_false_as_error())
+
+
+async def _assert_executor_records_cart_result_false_as_error() -> None:
+    class FakeCartTool:
+        name = "save_to_cart_tool"
+
+        async def ainvoke(self, args, config=None):
+            return {"status": "success", "http_status": 200, "data": {"result": False, "message": "이미 장바구니에 담겨있는 상품입니다."}}
+
+    executor = ToolLoopExecutor([], [FakeCartTool()], {})
+    events = []
+    async for event in executor._run_tool({"name": "save_to_cart_tool", "args": {"goods_no": "G1", "ord_qty": 2}, "id": "c1"}):
+        events.append(event)
+
+    recorded = json.loads(executor.tool_calls[0]["output"])
+    assert recorded["status"] == "error"
+    assert any('"agent_flow"' in event and '"error"' in event for event in events)
