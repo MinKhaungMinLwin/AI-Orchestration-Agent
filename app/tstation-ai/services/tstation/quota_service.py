@@ -82,16 +82,50 @@ def record_monthly_tokens(user_id: str, tokens: int, trace_id: str, limit: int) 
     return new_total
 
 
+def _post_reconciled_monthly_score(user_id: str, total: int, limit: int) -> None:
+    """Post a corrected monthly_tokens_used score that shows under the user.
+
+    Reconcile runs outside any chat turn, so there is no existing trace to hang
+    the score on. The Scores tab derives its User column from the trace's
+    user_id, so we create a minimal trace carrying this user_id (mirrors how
+    service.py builds its parent span + score_trace) and score it. A flush is
+    required because reconcile is typically invoked as a one-off command whose
+    process exits immediately — without it the score never reaches Langfuse.
+
+    Best-effort: any failure is logged and swallowed; the Redis fix already stuck.
+    """
+    try:
+        import uuid
+
+        from config.tracing import _tracing_enabled, tracer
+
+        if not _tracing_enabled or not tracer:
+            return
+        trace_id = uuid.uuid4().hex
+        span = tracer.start_span(name="quota_reconciliation", trace_context={"trace_id": trace_id})
+        try:
+            span.update_trace(user_id=user_id, name="quota_reconciliation")
+        finally:
+            span.end()
+        post_langfuse_score(
+            trace_id, "monthly_tokens_used", float(total),
+            f"{total:,} / {limit:,} tokens this month (reconciled)",
+        )
+        tracer.flush()
+    except Exception as exc:
+        logger.debug("[QUOTA] reconciled score post failed for %s: %s", user_id, exc)
+
+
 def reconcile_user_from_langfuse(user_id: str) -> int | None:
     """Overwrite the Redis counter with this user's real monthly token total from Langfuse.
 
     The live per-turn counter (crude estimate or in-process real-usage sum) can
     drift from reality — either by under-measuring, or by missing traffic that
     never passed through the quota-gated endpoint at all. This reads Langfuse's
-    own observation-level totals (the same numbers shown in the Users tab) and
-    corrects Redis to match. It does not post a score itself — Langfuse scores
-    are trace-scoped, and reconciliation isn't tied to any one turn's trace.
-    The next real chat turn will post an accurate score once Redis is corrected.
+    own observation-level totals (the same numbers shown in the Users tab),
+    corrects Redis to match, and posts a corrected monthly_tokens_used score so
+    the Scores tab reflects the real total immediately (over-limit users are then
+    blocked and can't post a fresh score via a normal turn).
 
     Best-effort: returns None (and logs) on any failure, real usage is unaffected.
     """
@@ -127,8 +161,11 @@ def reconcile_user_from_langfuse(user_id: str) -> int | None:
         logger.warning("[QUOTA] Langfuse reconciliation failed for %s: %s", user_id, exc)
         return None
 
+    from config.env import settings
+
     from services.tstation.chat_history_service import get_redis_client
     redis = get_redis_client()
     redis.set(_quota_key(user_id), real_total, ex=_seconds_until_month_end())
     logger.info("[QUOTA] Reconciled %s from Langfuse: %d real tokens this month", user_id, real_total)
+    _post_reconciled_monthly_score(user_id, real_total, settings.MONTHLY_TOKEN_LIMIT)
     return real_total
