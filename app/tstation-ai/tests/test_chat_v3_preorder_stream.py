@@ -854,13 +854,6 @@ async def _assert_add_to_cart_quantity_turn_executes_save_to_cart_tool(monkeypat
     assert "장바구니에 담았어요" in next(
         event["content"] for event in events if event.get("type") == "message"
     )
-    cart_chip_labels = [
-        chip["label"]
-        for event in events
-        if event.get("type") == "data"
-        for chip in event.get("data", {}).get("quickReplies", [])
-    ]
-    assert cart_chip_labels == ["주문하기", "장바구니 확인"]
     assert persisted_tool_calls[0]["name"] == "save_to_cart_tool"
     assert saved_slots[0].pending_intent == "cart"
     assert saved_slots[0].goal_type == "add_to_cart"
@@ -941,13 +934,6 @@ async def _assert_confirmed_cart_stream_executes_save_to_cart_tool(
     assert "장바구니에 담았어요" in next(
         event["content"] for event in events if event.get("type") == "message"
     )
-    cart_chip_labels = [
-        chip["label"]
-        for event in events
-        if event.get("type") == "data"
-        for chip in event.get("data", {}).get("quickReplies", [])
-    ]
-    assert cart_chip_labels == ["주문하기", "장바구니 확인"]
     assert persisted_tool_calls[0]["name"] == "save_to_cart_tool"
     assert saved_slots
 

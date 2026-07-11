@@ -722,8 +722,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         if success:
             answer = "장바구니에 담았어요. 바로 주문하시겠어요?"
             chips = [
-                {"label": "주문하기", "domain": "TRANSACTION"},
                 {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                {"label": "주문 내역 보기", "domain": "TRANSACTION", "url": CTAUrls.ORDER_HISTORY},
             ]
         else:
             answer = "장바구니 담기 중 문제가 생겼어요. 다시 시도해 주세요."
