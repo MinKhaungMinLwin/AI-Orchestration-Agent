@@ -79,6 +79,9 @@ def test_reconcile_user_from_langfuse_overwrites_redis_with_real_total():
 
     assert real_total == 5_820_000
     mock_client_cls.assert_called_once()
+    # The SDK's own request paths already start with "api/public/..." relative to
+    # base_url — appending it here too would double the path and 404 every call.
+    assert "/api/public" not in mock_client_cls.call_args.kwargs["base_url"]
     fake_redis.set.assert_called_once()
     (key, value), kwargs = fake_redis.set.call_args
     assert key.startswith("quota:tokens:M200012890:")
