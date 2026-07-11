@@ -425,6 +425,63 @@ def test_staggered_region_followup_bypasses_simultaneous_purchase_guard(monkeypa
     asyncio.run(_assert_staggered_region_followup_bypasses_simultaneous_purchase_guard(monkeypatch))
 
 
+def test_cart_write_guard_blocks_save_to_cart_without_explicit_request() -> None:
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["price_check"])
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "네"}], stream=True, user_id="u", session_id="s"
+    )
+    guard = service._cart_write_guard(decision, request)
+
+    assert guard({"name": "save_to_cart_tool", "args": {"goods_no": "G1", "ord_qty": 2}}) is not None
+    assert guard({"name": "get_final_price_tool", "args": {"goods_no": "G1"}}) is None
+
+
+def test_cart_write_guard_allows_explicit_intent_or_cart_button() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "장바구니에 담아줘"}], stream=True, user_id="u", session_id="s"
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"])
+    assert service._cart_write_guard(decision, request)({"name": "save_to_cart_tool", "args": {}}) is None
+
+    button_request = TStationChatRequest(
+        messages=[{"role": "user", "content": "장바구니 담기"}],
+        stream=True,
+        user_id="u",
+        session_id="s",
+        chip_context={"metadata": {"cta_action": "add_to_cart"}},
+    )
+    no_intent = RouteDecision(domain=Domain.TRANSACTION, intents=[])
+    assert service._cart_write_guard(no_intent, button_request)({"name": "save_to_cart_tool", "args": {}}) is None
+
+
+def test_executor_guard_blocks_tool_invocation() -> None:
+    asyncio.run(_assert_executor_guard_blocks_tool_invocation())
+
+
+async def _assert_executor_guard_blocks_tool_invocation() -> None:
+    invoked = []
+
+    class FakeCartTool:
+        name = "save_to_cart_tool"
+
+        async def ainvoke(self, args, config=None):
+            invoked.append(args)
+            return {"status": "success"}
+
+    executor = service.ToolLoopExecutor(
+        [],
+        [FakeCartTool()],
+        {},
+        tool_call_guard=lambda call: "blocked" if call.get("name") == "save_to_cart_tool" else None,
+    )
+    events = []
+    async for event in executor._run_tool({"name": "save_to_cart_tool", "args": {"goods_no": "G1", "ord_qty": 1}, "id": "c1"}):
+        events.append(event)
+
+    assert not invoked, "guarded tool must not be invoked"
+    assert executor.tool_calls[0]["output"].startswith("Tool error: blocked_by_policy")
+
+
 def test_preview_tool_call_is_never_rewritten_to_cart_write() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=4, pending_intent="cart")
     normalize = service._staggered_qty_tool_normalizer(slots)

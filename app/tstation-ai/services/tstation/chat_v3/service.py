@@ -247,6 +247,40 @@ def _staggered_simultaneous_purchase_event(
     }
 
 
+_CART_BUTTON_ACTION = "add_to_cart"
+_CART_ACTION_KEYS = ("cta_action", "ctaAction", "actionId", "action_id")
+
+
+def _request_has_cart_button_action(request: TStationChatRequest) -> bool:
+    chip_metadata = (request.chip_context or {}).get("metadata") or {}
+    ui_action = request.ui_action or {}
+    ui_metadata = ui_action.get("metadata") if isinstance(ui_action.get("metadata"), dict) else {}
+    sources = [chip_metadata, ui_action, ui_metadata]
+    return any(
+        isinstance(source, dict)
+        and any(str(source.get(key) or "").strip() == _CART_BUTTON_ACTION for key in _CART_ACTION_KEYS)
+        for source in sources
+    )
+
+
+def _cart_write_guard(decision: RouteDecision | None, request: TStationChatRequest) -> Callable[[dict], str | None]:
+    """Save_to_cart_tool only runs on an explicit add-to-cart
+    request in the current turn or the Add-to-Cart button — enforced in code, not
+    only in prompts."""
+    allowed = bool(decision and _ADD_TO_CART_INTENT in decision.intents) or _request_has_cart_button_action(request)
+
+    def guard(call: dict) -> str | None:
+        if (call.get("name") or "") != _SAVE_TO_CART_TOOL or allowed:
+            return None
+        return (
+            "save_to_cart_tool is only allowed when the user explicitly asked to add to cart "
+            "in the current turn or pressed the add-to-cart button. Do not add to cart now — "
+            "ask the user whether they want to add the item to the cart instead."
+        )
+
+    return guard
+
+
 _QTY_CAPPED_TOOLS = {_SAVE_TO_CART_TOOL, "quick_order_tool"}
 
 
@@ -662,6 +696,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             usage_tracker=usage_tracker,
         ),
         tool_call_normalizer=_staggered_qty_tool_normalizer(slots),
+        tool_call_guard=_cart_write_guard(decision, request),
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")
     token_events: list[str] = []

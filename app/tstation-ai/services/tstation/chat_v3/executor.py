@@ -82,6 +82,7 @@ class ToolLoopExecutor:
         stream_tokens: bool = True,
         trace_config: dict | None = None,
         tool_call_normalizer: Callable[[dict], dict] | None = None,
+        tool_call_guard: Callable[[dict], str | None] | None = None,
     ):
         self._messages = list(messages)
         self._tools = {t.name: t for t in tools}
@@ -89,6 +90,7 @@ class ToolLoopExecutor:
         self._stream_tokens = stream_tokens
         self._trace_config = trace_config
         self._tool_call_normalizer = tool_call_normalizer
+        self._tool_call_guard = tool_call_guard
         self.final_text: str = ""
         self.tool_calls: list[dict] = []
 
@@ -138,6 +140,15 @@ class ToolLoopExecutor:
         call_id = call.get("id") or name
         tool = self._tools.get(name)
         display = self._display_names.get(name, name)
+        if self._tool_call_guard is not None:
+            denial = self._tool_call_guard(call)
+            if denial:
+                output_text = f"Tool error: blocked_by_policy — {denial}"
+                logger.info("[CHAT_V3] tool %s blocked by policy: %s", name, denial)
+                self.tool_calls.append({"name": name, "args": args, "output": output_text})
+                yield sse.agent_flow(display, "error")
+                self._messages.append(ToolMessage(content=output_text, tool_call_id=call_id))
+                return
         yield sse.tool_start(name, display)
         if tool is None:
             output_text = f"Unknown tool: {name}"
