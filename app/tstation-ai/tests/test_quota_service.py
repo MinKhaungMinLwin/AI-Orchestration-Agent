@@ -94,6 +94,61 @@ def test_reconcile_user_from_langfuse_overwrites_redis_with_real_total():
     assert query["filters"] == [{"column": "userId", "operator": "=", "value": "M200012890", "type": "string"}]
 
 
+def test_reconcile_posts_corrected_monthly_score_under_the_user():
+    fake_redis = MagicMock()
+    fake_response = MagicMock()
+    fake_response.data = [{"sum_totalTokens": 30_406_846}]
+    fake_metrics_client = MagicMock()
+    fake_metrics_client.metrics.metrics.return_value = fake_response
+
+    fake_span = MagicMock()
+    fake_tracer = MagicMock()
+    fake_tracer.start_span.return_value = fake_span
+
+    with patch("langfuse.api.client.FernLangfuse", return_value=fake_metrics_client), \
+            patch("services.tstation.chat_history_service.get_redis_client", return_value=fake_redis), \
+            patch("config.tracing.tracer", fake_tracer), \
+            patch("config.tracing._tracing_enabled", True), \
+            patch.object(quota_service, "post_langfuse_score") as mock_post:
+        real_total = quota_service.reconcile_user_from_langfuse("M200012931")
+
+    assert real_total == 30_406_846
+    # The corrected score must be attached to a trace carrying this user_id, or it
+    # won't show under the user in the Scores tab.
+    fake_span.update_trace.assert_called_once()
+    assert fake_span.update_trace.call_args.kwargs["user_id"] == "M200012931"
+    # Reuses the proven post_langfuse_score with the reconciled total.
+    mock_post.assert_called_once()
+    post_args = mock_post.call_args[0]
+    assert post_args[1] == "monthly_tokens_used"
+    assert post_args[2] == float(30_406_846)
+    assert "reconciled" in post_args[3]
+    # One-off invocation exits immediately — the score must be flushed or it's lost.
+    fake_tracer.flush.assert_called_once()
+
+
+def test_reconcile_still_returns_total_when_score_post_fails():
+    fake_redis = MagicMock()
+    fake_response = MagicMock()
+    fake_response.data = [{"sum_totalTokens": 7_000_000}]
+    fake_metrics_client = MagicMock()
+    fake_metrics_client.metrics.metrics.return_value = fake_response
+
+    fake_tracer = MagicMock()
+    fake_tracer.start_span.side_effect = RuntimeError("langfuse write down")
+
+    with patch("langfuse.api.client.FernLangfuse", return_value=fake_metrics_client), \
+            patch("services.tstation.chat_history_service.get_redis_client", return_value=fake_redis), \
+            patch("config.tracing.tracer", fake_tracer), \
+            patch("config.tracing._tracing_enabled", True):
+        real_total = quota_service.reconcile_user_from_langfuse("M200012931")
+
+    # Redis correction (the part that matters for enforcement) must stick even if
+    # the cosmetic score post throws.
+    assert real_total == 7_000_000
+    fake_redis.set.assert_called_once()
+
+
 def test_reconcile_user_from_langfuse_returns_none_on_query_failure():
     with patch("langfuse.api.client.FernLangfuse", side_effect=RuntimeError("langfuse unreachable")), \
             patch("services.tstation.chat_history_service.get_redis_client") as mock_redis:
