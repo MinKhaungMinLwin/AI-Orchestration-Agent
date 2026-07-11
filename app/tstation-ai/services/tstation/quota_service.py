@@ -103,7 +103,10 @@ def reconcile_user_from_langfuse(user_id: str) -> int | None:
         from config.env import settings
 
         client = FernLangfuse(
-            base_url=settings.LANGFUSE_HOST.rstrip("/") + "/api/public",
+            # The SDK's own request paths already start with "api/public/..." relative
+            # to base_url — do not append "/api/public" here or every call 404s on a
+            # doubled path (.../api/public/api/public/metrics).
+            base_url=settings.LANGFUSE_HOST.rstrip("/"),
             x_langfuse_public_key=settings.LANGFUSE_PUBLIC_KEY,
             username=settings.LANGFUSE_PUBLIC_KEY,
             password=settings.LANGFUSE_SECRET_KEY,
