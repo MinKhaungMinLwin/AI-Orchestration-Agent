@@ -615,7 +615,10 @@ def test_product_template_rebuilds_card_count_from_tool_rows(monkeypatch):
     assert len(event["data"]["metadata"]) == 6
     assert event["data"]["products"][0]["titleProductName"] == "상품1"
     assert event["data"]["products"][5]["titleProductName"] == "상품6"
-    assert event["data"]["metadata"] == [{"goodsId": f"G{i:04d}"} for i in range(1, 7)]
+    assert [meta["goodsId"] for meta in event["data"]["metadata"]] == [f"G{i:04d}" for i in range(1, 7)]
+    assert [meta["slots"]["tire_size"] for meta in event["data"]["metadata"]] == [
+        f"22{i}/45R17" for i in range(1, 7)
+    ]
 
 
 def test_product_template_builds_without_llm_when_rows_have_goods_no(monkeypatch):
@@ -648,7 +651,8 @@ def test_product_template_builds_without_llm_when_rows_have_goods_no(monkeypatch
     assert event is not None
     assert event["template"] == "product"
     assert event["data"]["products"][0]["titleProductName"] == "벤투스 S2 AS"
-    assert event["data"]["metadata"] == [{"goodsId": "G0001"}]
+    assert event["data"]["metadata"][0]["goodsId"] == "G0001"
+    assert event["data"]["metadata"][0]["slots"]["tire_size"] == "245/45R19"
 
 
 def test_product_template_falls_back_to_llm_when_rows_have_no_goods_no(monkeypatch):
@@ -676,7 +680,8 @@ def test_product_template_falls_back_to_llm_when_rows_have_no_goods_no(monkeypat
     assert event is not None
     assert event["template"] == "product"
     # Comes from _FakeProductStructuredLLM's fixed payload — proves the LLM fallback ran.
-    assert event["data"]["metadata"] == [{"goodsId": "G0001"}]
+    assert event["data"]["metadata"][0]["goodsId"] == "G0001"
+    assert event["data"]["metadata"][0]["slots"]["tire_size"] == "245/45R19"
     assert event["data"]["products"][0]["title"] == "벤투스 S2 AS 245/45R19"
 
 

@@ -104,6 +104,42 @@ def test_order_product_template_carries_select_product_slots() -> None:
     assert payload.metadata[0].ui_action["slots"]["goods_no"] == "G000000310126"
 
 
+def test_browsing_product_template_preserves_selected_staggered_size_without_booking_contract() -> None:
+    payload = ProductTemplate(
+        assistantResponse="BMW front-tire recommendations.",
+        products=[
+            ProductItem(
+                imageUrl="https://example.com/tire.png",
+                title="Ventus S1 evo Z 225/40R19",
+                tires="225/40R19",
+                titleProductName="Ventus S1 evo Z",
+                titleTires="225/40R19",
+                brandName="HANKOOK",
+                price=234500,
+                rate=4.5,
+                totalQuantity=68,
+            )
+        ],
+        metadata=[ProductMeta(goodsId="G000000317699", domain="DISCOVERY")],
+    )
+    slots = ConversationSlots(
+        tire_size="225/40R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+        goal_type="product_recommend",
+    )
+
+    _normalize_product_selection_payload(payload, slots)
+
+    metadata = payload.metadata[0]
+    assert payload.isBookingFlow is False
+    assert metadata.domain == "DISCOVERY"
+    assert metadata.expected_behavior == "context_evidence"
+    assert metadata.slots["tire_size"] == "225/40R19"
+    assert metadata.ui_action["slots"]["tire_size"] == "225/40R19"
+    assert metadata.ui_action["action_type"] == "select_product"
+
+
 def test_fe_slot_patch_accepts_product_card_ui_action_slots() -> None:
     request = TStationChatRequest(
         messages=[{"role": "user", "content": "Ventus S2 AS 245/45R19"}],

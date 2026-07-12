@@ -1272,8 +1272,6 @@ def _product_selection_contract_intent(slots: ConversationSlots | None) -> str:
 
 
 def _normalize_product_selection_payload(payload: BaseModel, slots: ConversationSlots | None = None) -> None:
-    if not _is_booking_location_context(slots):
-        return
     products = getattr(payload, "products", None)
     metadata = getattr(payload, "metadata", None)
     if not isinstance(products, list) or not isinstance(metadata, list):
@@ -1281,8 +1279,10 @@ def _normalize_product_selection_payload(payload: BaseModel, slots: Conversation
     if len(products) != len(metadata):
         return
 
-    payload.isBookingFlow = True
-    expected_intent = _product_selection_contract_intent(slots)
+    booking_context = _is_booking_location_context(slots)
+    if booking_context:
+        payload.isBookingFlow = True
+    expected_intent = _product_selection_contract_intent(slots) if booking_context else None
     for product, meta in zip(products, metadata):
         if not isinstance(meta, ProductMeta):
             continue
@@ -1305,13 +1305,16 @@ def _normalize_product_selection_payload(payload: BaseModel, slots: Conversation
         meta.product_name = product_name or None
         meta.tireSize = tire_size or None
         meta.tire_size = tire_size or None
-        meta.domain = meta.domain or "TRANSACTION"
         meta.cta_action = "select_product"
         meta.fills_slot = "product"
         meta.entity_id = meta.entity_id or goods_no
-        meta.source_intent = meta.source_intent or expected_intent
-        meta.expected_contract_intent = meta.expected_contract_intent or expected_intent
-        meta.expected_behavior = meta.expected_behavior or "slot_fill"
+        if booking_context:
+            meta.domain = meta.domain or "TRANSACTION"
+            meta.source_intent = meta.source_intent or expected_intent
+            meta.expected_contract_intent = meta.expected_contract_intent or expected_intent
+            meta.expected_behavior = meta.expected_behavior or "slot_fill"
+        else:
+            meta.expected_behavior = meta.expected_behavior or "context_evidence"
         meta.slots = slots_payload
         meta.ui_action = {
             "action_type": "select_product",
