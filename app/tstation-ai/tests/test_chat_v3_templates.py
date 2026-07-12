@@ -1037,6 +1037,25 @@ def test_preorder_fallback_builds_ready_order_card_from_slots():
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
 
 
+def test_preorder_always_uses_order_action_even_with_stale_cart_state():
+    event = templates.build_preorder_data_event(
+        "아래 내용으로 구매 진행해도 될까요?",
+        {
+            "goods_no": "G000000309783",
+            "ord_qty": 4,
+            "pending_intent": "cart",
+            "goal_type": "add_to_cart",
+            "is_ready_to_add_to_cart": True,
+        },
+        source="test",
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["isReadyToOrder"] is True
+    assert event["data"]["isReadyToAddToCart"] is False
+
+
 def test_get_final_price_tool_builds_preorder_without_llm(monkeypatch):
     def fail_get_router_llm():
         raise AssertionError("get_final_price_tool preOrder should be built without LLM")

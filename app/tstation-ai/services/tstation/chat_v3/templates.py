@@ -309,13 +309,6 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
     if not goods_no or ord_qty is None or ord_qty <= 0:
         return None
 
-    pending_intent = str(snapshot.get("pending_intent") or "").strip()
-    goal_type = str(snapshot.get("goal_type") or "").strip()
-    # K1 tool passes the flag explicitly; K2 (slots snapshot) derives it from intent.
-    is_ready_to_add_to_cart = (
-        bool(snapshot.get("is_ready_to_add_to_cart")) or pending_intent == "cart" or goal_type == "add_to_cart"
-    )
-    is_ready_to_order = not is_ready_to_add_to_cart
     tire_size = str(snapshot.get("tire_size") or "").strip() or None
 
     payload = PreOrderTemplate(
@@ -327,8 +320,8 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
             "bookingDateTime": _booking_datetime(snapshot),
             "paymentAmount": _as_int(snapshot.get("payment_amount")),
         },
-        isReadyToOrder=is_ready_to_order,
-        isReadyToAddToCart=is_ready_to_add_to_cart,
+        isReadyToOrder=True,
+        isReadyToAddToCart=False,
         metadata={
             "goodsId": goods_no,
             "goodsNo": goods_no,
