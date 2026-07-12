@@ -87,6 +87,34 @@ def test_add_to_cart_intent_goes_through_executor_not_direct_cart(monkeypatch: p
     asyncio.run(_assert_cart_turn_goes_through_executor(monkeypatch, intent="add_to_cart"))
 
 
+def test_place_order_intent_promotes_purchase_flow_state() -> None:
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+
+    slots = service._normalize_transaction_goal_slots(decision, ConversationSlots())
+
+    assert slots.goal_type == "place_order"
+    assert slots.pending_intent == "order"
+
+
+def test_place_order_intent_replaces_stale_cart_flow_state() -> None:
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+    stale_slots = ConversationSlots(goal_type="add_to_cart", pending_intent="cart")
+
+    slots = service._normalize_transaction_goal_slots(decision, stale_slots)
+
+    assert slots.goal_type == "place_order"
+    assert slots.pending_intent == "order"
+
+
+def test_store_finder_intent_does_not_infer_purchase_flow_state() -> None:
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["store_finder"])
+
+    slots = service._normalize_transaction_goal_slots(decision, ConversationSlots())
+
+    assert slots.goal_type is None
+    assert slots.pending_intent is None
+
+
 def test_fe_vehicle_patch_preserves_staggered_sizes_without_selecting_one() -> None:
     request = TStationChatRequest(
         messages=[{"role": "user", "content": "select car"}],

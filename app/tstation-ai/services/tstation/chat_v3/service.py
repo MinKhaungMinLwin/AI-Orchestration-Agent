@@ -59,6 +59,7 @@ _STREAM_HEADERS = {
     "X-Accel-Buffering": "no",
 }
 _ADD_TO_CART_INTENT = "add_to_cart"
+_PLACE_ORDER_INTENT = "place_order"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
 _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
@@ -81,14 +82,21 @@ def _tokens_enabled() -> bool:
     return bool(getattr(settings, "AI_CHAT_V3_STREAM_TOKENS", True))
 
 
-def _normalize_add_to_cart_slots(decision: RouteDecision | None, slots: ConversationSlots) -> ConversationSlots:
-    if decision is None or _ADD_TO_CART_INTENT not in decision.intents:
+def _normalize_transaction_goal_slots(decision: RouteDecision | None, slots: ConversationSlots) -> ConversationSlots:
+    if decision is None:
         return slots
-    return slots.apply_runtime_values(
-        {"pending_intent": "cart", "goal_type": "add_to_cart"},
-        source="chat_v3:add_to_cart_intent",
-        fill_only=True,
-    )
+    if _PLACE_ORDER_INTENT in decision.intents:
+        return slots.apply_runtime_values(
+            {"pending_intent": "order", "goal_type": "place_order"},
+            source="chat_v3:place_order_intent",
+        )
+    if _ADD_TO_CART_INTENT in decision.intents:
+        return slots.apply_runtime_values(
+            {"pending_intent": "cart", "goal_type": "add_to_cart"},
+            source="chat_v3:add_to_cart_intent",
+            fill_only=True,
+        )
+    return slots
 
 
 def _as_int(value: object) -> int | None:
@@ -571,7 +579,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     slots = apply_patch(slots, decision.slots_patch if decision else None)
     # Staggered vehicles: even a typed quantity is capped at 2.
     slots = clamp_staggered_ord_qty(slots)
-    slots = _normalize_add_to_cart_slots(decision, slots)
+    slots = _normalize_transaction_goal_slots(decision, slots)
 
     staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
         decision,
