@@ -2,7 +2,7 @@
 Per-user monthly token quota enforced via Redis.
 
 Key  : quota:tokens:{user_id}:{YYYY-MM}
-TTL  : auto-expires at end of month (KST UTC+7)
+TTL  : auto-expires at end of month (KST UTC+9)
 Score: posted to Langfuse trace as "monthly_tokens_used" after each turn,
        and "quota_blocked" when a request is denied.
 """
@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-_KST = timedelta(hours=7)
+_KST = timedelta(hours=9)
 _QUOTA_KEY = "quota:tokens:{user_id}:{ym}"
 
 

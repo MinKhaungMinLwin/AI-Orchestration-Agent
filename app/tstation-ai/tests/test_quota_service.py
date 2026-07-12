@@ -51,6 +51,10 @@ for key, value in _TEST_ENV_DEFAULTS.items():
 from services.tstation import quota_service  # noqa: E402
 
 
+def test_monthly_quota_uses_korea_standard_time():
+    assert quota_service._KST.total_seconds() == 9 * 60 * 60
+
+
 def test_record_monthly_tokens_increments_redis_and_posts_score():
     with patch.object(quota_service, "add_monthly_tokens", return_value=364_790) as mock_add, \
             patch.object(quota_service, "post_langfuse_score") as mock_score:
