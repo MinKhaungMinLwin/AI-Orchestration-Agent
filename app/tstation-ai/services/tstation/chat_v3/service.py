@@ -711,6 +711,48 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         yield event
     t_tools = time.perf_counter()
 
+    post_tool_slots = derive_slots_from_tool_calls(slots, executor.tool_calls)
+    post_tool_staggered_event = _staggered_tire_size_choice_event(post_tool_slots)
+    if post_tool_staggered_event:
+        answer = str(post_tool_staggered_event["data"]["assistantResponse"])
+        chips = post_tool_staggered_event["data"]["quickReplies"]
+        result["answer"] = answer
+        if _tokens_enabled():
+            yield sse.token(answer)
+        yield sse.message(answer)
+        yield sse.sse(post_tool_staggered_event)
+        _update_trace_monitoring(
+            route_domains=domains,
+            tool_calls=executor.tool_calls,
+            final_template="quickReply",
+            trace_id=request.tracing_id,
+            parent_span_id=parent_span_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            answer=answer,
+            user_text=user_text,
+            message_id=message_id,
+            route_intents=list(decision.intents if decision else []),
+            fallback_used=True,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            trace_observation=parent_span,
+        )
+        if parent_span is not None:
+            parent_span.end()
+        _flush_trace()
+        await _record_real_usage(request, usage_tracker)
+        await save_slots(request.session_id, post_tool_slots, user_id=request.user_id)
+        await memory.persist_turn_context(
+            request.session_id,
+            tool_calls=executor.tool_calls,
+            quick_reply_domains=[chip["domain"] for chip in chips],
+            predicted_domains=post_tool_staggered_event["data"]["predictedDomains"],
+            user_id=request.user_id,
+        )
+        for event in sse.done():
+            yield event
+        return
+
     # Part B: capture resolved order IDs (goods_no/shop_id/payment_amount) from this
     # turn's tool outputs into slots so the preOrder card + next-turn quick_order_tool
     # have their required args even when a later turn no longer re-calls the tools.

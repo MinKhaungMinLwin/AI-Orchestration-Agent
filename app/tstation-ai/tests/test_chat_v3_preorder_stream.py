@@ -349,6 +349,94 @@ def test_staggered_qty_tool_normalizer_ignores_same_size_vehicle() -> None:
     assert call["args"]["ord_qty"] == 4
 
 
+def test_tool_selected_launch_code_promotes_staggered_candidate_for_size_choice() -> None:
+    slots = ConversationSlots(car_lnc_cd="W063680", tire_size="225/40R19")
+    tool_calls = [
+        {
+            "name": "get_my_cars_tool",
+            "args": {"mbr_no": "M1"},
+            "output": json.dumps(
+                {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "car_no": "29조3345",
+                                "car_lnc_cd": "W063680",
+                                "car_model_det": "3시리즈 M340i",
+                                "tire_size_fr": "225/40R19",
+                                "tire_size_re": "255/35R19",
+                            },
+                            {
+                                "car_no": "29조3344",
+                                "car_lnc_cd": "W036270",
+                                "car_model_det": "제타",
+                                "tire_size_fr": "225/45R17",
+                                "tire_size_re": "225/45R17",
+                            },
+                        ]
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        },
+        {
+            "name": "get_products_recommendations_tool",
+            "args": {"car_lnc_cd": "W063680", "tire_size": "225/40R19"},
+            "output": "{}",
+        },
+    ]
+
+    updated = derive_slots_from_tool_calls(slots, tool_calls)
+
+    assert updated.car_no == "29조3345"
+    assert updated.tire_size is None
+    assert updated.tire_size_front == "225/40R19"
+    assert updated.tire_size_rear == "255/35R19"
+    assert service._staggered_tire_size_choice_event(updated) is not None
+
+
+def test_tool_selected_launch_code_keeps_same_size_vehicle_flow() -> None:
+    slots = ConversationSlots(car_lnc_cd="W036270", tire_size="225/45R17", ord_qty=4)
+    tool_calls = [
+        {
+            "name": "get_my_cars_tool",
+            "args": {"mbr_no": "M1"},
+            "output": json.dumps(
+                {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "car_no": "29조3344",
+                                "car_lnc_cd": "W036270",
+                                "car_model_det": "제타",
+                                "tire_size_fr": "225/45R17",
+                                "tire_size_re": "225/45R17",
+                            }
+                        ]
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        },
+        {
+            "name": "get_products_recommendations_tool",
+            "args": {"car_lnc_cd": "W036270", "tire_size": "225/45R17"},
+            "output": "{}",
+        },
+    ]
+
+    updated = derive_slots_from_tool_calls(slots, tool_calls)
+
+    assert updated.car_no == "29조3344"
+    assert updated.tire_size == "225/45R17"
+    assert updated.tire_size_front == "225/45R17"
+    assert updated.tire_size_rear == "225/45R17"
+    assert updated.ord_qty == 4
+    assert service._staggered_tire_size_choice_event(updated) is None
+
+
 def test_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_staggered_vehicle_size_guard_blocks_purchase_flow(monkeypatch))
 
