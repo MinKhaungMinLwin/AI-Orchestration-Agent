@@ -545,6 +545,42 @@ def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
     assert product["oeBadgeYn"] == "Y"
 
 
+def test_product_card_discount_rate_uses_selected_cheapest_price_basis():
+    product = templates._product_item_from_row(
+        {
+            "goods_no": "G000000320103",
+            "goods_nm": "벤투스 에보",
+            "tire_size_1": "225/40R19",
+            "sale_prc": 295900,
+            "extra_fvr_sale_prc": 222100,
+            "extra_fvr_sale_per": 25.0,
+            "cheapest_final_prc": 281100,
+        }
+    )
+
+    assert product.price == 281100
+    assert product.originalPrice == 295900
+    assert product.discountAmount == 14800
+    assert product.discountRate == 5.0
+
+
+def test_product_card_discount_rate_keeps_extra_benefit_fallback_consistent():
+    product = templates._product_item_from_row(
+        {
+            "goods_no": "G0001",
+            "goods_nm": "테스트 타이어",
+            "tire_size_1": "225/40R19",
+            "sale_prc": 200000,
+            "extra_fvr_sale_prc": 180000,
+            "extra_fvr_sale_per": 10.0,
+        }
+    )
+
+    assert product.price == 180000
+    assert product.discountAmount == 20000
+    assert product.discountRate == 10.0
+
+
 def test_product_template_rebuilds_card_count_from_tool_rows(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeShortProductRouterLLM())
     tool_output = {

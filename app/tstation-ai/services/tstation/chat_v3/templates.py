@@ -1164,11 +1164,11 @@ def _product_discount_amount(row: dict[str, Any], price: int | None, original_pr
 
 
 def _product_discount_rate(row: dict[str, Any], discount_amount: int | None, original_price: int | None) -> float | None:
+    if discount_amount and original_price:
+        return round(discount_amount / original_price * 100, 1)
     rate = _get_num(row, "extra_fvr_sale_per", "discountRate", "discount_rate")
     if rate:
         return rate
-    if discount_amount and original_price:
-        return round(discount_amount / original_price * 100, 1)
     return None
 
 
