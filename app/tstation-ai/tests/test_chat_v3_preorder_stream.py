@@ -405,6 +405,38 @@ def test_plate_lookup_promotes_staggered_vehicle_before_next_flow() -> None:
     assert promoted.tire_size_rear == "255/35R19"
 
 
+def test_selected_staggered_size_survives_vehicle_repromotion() -> None:
+    slots = ConversationSlots(
+        car_no="29조3345",
+        car_model="BMW",
+        tire_size="255/35R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+        vehicle_candidates=[
+            {
+                "car_no": "29조3345",
+                "car_lnc_cd": "W063680",
+                "car_maker": "BMW",
+                "car_model": "M340i",
+                "tire_size_front": "225/40R19",
+                "tire_size_rear": "255/35R19",
+            }
+        ],
+    )
+    tool_calls = [
+        {
+            "name": "get_products_recommendations_tool",
+            "args": {"tire_size": "255/35R19"},
+            "output": '{"status":"success","data":{"items":[]}}',
+        }
+    ]
+
+    promoted = promote_selected_vehicle(slots, tool_calls, car_model_hint="BMW")
+
+    assert promoted.tire_size == "255/35R19"
+    assert service._staggered_tire_size_choice_event(promoted) is None
+
+
 def test_staggered_ord_qty_is_clamped_to_two_even_when_typed() -> None:
     slots = ConversationSlots(tire_size_front="225/40R19", tire_size_rear="255/35R19", ord_qty=4)
 

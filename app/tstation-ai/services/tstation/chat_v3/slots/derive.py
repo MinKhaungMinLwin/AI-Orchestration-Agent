@@ -277,10 +277,17 @@ def promote_selected_vehicle(
         return slots
 
     selected = matches[0]
+    prior_selected_size = normalize_tire_size(str(slots.tire_size or ""))
     values = {key: value for key, value in selected.items() if key in ConversationSlots.model_fields}
     updated = slots.apply_runtime_values(values, source="chat_v3:selected_vehicle")
+    confirmed_sizes = {
+        str(updated.tire_size_front or "").strip(),
+        str(updated.tire_size_rear or "").strip(),
+    }
     if is_staggered_vehicle(updated):
-        updated = updated.model_copy(update={"tire_size": None})
+        updated = updated.model_copy(
+            update={"tire_size": prior_selected_size if prior_selected_size in confirmed_sizes else None}
+        )
     return updated
 
 
