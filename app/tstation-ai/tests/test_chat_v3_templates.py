@@ -1531,6 +1531,36 @@ def test_booking_flow_hint_offers_order_when_all_slots_ready():
     assert hint is not None and "주문 진행" in hint
 
 
+def test_booking_flow_hint_does_not_infer_store_step_from_product_and_quantity_only():
+    slots = ConversationSlots(goods_no="G0001", tire_size="255/35R19", ord_qty=2)
+
+    assert templates.booking_flow_hint(slots) is None
+
+
+def test_booking_flow_hint_does_not_override_add_to_cart_target():
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="255/35R19",
+        ord_qty=2,
+        pending_intent="cart",
+        goal_type="add_to_cart",
+    )
+
+    assert templates.booking_flow_hint(slots) is None
+
+
+def test_booking_flow_hint_does_not_override_price_inquiry_target():
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="255/35R19",
+        ord_qty=2,
+        pending_intent="price",
+        goal_type="price_inquiry",
+    )
+
+    assert templates.booking_flow_hint(slots) is None
+
+
 def test_booking_flow_hint_none_outside_booking_context():
     assert templates.booking_flow_hint(ConversationSlots()) is None
     assert templates.booking_flow_hint(None) is None

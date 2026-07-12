@@ -1631,7 +1631,7 @@ def _is_booking_location_context(slots: ConversationSlots | None) -> bool:
         return True
     if goal_type in {"place_order", "store_with_stock"}:
         return True
-    return bool(slots.goods_no and slots.ord_qty)
+    return False
 
 
 def booking_flow_hint(slots: ConversationSlots | None) -> str | None:
