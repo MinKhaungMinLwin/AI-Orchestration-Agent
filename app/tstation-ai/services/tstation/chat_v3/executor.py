@@ -117,6 +117,7 @@ class ToolLoopExecutor:
         trace_config: dict | None = None,
         tool_call_normalizer: Callable[[dict], dict] | None = None,
         tool_call_guard: Callable[[dict], str | None] | None = None,
+        stop_after_tool: Callable[[list[dict]], bool] | None = None,
     ):
         self._messages = list(messages)
         self._tools = {t.name: t for t in tools}
@@ -125,8 +126,10 @@ class ToolLoopExecutor:
         self._trace_config = trace_config
         self._tool_call_normalizer = tool_call_normalizer
         self._tool_call_guard = tool_call_guard
+        self._stop_after_tool = stop_after_tool
         self.final_text: str = ""
         self.tool_calls: list[dict] = []
+        self.stopped_after_tool = False
 
     async def stream(self):
         llm = get_chat_llm()
@@ -154,6 +157,9 @@ class ToolLoopExecutor:
             for call in tool_calls:
                 async for event in self._run_tool(call):
                     yield event
+                if self._stop_after_tool is not None and self._stop_after_tool(self.tool_calls):
+                    self.stopped_after_tool = True
+                    return
 
         # Tool budget exhausted — force a final text answer without tools.
         final_text = ""

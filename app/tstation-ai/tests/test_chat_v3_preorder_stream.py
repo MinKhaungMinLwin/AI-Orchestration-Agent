@@ -60,6 +60,7 @@ from services.tstation.chat_v3.slots.derive import (  # noqa: E402
     apply_text_vehicle_selection,
     clamp_staggered_ord_qty,
     derive_slots_from_tool_calls,
+    promote_selected_vehicle,
 )
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 from services.tstation.chat_v3.slots.store import slots_context_block  # noqa: E402
@@ -309,6 +310,99 @@ def test_text_vehicle_selection_recovers_staggered_sizes_from_previous_candidate
     assert slots.tire_size is None
     assert slots.tire_size_front == "225/40R19"
     assert slots.tire_size_rear == "255/35R19"
+
+
+def test_router_model_hint_promotes_staggered_vehicle_without_launch_code() -> None:
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3345",
+                    "car_lnc_cd": "W063680",
+                    "car_maker": "BMW",
+                    "car_model_det": "3-series(G20 F/L2) M340i A/T",
+                    "tire_size_fr": "225/40R19",
+                    "tire_size_re": "255/35R19",
+                },
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W036270",
+                    "car_maker": "Volkswagen",
+                    "car_model_det": "Jetta",
+                    "tire_size_fr": "225/45R17",
+                    "tire_size_re": "225/45R17",
+                },
+            ]
+        },
+    }
+    tool_calls = [{"name": "get_my_cars_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}]
+    slots = derive_slots_from_tool_calls(ConversationSlots(car_model="BMW"), tool_calls)
+
+    promoted = promote_selected_vehicle(slots, tool_calls, car_model_hint="BMW")
+
+    assert promoted.car_no == "29조3345"
+    assert promoted.tire_size is None
+    assert promoted.tire_size_front == "225/40R19"
+    assert promoted.tire_size_rear == "255/35R19"
+    assert service._staggered_tire_size_choice_event(promoted) is not None
+
+
+def test_generic_vehicle_list_does_not_auto_select_staggered_candidate() -> None:
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3345",
+                    "car_maker": "BMW",
+                    "car_model_det": "M340i",
+                    "tire_size_fr": "225/40R19",
+                    "tire_size_re": "255/35R19",
+                }
+            ]
+        },
+    }
+    tool_calls = [{"name": "get_my_cars_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}]
+    slots = derive_slots_from_tool_calls(ConversationSlots(), tool_calls)
+
+    promoted = promote_selected_vehicle(slots, tool_calls)
+
+    assert promoted.car_no is None
+    assert promoted.tire_size_front is None
+    assert promoted.vehicle_candidates
+
+
+def test_plate_lookup_promotes_staggered_vehicle_before_next_flow() -> None:
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3345",
+                    "car_maker": "BMW",
+                    "car_model_det": "M340i",
+                    "tire_size_fr": "225/40R19",
+                    "tire_size_re": "255/35R19",
+                }
+            ]
+        },
+    }
+    tool_calls = [
+        {
+            "name": "get_user_vehicles_tool",
+            "args": {"car_no": "29조3345", "owner_nm": "공태웅"},
+            "output": json.dumps(tool_output, ensure_ascii=False),
+        }
+    ]
+    slots = derive_slots_from_tool_calls(ConversationSlots(car_no="29조3345"), tool_calls)
+
+    promoted = promote_selected_vehicle(slots, tool_calls)
+
+    assert promoted.car_no == "29조3345"
+    assert promoted.tire_size is None
+    assert promoted.tire_size_front == "225/40R19"
+    assert promoted.tire_size_rear == "255/35R19"
 
 
 def test_staggered_ord_qty_is_clamped_to_two_even_when_typed() -> None:

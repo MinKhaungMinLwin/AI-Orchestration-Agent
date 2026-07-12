@@ -49,6 +49,9 @@ for key, value in _TEST_ENV_DEFAULTS.items():
 import asyncio  # noqa: E402
 import json  # noqa: E402
 
+from langchain_core.messages import AIMessageChunk  # noqa: E402
+
+from services.tstation.chat_v3 import executor as executor_module  # noqa: E402
 from services.tstation.chat_v3.executor import (  # noqa: E402
     ToolLoopExecutor,
     _model_visible_tool_output,
@@ -137,6 +140,50 @@ def test_business_failure_normalization_only_applies_to_cart_tool() -> None:
 
 def test_executor_records_cart_result_false_as_error() -> None:
     asyncio.run(_assert_executor_records_cart_result_false_as_error())
+
+
+def test_executor_stops_between_vehicle_lookup_and_next_tool(monkeypatch) -> None:
+    asyncio.run(_assert_executor_stops_between_vehicle_lookup_and_next_tool(monkeypatch))
+
+
+async def _assert_executor_stops_between_vehicle_lookup_and_next_tool(monkeypatch) -> None:
+    executed = []
+
+    class FakeLLM:
+        def bind_tools(self, tools):
+            return self
+
+        async def astream(self, messages, config=None):
+            yield AIMessageChunk(
+                content="",
+                tool_calls=[
+                    {"name": "get_my_cars_tool", "args": {}, "id": "cars"},
+                    {"name": "get_products_recommendations_tool", "args": {}, "id": "recommend"},
+                ],
+            )
+
+    class FakeTool:
+        def __init__(self, name):
+            self.name = name
+
+        async def ainvoke(self, args, config=None):
+            executed.append(self.name)
+            return {"status": "success", "data": {}}
+
+    monkeypatch.setattr(executor_module, "get_chat_llm", lambda: FakeLLM())
+    executor = ToolLoopExecutor(
+        [],
+        [FakeTool("get_my_cars_tool"), FakeTool("get_products_recommendations_tool")],
+        {},
+        stop_after_tool=lambda calls: len(calls) == 1,
+    )
+
+    events = [event async for event in executor.stream()]
+
+    assert events
+    assert executed == ["get_my_cars_tool"]
+    assert [call["name"] for call in executor.tool_calls] == ["get_my_cars_tool"]
+    assert executor.stopped_after_tool is True
 
 
 async def _assert_executor_records_cart_result_false_as_error() -> None:

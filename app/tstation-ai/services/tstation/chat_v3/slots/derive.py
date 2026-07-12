@@ -173,6 +173,9 @@ def _vehicle_candidate_from_row(row: dict) -> dict:
         if value not in (None, ""):
             values[field] = str(value)
     values.update(_vehicle_size_patch(row))
+    car_maker = next((row.get(key) for key in ("car_maker", "carMaker") if row.get(key)), None)
+    if car_maker:
+        values["car_maker"] = str(car_maker).strip()
     return {key: value for key, value in values.items() if value not in (None, "", [], {})}
 
 
@@ -224,6 +227,61 @@ def derive_slots_from_tool_calls(slots: ConversationSlots, tool_calls: list[dict
         return slots
     logger.info("[CHAT_V3] tool-derived slots: %s", values)
     return slots.apply_runtime_values(values, source="chat_v3:tool_derived")
+
+
+def _match_key(value: object) -> str:
+    return "".join(str(value or "").lower().split())
+
+
+def promote_selected_vehicle(
+    slots: ConversationSlots,
+    tool_calls: list[dict],
+    *,
+    car_model_hint: str | None = None,
+) -> ConversationSlots:
+    """Promote an explicitly identified registered vehicle into canonical slots.
+
+    Selection evidence may come from a plate/launch code or from the router's
+    structured model hint. A generic vehicle-list result is never auto-selected.
+    """
+    candidates = slots.vehicle_candidates or []
+    if not candidates:
+        return slots
+
+    identifiers = {_match_key(slots.car_no), _match_key(slots.car_lnc_cd)}
+    for call in tool_calls:
+        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        identifiers.update({_match_key(args.get("car_no")), _match_key(args.get("car_lnc_cd"))})
+    identifiers.discard("")
+    matches = [
+        candidate
+        for candidate in candidates
+        if identifiers.intersection({_match_key(candidate.get("car_no")), _match_key(candidate.get("car_lnc_cd"))})
+    ]
+
+    hint = _match_key(car_model_hint or slots.car_model)
+    if len(matches) != 1 and len(hint) >= 2:
+        matches = [
+            candidate
+            for candidate in candidates
+            if any(
+                hint in label or label in hint
+                for label in (
+                    _match_key(candidate.get("car_maker")),
+                    _match_key(candidate.get("car_model")),
+                )
+                if len(label) >= 2
+            )
+        ]
+    if len(matches) != 1:
+        return slots
+
+    selected = matches[0]
+    values = {key: value for key, value in selected.items() if key in ConversationSlots.model_fields}
+    updated = slots.apply_runtime_values(values, source="chat_v3:selected_vehicle")
+    if is_staggered_vehicle(updated):
+        updated = updated.model_copy(update={"tire_size": None})
+    return updated
 
 
 def _snake_to_camel(field: str) -> str:

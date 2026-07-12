@@ -42,6 +42,7 @@ from services.tstation.chat_v3.slots.derive import (
     clamp_staggered_ord_qty,
     derive_slots_from_tool_calls,
     is_staggered_vehicle,
+    promote_selected_vehicle,
 )
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
@@ -682,6 +683,21 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         extra_context.append(tool_ctx_block)
     messages = context.build_messages(request, system_prompt=SYSTEM_PROMPT, extra_context=extra_context)
 
+    vehicle_policy_state = {"slots": slots}
+
+    def stop_for_staggered_vehicle(tool_calls: list[dict]) -> bool:
+        derived = derive_slots_from_tool_calls(vehicle_policy_state["slots"], tool_calls)
+        promoted = promote_selected_vehicle(
+            derived,
+            tool_calls,
+            car_model_hint=(decision.slots_patch.car_model if decision else None),
+        )
+        staggered_event = _staggered_tire_size_choice_event(promoted)
+        # Preserve the existing same-size flow exactly. Promotion is committed
+        # here only when the additional staggered-size selection step is needed.
+        vehicle_policy_state["slots"] = promoted if staggered_event else derived
+        return bool(staggered_event)
+
     executor = ToolLoopExecutor(
         messages,
         tools_for_domains(domains),
@@ -697,6 +713,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         ),
         tool_call_normalizer=_staggered_qty_tool_normalizer(slots),
         tool_call_guard=_cart_write_guard(decision, request),
+        stop_after_tool=stop_for_staggered_vehicle,
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")
     token_events: list[str] = []
@@ -710,6 +727,48 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             continue
         yield event
     t_tools = time.perf_counter()
+
+    slots = vehicle_policy_state["slots"]
+    post_tool_staggered_event = _staggered_tire_size_choice_event(slots)
+    if getattr(executor, "stopped_after_tool", False) and post_tool_staggered_event:
+        answer = str(post_tool_staggered_event["data"]["assistantResponse"])
+        chips = post_tool_staggered_event["data"]["quickReplies"]
+        result["answer"] = answer
+        if _tokens_enabled():
+            yield sse.token(answer)
+        yield sse.message(answer)
+        yield sse.sse(post_tool_staggered_event)
+        _update_trace_monitoring(
+            route_domains=domains,
+            tool_calls=executor.tool_calls,
+            final_template="quickReply",
+            trace_id=request.tracing_id,
+            parent_span_id=parent_span_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            answer=answer,
+            user_text=user_text,
+            message_id=message_id,
+            route_intents=list(decision.intents if decision else []),
+            fallback_used=True,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            trace_observation=parent_span,
+        )
+        if parent_span is not None:
+            parent_span.end()
+        _flush_trace()
+        await _record_real_usage(request, usage_tracker)
+        await save_slots(request.session_id, slots, user_id=request.user_id)
+        await memory.persist_turn_context(
+            request.session_id,
+            tool_calls=executor.tool_calls,
+            quick_reply_domains=[chip["domain"] for chip in chips],
+            predicted_domains=post_tool_staggered_event["data"]["predictedDomains"],
+            user_id=request.user_id,
+        )
+        for event in sse.done():
+            yield event
+        return
 
     # Part B: capture resolved order IDs (goods_no/shop_id/payment_amount) from this
     # turn's tool outputs into slots so the preOrder card + next-turn quick_order_tool
