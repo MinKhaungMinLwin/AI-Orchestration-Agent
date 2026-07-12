@@ -191,33 +191,6 @@ def _coerce(field: str, value: object) -> object:
     return value
 
 
-def _promote_selected_vehicle_candidate(
-    slots: ConversationSlots,
-    candidates: list[dict],
-    tool_calls: list[dict],
-) -> ConversationSlots:
-    launch_codes = {str(slots.car_lnc_cd or "").strip()}
-    launch_codes.update(
-        str((call.get("args") or {}).get("car_lnc_cd") or "").strip()
-        for call in tool_calls
-        if isinstance(call.get("args"), dict)
-    )
-    launch_codes.discard("")
-    if not launch_codes:
-        return slots
-    matches = [candidate for candidate in candidates if str(candidate.get("car_lnc_cd") or "").strip() in launch_codes]
-    if len(matches) != 1:
-        return slots
-    selected = matches[0]
-    values = {key: value for key, value in selected.items() if key in ConversationSlots.model_fields}
-    updated = slots.apply_runtime_values(values, source="chat_v3:selected_vehicle_launch_code")
-    front = str(updated.tire_size_front or "").strip()
-    rear = str(updated.tire_size_rear or "").strip()
-    if front and rear and front != rear:
-        updated = updated.model_copy(update={"tire_size": None})
-    return updated
-
-
 def derive_slots_from_tool_calls(slots: ConversationSlots, tool_calls: list[dict]) -> ConversationSlots:
     """Stage goods_no/shop_id/… resolved by this turn's tool activity."""
     values: dict = {}
@@ -250,11 +223,7 @@ def derive_slots_from_tool_calls(slots: ConversationSlots, tool_calls: list[dict
     if not values:
         return slots
     logger.info("[CHAT_V3] tool-derived slots: %s", values)
-    updated = slots.apply_runtime_values(values, source="chat_v3:tool_derived")
-    candidates = values.get("vehicle_candidates")
-    if isinstance(candidates, list):
-        updated = _promote_selected_vehicle_candidate(updated, candidates, tool_calls)
-    return updated
+    return slots.apply_runtime_values(values, source="chat_v3:tool_derived")
 
 
 def _snake_to_camel(field: str) -> str:
