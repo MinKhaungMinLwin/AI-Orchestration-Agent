@@ -9,6 +9,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from config.env import settings
+from services.tstation.chat_v3.executor import _model_visible_tool_output
 from services.tstation.chat_v3.llm import get_router_llm
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,9 @@ async def verify_answer(answer: str, tool_calls: list[dict], trace_config: dict 
     if not settings.AI_QC_ENABLED or not tool_calls or not answer:
         return QCResult(answer=answer, reason="qc_disabled_or_noop")
     facts = "\n\n".join(
-        f"[{call.get('name')}] input={call.get('args')}\n{str(call.get('output') or '')[:3000]}" for call in tool_calls
+        f"[{call.get('name')}] input={call.get('args')}\n"
+        f"{_model_visible_tool_output(str(call.get('name') or ''), str(call.get('output') or ''))[:4000]}"
+        for call in tool_calls
     )
     try:
         llm = get_router_llm().with_structured_output(QCVerdict, method="function_calling")

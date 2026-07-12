@@ -110,6 +110,42 @@ def test_inventory_tool_output_is_redacted_only_for_model_visible_observation() 
     assert "available_quantity_redacted" in visible
 
 
+def test_recommendation_output_compacts_all_product_price_contracts_before_truncation() -> None:
+    items = []
+    for index in range(3):
+        items.append(
+            {
+                "goods_no": f"G{index}",
+                "goods_nm": f"상품 {index}",
+                "tire_size_1": "255/35R19",
+                "sale_prc": 369_600 + index,
+                "extra_fvr_sale_prc": 277_400 + index,
+                "cheapest_final_prc": 351_100 + index,
+                "cheapest_total_discount": 18_500,
+                "cheapest_applied_coupons": [
+                    {"stage": "payment", "cpn_nm": "마케팅동의 5% 결제쿠폰", "discount_amt": 18_500}
+                ],
+                "pc_prod_remark_desc": "<html>" + ("상세설명" * 3000) + "</html>",
+                "pc_prod_tech_desc": "기술설명" * 3000,
+            }
+        )
+    output = json.dumps({"status": "success", "data": {"total": 3, "items": items}}, ensure_ascii=False)
+
+    visible = _model_visible_tool_output("get_products_recommendations_tool", output)
+    parsed = json.loads(visible)
+
+    assert len(visible) < 4000
+    assert [item["cheapest_final_prc"] for item in parsed["data"]["items"]] == [351100, 351101, 351102]
+    assert parsed["data"]["price_contract"] == {
+        "sale_prc": "기본가",
+        "extra_fvr_sale_prc": "일반 혜택가",
+        "cheapest_final_prc": "보유쿠폰 적용 혜택가",
+        "instruction": "각 상품에서 존재하는 세 가격을 서로 대체하지 말고 라벨별로 모두 표시",
+    }
+    assert "pc_prod_remark_desc" not in visible
+    assert "pc_prod_tech_desc" not in visible
+
+
 def test_cart_result_false_is_normalized_to_error() -> None:
     output = json.dumps(
         {"status": "success", "http_status": 200, "data": {"result": False, "message": "이미 장바구니에 담겨있는 상품입니다."}},

@@ -23,9 +23,11 @@ def test_system_prompt_limits_store_recommendations_to_tool_verifiable_condition
 
 
 def test_system_prompt_locks_user_facing_price_labels():
-    assert "'기본가', '혜택가', '보유쿠폰 적용 혜택가'" in SYSTEM_PROMPT
-    assert "cheapest_final_prc가 있으면 이를 최우선으로 사용" in SYSTEM_PROMPT
-    assert "cheapest_final_prc가 없고 extra_fvr_sale_prc가 있으면" in SYSTEM_PROMPT
+    assert "'기본가', '일반 혜택가', '보유쿠폰 적용 혜택가'" in SYSTEM_PROMPT
+    assert "구분해 세 가격을 모두 안내" in SYSTEM_PROMPT
+    assert "sale_prc는 '기본가'" in SYSTEM_PROMPT
+    assert "extra_fvr_sale_prc는 '일반 혜택가'" in SYSTEM_PROMPT
+    assert "cheapest_final_prc는 '보유쿠폰 적용 혜택가'" in SYSTEM_PROMPT
     assert "extra_fvr_sale_prc를 '보유쿠폰 적용 혜택가'라고 설명하지 말고" in SYSTEM_PROMPT
     assert "'안내가', '예시 혜택가', '보유 쿠폰 적용 시 예시 혜택가'" in SYSTEM_PROMPT
     assert "임의 라벨은 사용하지 마세요" in SYSTEM_PROMPT

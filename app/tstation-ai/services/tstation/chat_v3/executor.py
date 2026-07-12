@@ -22,6 +22,23 @@ MAX_TOOL_ROUNDS = 4
 _TOOL_OUTPUT_PREVIEW_CHARS = 4000
 _CAR_MODEL_GROUP_TOOL = "search_car_model_groups_tool"
 _RECOMMENDATION_TOOL = "get_products_recommendations_tool"
+_RECOMMENDATION_LLM_FIELDS = (
+    "goods_no",
+    "goods_nm",
+    "tire_size_1",
+    "sale_prc",
+    "extra_fvr_sale_prc",
+    "extra_fvr_sale_per",
+    "cheapest_final_prc",
+    "cheapest_total_discount",
+    "season_nm",
+    "goods_pfm_nm",
+    "goods_dtl_pfm_nm",
+    "t_wgt_spd",
+    "label_pnwave_nm",
+    "label_pndb",
+    "t_rls_yearmon",
+)
 
 
 def _tool_output_text(output: object) -> str:
@@ -67,7 +84,59 @@ def _normalize_tool_call(call: dict) -> dict:
 
 
 def _model_visible_tool_output(name: str, output_text: str) -> str:
+    if name == _RECOMMENDATION_TOOL:
+        return _compact_recommendation_output(output_text)
     return redact_inventory_output_for_model(name, output_text)
+
+
+def _compact_recommendation_output(output_text: str) -> str:
+    """Keep every product's price contract while dropping verbose catalogue HTML."""
+    try:
+        parsed = json.loads(output_text)
+    except (TypeError, ValueError):
+        return output_text
+    if not isinstance(parsed, dict):
+        return output_text
+    data = parsed.get("data")
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return output_text
+
+    compact_items = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        compact = {key: item[key] for key in _RECOMMENDATION_LLM_FIELDS if item.get(key) is not None}
+        coupons = item.get("cheapest_applied_coupons")
+        if isinstance(coupons, list):
+            compact["cheapest_applied_coupons"] = [
+                {
+                    key: coupon[key]
+                    for key in ("stage", "cpn_nm", "discount_amt")
+                    if isinstance(coupon, dict) and coupon.get(key) is not None
+                }
+                for coupon in coupons
+                if isinstance(coupon, dict)
+            ]
+        compact_items.append(compact)
+
+    return json.dumps(
+        {
+            "status": parsed.get("status"),
+            "data": {
+                "total": data.get("total"),
+                "items": compact_items,
+                "price_contract": {
+                    "sale_prc": "기본가",
+                    "extra_fvr_sale_prc": "일반 혜택가",
+                    "cheapest_final_prc": "보유쿠폰 적용 혜택가",
+                    "instruction": "각 상품에서 존재하는 세 가격을 서로 대체하지 말고 라벨별로 모두 표시",
+                },
+            },
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 # The cart API returning HTTP success with data.result=false
