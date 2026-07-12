@@ -369,8 +369,13 @@ async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict 
     # ── Monthly token quota check ──────────────────────────────────────────────
     if user_id:
         from config.env import settings
-        from services.tstation.quota_service import is_quota_exceeded, get_monthly_tokens, post_langfuse_score
-        if is_quota_exceeded(user_id, settings.MONTHLY_TOKEN_LIMIT):
+        from services.tstation.quota_service import (
+            get_monthly_tokens,
+            post_langfuse_score,
+            should_block_monthly_quota,
+        )
+
+        if should_block_monthly_quota(user_id, settings.MONTHLY_TOKEN_LIMIT):
             current = get_monthly_tokens(user_id)
             post_langfuse_score(
                 tracing_id, "quota_blocked", 1.0,

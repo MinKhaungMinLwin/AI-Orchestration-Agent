@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 _KST = timedelta(hours=9)
 _QUOTA_KEY = "quota:tokens:{user_id}:{ym}"
+_QUOTA_EXEMPT_USERS_KEY = "quota:tokens:exempt-users"
 
 
 def _now_kst() -> datetime:
@@ -48,6 +49,25 @@ def add_monthly_tokens(user_id: str, tokens: int) -> int:
 
 def is_quota_exceeded(user_id: str, limit: int) -> bool:
     return get_monthly_tokens(user_id) >= limit
+
+
+def is_quota_exempt(user_id: str) -> bool:
+    """Return whether this user bypasses quota blocking while usage is still recorded."""
+    if not user_id:
+        return False
+    try:
+        from services.tstation.chat_history_service import get_redis_client
+
+        return bool(get_redis_client().sismember(_QUOTA_EXEMPT_USERS_KEY, user_id))
+    except Exception:
+        # Fail closed: a Redis error must not silently disable quota enforcement.
+        logger.exception("[QUOTA] Failed to check quota exemption for %s", user_id)
+        return False
+
+
+def should_block_monthly_quota(user_id: str, limit: int) -> bool:
+    """Central quota gate: exemptions bypass blocking, not usage recording."""
+    return not is_quota_exempt(user_id) and is_quota_exceeded(user_id, limit)
 
 
 def estimate_tokens(text: str) -> int:

@@ -55,6 +55,49 @@ def test_monthly_quota_uses_korea_standard_time():
     assert quota_service._KST.total_seconds() == 9 * 60 * 60
 
 
+def test_quota_exempt_user_is_read_from_redis_set():
+    fake_redis = MagicMock()
+    fake_redis.sismember.side_effect = lambda key, user_id: (
+        key == quota_service._QUOTA_EXEMPT_USERS_KEY and user_id == "M200012931"
+    )
+
+    with patch("services.tstation.chat_history_service.get_redis_client", return_value=fake_redis):
+        assert quota_service.is_quota_exempt("M200012931") is True
+        assert quota_service.is_quota_exempt("M200012932") is False
+
+
+def test_quota_exemption_check_fails_closed_when_redis_is_unavailable():
+    with patch(
+        "services.tstation.chat_history_service.get_redis_client",
+        side_effect=RuntimeError("redis unavailable"),
+    ):
+        assert quota_service.is_quota_exempt("M200012931") is False
+
+
+def test_empty_user_id_never_checks_quota_exemption():
+    with patch("services.tstation.chat_history_service.get_redis_client") as mock_redis:
+        assert quota_service.is_quota_exempt("") is False
+
+    mock_redis.assert_not_called()
+
+
+def test_exempt_user_bypasses_monthly_quota_blocking():
+    with patch.object(quota_service, "is_quota_exempt", return_value=True), patch.object(
+        quota_service, "is_quota_exceeded", return_value=True
+    ) as mock_exceeded:
+        blocked = quota_service.should_block_monthly_quota("M200012931", 2_000_000)
+
+    assert blocked is False
+    mock_exceeded.assert_not_called()
+
+
+def test_non_exempt_over_limit_user_is_still_blocked():
+    with patch.object(quota_service, "is_quota_exempt", return_value=False), patch.object(
+        quota_service, "is_quota_exceeded", return_value=True
+    ):
+        assert quota_service.should_block_monthly_quota("M200012932", 2_000_000) is True
+
+
 def test_record_monthly_tokens_increments_redis_and_posts_score():
     with patch.object(quota_service, "add_monthly_tokens", return_value=364_790) as mock_add, \
             patch.object(quota_service, "post_langfuse_score") as mock_score:
