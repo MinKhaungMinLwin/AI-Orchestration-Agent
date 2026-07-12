@@ -951,6 +951,27 @@ def test_enforce_quantity_chips_keeps_chips_when_answer_is_not_asking_quantity()
     )
 
 
+def test_enforce_quantity_chips_keeps_region_chips_when_quantity_is_confirmed():
+    slots = ConversationSlots(
+        goods_no="G000000317719",
+        tire_size="255/35R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    region_chips = [
+        {"label": "강남 근처", "domain": "TRANSACTION"},
+        {"label": "서울 송파", "domain": "TRANSACTION"},
+    ]
+    answer = "- 수량: 2개\n장착 예약까지 진행하시려면 원하시는 지역이나 매장명을 알려주세요."
+
+    chips = templates.enforce_quantity_chips(answer, region_chips, slots)
+
+    assert chips is region_chips
+
+
 def test_enforce_quantity_chips_limits_to_two_for_staggered_fitment():
     answer = "앞/뒤 규격이 달라 축당 최대 2개까지 가능해요. 몇 개 주문하시겠어요?"
 

@@ -1495,6 +1495,8 @@ def enforce_quantity_chips(
     slots: ConversationSlots | None = None,
 ) -> list[dict]:
     """answer 가 수량을 묻고 있으면 차량 적합 상태에 맞는 수량 chip 으로 교체."""
+    if _has_confirmed_quantity(slots):
+        return chips
     text = str(answer or "")
     if not _QTY_QUESTION_RE.search(text):
         return chips

@@ -170,6 +170,8 @@ class QuickReplyTemplate(TemplatePayload):
         if any(p.search(text) for p in _QTY_QUESTION_SKIP_PATTERNS):
             return self
         chip_labels = {c.label for c in self.quickReplies}
+        if chip_labels == set(_REQUIRED_QTY_CHIPS[:2]) and len(self.quickReplies) == 2:
+            return self
         if all(req in chip_labels for req in _REQUIRED_QTY_CHIPS):
             return self
         missing = [r for r in _REQUIRED_QTY_CHIPS if r not in chip_labels]

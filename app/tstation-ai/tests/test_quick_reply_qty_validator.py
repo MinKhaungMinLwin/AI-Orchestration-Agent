@@ -1,9 +1,9 @@
 """Unit tests for QuickReplyTemplate qty-chip enforcement validator.
 
-Locks in the deterministic fallback: when the assistant asks for tire qty,
-quickReplies must contain ["1개", "2개", "3개", "4개"] in full. Validator
-auto-fills any missing chips, but never fires on qty-confirm prompts (where
-the chips are intentionally suppressed) or on unrelated quickReply turns.
+Locks in the deterministic fallback: when the assistant asks for tire qty and
+no canonical quantity set is present, quickReplies default to
+["1개", "2개", "3개", "4개"]. The staggered-fitment policy may intentionally
+provide ["1개", "2개"], which the schema must preserve.
 
 Run from repo root with:
 
@@ -67,7 +67,7 @@ def test_qty_question_with_empty_chips_is_autofilled() -> None:
     assert _labels(tpl) == _QTY_CHIPS
 
 
-def test_qty_question_with_only_first_two_chips_is_autofilled() -> None:
+def test_qty_question_with_staggered_quantity_chips_is_preserved() -> None:
     tpl = QuickReplyTemplate(
         assistantResponse="몇 개를 확인하시겠습니까?",
         quickReplies=[
@@ -75,7 +75,7 @@ def test_qty_question_with_only_first_two_chips_is_autofilled() -> None:
             QuickReplyChip(label="2개", domain="TRANSACTION"),
         ],
     )
-    assert _labels(tpl) == _QTY_CHIPS
+    assert _labels(tpl) == ["1개", "2개"]
 
 
 # --------------------------------------------------------------------------- #
