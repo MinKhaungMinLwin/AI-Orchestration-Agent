@@ -954,6 +954,26 @@ def test_enforce_quantity_chips_limits_to_two_for_staggered_fitment():
     assert [chip["label"] for chip in chips] == ["1개", "2개"]
 
 
+def test_enforce_quantity_chips_uses_staggered_slots_when_answer_omits_limit():
+    slots = ConversationSlots(
+        goods_no="G000000319580",
+        tire_size="255/35R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+    )
+    answer = "구매를 진행하시려면 수량을 선택해 주세요. 뒤 타이어만 교체하실 경우 보통 2개를 선택합니다."
+    composer_chips = [
+        {"label": "1개", "domain": "TRANSACTION"},
+        {"label": "2개", "domain": "TRANSACTION"},
+        {"label": "3개", "domain": "TRANSACTION"},
+        {"label": "4개", "domain": "TRANSACTION"},
+    ]
+
+    chips = templates.enforce_quantity_chips(answer, composer_chips, slots)
+
+    assert [chip["label"] for chip in chips] == ["1개", "2개"]
+
+
 def test_preorder_fallback_builds_ready_order_card_from_slots():
     slots = ConversationSlots(
         goods_no="G000000309783",

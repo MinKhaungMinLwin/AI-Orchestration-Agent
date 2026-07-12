@@ -1486,12 +1486,17 @@ _STAGGERED_MAX_TWO_RE = re.compile(
 )
 
 
-def enforce_quantity_chips(answer: str, chips: list[dict]) -> list[dict]:
-    """answer 가 수량을 묻고 있으면 chip 을 수량 chip(1개~4개)으로 교체."""
+def enforce_quantity_chips(
+    answer: str,
+    chips: list[dict],
+    slots: ConversationSlots | None = None,
+) -> list[dict]:
+    """answer 가 수량을 묻고 있으면 차량 적합 상태에 맞는 수량 chip 으로 교체."""
     text = str(answer or "")
     if not _QTY_QUESTION_RE.search(text):
         return chips
-    limit = 2 if _STAGGERED_MAX_TWO_RE.search(text) else 4
+    staggered = bool(slots is not None and is_staggered_vehicle(slots))
+    limit = STAGGERED_MAX_ORD_QTY if staggered or _STAGGERED_MAX_TWO_RE.search(text) else 4
     return [dict(chip) for chip in _QUANTITY_QUICK_REPLIES[:limit]]
 
 
