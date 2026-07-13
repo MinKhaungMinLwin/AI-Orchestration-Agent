@@ -175,6 +175,23 @@ def _decide_reservation_date_guard(
     return decision
 
 
+def _clear_non_target_unsupported_brand_guard(decision: RouteDecision) -> RouteDecision:
+    if decision.guard_id != GuardId.UNSUPPORTED_BRAND:
+        return decision
+    brand_context = decision.brand_context
+    if brand_context.unsupported_brand_target or not brand_context.has_non_target_brand_context():
+        return decision
+    logger.info(
+        "[CHAT_V3] cleared unsupported_brand guard for non-target brand context=%s",
+        brand_context.model_dump(exclude_none=True),
+    )
+    decision.guard_id = GuardId.NONE
+    decision.domain = Domain.DISCOVERY
+    decision.extra_domains = []
+    decision.needs_selection_card = True
+    return decision
+
+
 def _apply_delivery_policy_guard(decision: RouteDecision, request: TStationChatRequest) -> RouteDecision:
     policy = decide_delivery_policy_gate(
         user_text=_last_user_text(request),
@@ -296,6 +313,7 @@ async def route_request(
         messages = [("system", ROUTER_PROMPT), ("user", _router_input(request, known_slots))]
         decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         decision = _decide_reservation_date_guard(decision, request)
+        decision = _clear_non_target_unsupported_brand_guard(decision)
         decision = _move_static_faq_guard_to_intent(decision)
         decision = _apply_runflat_mixed_install_policy(decision, request)
         decision = _apply_late_night_store_hours_policy(decision, request)

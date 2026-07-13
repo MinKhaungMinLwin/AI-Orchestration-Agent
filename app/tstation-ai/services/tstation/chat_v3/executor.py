@@ -131,6 +131,7 @@ def _compact_recommendation_output(output_text: str) -> str:
             "extra_fvr_sale_prc": "일반 혜택가",
             "cheapest_final_prc": "보유쿠폰 적용 혜택가",
             "instruction": "각 상품에서 존재하는 세 가격을 서로 대체하지 말고 라벨별로 모두 표시",
+            "coupon_price_notice": "보유 쿠폰 기준 가격이며, 상품 상세 페이지에서 미 다운로드 쿠폰 적용 시 추가 할인 받으실 수 있습니다.",
         },
     }
     # The tool silently drops the vehicle_type filter when it would return nothing, and says so

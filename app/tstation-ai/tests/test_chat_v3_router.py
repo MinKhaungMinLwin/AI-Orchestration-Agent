@@ -54,10 +54,11 @@ from services.tstation.chat_v3.router.route import (  # noqa: E402
     _apply_late_night_store_hours_policy,
     _apply_pickup_service_policy,
     _apply_runflat_mixed_install_policy,
+    _clear_non_target_unsupported_brand_guard,
     _decide_reservation_date_guard,
     _move_static_faq_guard_to_intent,
 )
-from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision  # noqa: E402
+from services.tstation.chat_v3.router.schemas import BrandContext, Domain, GuardId, RouteDecision  # noqa: E402
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 
 
@@ -213,6 +214,36 @@ def test_product_code_request_guard_refuses_internal_identifier() -> None:
     assert "내부 식별자" in guard.text
     assert "안내해 드릴 수 없어요" in guard.text
     assert guard.predicted_domains == ["DISCOVERY", "TRANSACTION"]
+
+
+def test_unsupported_brand_guard_clears_when_brand_is_only_installed_context() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.UNSUPPORTED_BRAND,
+        domain=Domain.DISCOVERY,
+        intents=["tire_recommend"],
+        brand_context=BrandContext(installed_brand="Kumho", desired_brand="Hankook"),
+        needs_selection_card=False,
+    )
+
+    result = _clear_non_target_unsupported_brand_guard(decision)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.DISCOVERY
+    assert result.needs_selection_card is True
+
+
+def test_unsupported_brand_guard_stays_when_unsupported_brand_is_target() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.UNSUPPORTED_BRAND,
+        domain=Domain.DISCOVERY,
+        intents=["tire_recommend"],
+        brand_context=BrandContext(unsupported_brand_target="Kumho"),
+        needs_selection_card=True,
+    )
+
+    result = _clear_non_target_unsupported_brand_guard(decision)
+
+    assert result.guard_id == GuardId.UNSUPPORTED_BRAND
 
 
 def test_out_of_scope_guard_does_not_offer_qna_handoff() -> None:
