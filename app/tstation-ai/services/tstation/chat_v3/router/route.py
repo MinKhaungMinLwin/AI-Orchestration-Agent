@@ -6,11 +6,10 @@ Returns None on any failure — the caller degrades to pure chat.
 
 import json
 import logging
-import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Any
 
-from common.curr_time import get_current_time
+from common.curr_time import get_current_time, get_today
 from schemas.tstation.chat import TStationChatRequest
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.chat_v3.llm import get_router_llm
@@ -99,9 +98,7 @@ def _recent_context_before_last_user(request: TStationChatRequest) -> str:
 
 
 def _today() -> date:
-    tz_offset = int(os.getenv("TZ_OFFSET", "0"))
-    tz = timezone(timedelta(hours=tz_offset))
-    return datetime.now(tz).date()
+    return get_today()
 
 
 def _nested_value(data: Any, *path: str) -> Any:
@@ -141,24 +138,39 @@ def _parse_yyyymmdd(value: str) -> date | None:
         return None
 
 
-def _clear_in_range_reservation_date_guard(
+BOOKING_WINDOW_DAYS = 30
+
+
+def _decide_reservation_date_guard(
     decision: RouteDecision,
     request: TStationChatRequest,
     *,
     today: date | None = None,
 ) -> RouteDecision:
-    if decision.guard_id != GuardId.RESERVATION_DATE_RANGE:
-        return decision
+    """Own the in/out-of-window verdict here, not in the router prompt.
+
+    The router's job is language: pull the date the user means (including "오늘"/"내일") into
+    requested_cal_day. Whether that date falls inside the booking window is arithmetic, and the
+    model is unreliable at it in both directions — it fired this guard on *today* when a customer
+    re-asked insistently, and skipped it for a date five months out. So the model no longer picks
+    this guard at all; the date it extracts decides it.
+    """
     requested = str(decision.slots_patch.requested_cal_day or "").strip() or _requested_cal_day_from_request(request)
     requested_day = _parse_yyyymmdd(requested)
     if requested_day is None:
+        # No known date cannot justify an "your date is out of range" answer.
+        if decision.guard_id == GuardId.RESERVATION_DATE_RANGE:
+            logger.info("[CHAT_V3] cleared reservation_date_range guard — no requested date to justify it")
+            decision.guard_id = GuardId.NONE
         return decision
+
     base_day = today or _today()
-    if base_day <= requested_day <= base_day + timedelta(days=30):
-        logger.info(
-            "[CHAT_V3] cleared reservation_date_range guard for in-range requested_cal_day=%s",
-            requested,
-        )
+    out_of_window = not (base_day <= requested_day <= base_day + timedelta(days=BOOKING_WINDOW_DAYS))
+    if out_of_window and decision.guard_id == GuardId.NONE:
+        logger.info("[CHAT_V3] set reservation_date_range guard for out-of-window %s", requested)
+        decision.guard_id = GuardId.RESERVATION_DATE_RANGE
+    elif not out_of_window and decision.guard_id == GuardId.RESERVATION_DATE_RANGE:
+        logger.info("[CHAT_V3] cleared reservation_date_range guard for in-range %s", requested)
         decision.guard_id = GuardId.NONE
     return decision
 
@@ -283,7 +295,7 @@ async def route_request(
         llm = get_router_llm().with_structured_output(RouteDecision, method="function_calling")
         messages = [("system", ROUTER_PROMPT), ("user", _router_input(request, known_slots))]
         decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
-        decision = _clear_in_range_reservation_date_guard(decision, request)
+        decision = _decide_reservation_date_guard(decision, request)
         decision = _move_static_faq_guard_to_intent(decision)
         decision = _apply_runflat_mixed_install_policy(decision, request)
         decision = _apply_late_night_store_hours_policy(decision, request)

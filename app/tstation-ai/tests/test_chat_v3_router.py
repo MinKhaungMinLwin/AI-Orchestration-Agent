@@ -54,7 +54,7 @@ from services.tstation.chat_v3.router.route import (  # noqa: E402
     _apply_late_night_store_hours_policy,
     _apply_pickup_service_policy,
     _apply_runflat_mixed_install_policy,
-    _clear_in_range_reservation_date_guard,
+    _decide_reservation_date_guard,
     _move_static_faq_guard_to_intent,
 )
 from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision  # noqa: E402
@@ -85,7 +85,7 @@ def _reservation_guard_decision(requested_cal_day: str | None) -> RouteDecision:
 def test_in_range_reservation_schedule_slot_clears_date_range_guard() -> None:
     decision = _reservation_guard_decision("20260709")
 
-    result = _clear_in_range_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
+    result = _decide_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
 
     assert result.guard_id == GuardId.NONE
     assert result.slots_patch.requested_cal_day == "20260709"
@@ -95,7 +95,7 @@ def test_in_range_reservation_schedule_slot_clears_date_range_guard() -> None:
 def test_out_of_range_reservation_schedule_keeps_date_range_guard() -> None:
     decision = _reservation_guard_decision("20260808")
 
-    result = _clear_in_range_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
+    result = _decide_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
 
     assert result.guard_id == GuardId.RESERVATION_DATE_RANGE
 
@@ -103,7 +103,7 @@ def test_out_of_range_reservation_schedule_keeps_date_range_guard() -> None:
 def test_past_reservation_schedule_keeps_date_range_guard() -> None:
     decision = _reservation_guard_decision("20260707")
 
-    result = _clear_in_range_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
+    result = _decide_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
 
     assert result.guard_id == GuardId.RESERVATION_DATE_RANGE
 
@@ -112,7 +112,27 @@ def test_in_range_reservation_schedule_from_ui_action_clears_date_range_guard() 
     decision = _reservation_guard_decision(None)
     request = _request(ui_action={"slots": {"requested_cal_day": "20260709", "rsv_hour": "15"}})
 
-    result = _clear_in_range_reservation_date_guard(decision, request, today=date(2026, 7, 8))
+    result = _decide_reservation_date_guard(decision, request, today=date(2026, 7, 8))
+
+    assert result.guard_id == GuardId.NONE
+
+
+def test_out_of_window_date_sets_guard_the_router_did_not_pick() -> None:
+    """The router no longer judges the booking window — the extracted date does."""
+    decision = _reservation_guard_decision("20261225")
+    decision.guard_id = GuardId.NONE
+
+    result = _decide_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
+
+    assert result.guard_id == GuardId.RESERVATION_DATE_RANGE
+
+
+def test_guard_without_any_known_date_is_cleared() -> None:
+    """'Your date is out of range' is indefensible when no date is known — this is how an
+    insistent 'can I get it TODAY?' used to receive a canned out-of-range answer."""
+    decision = _reservation_guard_decision(None)
+
+    result = _decide_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
 
     assert result.guard_id == GuardId.NONE
 
