@@ -492,6 +492,34 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     full_assistant_content = ""
     assistant_response_ui = None
     template_data = None
+    assistant_saved = False
+
+    async def save_assistant_history() -> None:
+        nonlocal assistant_saved
+        if assistant_saved:
+            return
+        message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
+        if not message_to_save and not template_data:
+            return
+
+        logger.debug(
+            "[CHAT_MESSAGE] Saving assistant message"
+            + (" with template_data" if template_data else "")
+            + f": {message_to_save[:50]}..."
+        )
+
+        from services.tstation.history_summarizer import refresh_summary
+
+        await asyncio.to_thread(
+            service.save_message,
+            session_id,
+            "assistant",
+            message_to_save or "",
+            template_data=template_data,
+            user_id=chat_request.user_id,
+        )
+        assistant_saved = True
+        asyncio.create_task(refresh_summary(session_id)).add_done_callback(_log_task_error)
 
     try:
         stream_response = await TStationChatServiceV2.chat(chat_request)
@@ -549,28 +577,12 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
 
             yield chunk
 
-        message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
-        if message_to_save:
-            logger.debug(
-                "[CHAT_MESSAGE] Saving assistant message"
-                + (" with template_data" if template_data else "")
-                + f": {message_to_save[:50]}..."
-            )
-
-            from services.tstation.history_summarizer import refresh_summary
-            asyncio.create_task(asyncio.to_thread(
-                service.save_message,
-                session_id,
-                "assistant",
-                message_to_save,
-                template_data=template_data,
-                user_id=chat_request.user_id,
-            )).add_done_callback(_log_task_error)
-            asyncio.create_task(refresh_summary(session_id)).add_done_callback(_log_task_error)
+        await save_assistant_history()
 
         yield "data: [DONE]\n\n"
 
     finally:
+        await save_assistant_history()
         await _redis.delete(_streaming_key)
 
 

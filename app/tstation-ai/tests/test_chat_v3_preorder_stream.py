@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +54,7 @@ os.environ["REDIS_CONVERSATION_MANAGEMENT_URL"] = "redis://localhost:6379/0"
 os.environ["REDIS_QUEUE_URL"] = "redis://localhost:6379/1"
 os.environ["REDIS_URL"] = "redis://localhost:6379/2"
 
+from api.tstation import chat_message as chat_message_module  # noqa: E402
 from services.tstation.chat_v3 import service  # noqa: E402
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
 from services.tstation.chat_v3.slots.derive import (  # noqa: E402
@@ -75,8 +77,33 @@ def _parse_sse_event(line: str) -> dict | None:
     return json.loads(payload)
 
 
+class _FakeRedis:
+    async def exists(self, key: str) -> bool:
+        return False
+
+    async def delete(self, key: str) -> None:
+        return None
+
+
+class _FakeStreamResponse:
+    def __init__(self, chunks: list[str]) -> None:
+        self._chunks = chunks
+
+    @property
+    def body_iterator(self):
+        async def _iterate():
+            for chunk in self._chunks:
+                yield chunk
+
+        return _iterate()
+
+
 def test_preorder_stream_does_not_emit_duplicate_message(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch))
+
+
+def test_stream_chat_response_saves_preorder_template_without_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_stream_chat_response_saves_preorder_template_without_text(monkeypatch))
 
 
 def test_cart_confirmation_turn_does_not_write_cart_directly(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1130,3 +1157,72 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
     ]
     assert pre_order_events
     assert "assistantResponse" not in pre_order_events[0]["data"]
+
+
+async def _assert_stream_chat_response_saves_preorder_template_without_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    saved_messages: list[dict] = []
+    preorder_event = {
+        "type": "data",
+        "template": "preOrder",
+        "data": {
+            "orderInfo": {"product": "Ventus S2 AS", "quantity": 4},
+            "isReadyToOrder": True,
+            "isReadyToAddToCart": False,
+            "metadata": {"goodsNo": "G0001"},
+        },
+    }
+
+    class FakeChatService:
+        @staticmethod
+        async def chat(chat_request):
+            return _FakeStreamResponse([
+                f"data: {json.dumps(preorder_event, ensure_ascii=False)}\n\n",
+                "data: [DONE]\n\n",
+            ])
+
+    class FakeHistoryService:
+        def save_message(self, session_id, role, content, template_data=None, user_id=None):
+            saved_messages.append({
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "template_data": template_data,
+                "user_id": user_id,
+            })
+            return "saved-message"
+
+    async def fake_refresh_summary(session_id: str) -> None:
+        return None
+
+    monkeypatch.setattr(chat_message_module, "TStationChatServiceV2", FakeChatService)
+    monkeypatch.setattr("services.tstation.chat.TStationChatServiceV2", FakeChatService)
+    monkeypatch.setattr("services.tstation.chat_history_service.get_async_redis_client", lambda: _FakeRedis())
+    monkeypatch.setattr("services.tstation.history_summarizer.refresh_summary", fake_refresh_summary)
+
+    chat_request = SimpleNamespace(
+        messages=[{"role": "user", "content": "2026년 07월 21일 10:00"}],
+        user_id="u1",
+    )
+
+    chunks = [
+        chunk
+        async for chunk in chat_message_module.stream_chat_response(
+            chat_request,
+            "s1",
+            "m1",
+            FakeHistoryService(),
+        )
+    ]
+
+    assert chunks[-1] == "data: [DONE]\n\n"
+    assert saved_messages == [
+        {
+            "session_id": "s1",
+            "role": "assistant",
+            "content": "",
+            "template_data": preorder_event,
+            "user_id": "u1",
+        }
+    ]
