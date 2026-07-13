@@ -128,29 +128,39 @@ def test_customer_monitoring_records_qc_failure_without_changing_status() -> Non
     assert "qc:failed" in payload["tags"]
 
 
-def test_update_trace_monitoring_uses_langfuse_current_trace(monkeypatch) -> None:
-    calls: list[dict] = []
+def test_update_trace_monitoring_does_not_call_current_trace(monkeypatch) -> None:
+    # The turn's parent span is created via start_span() (never activated as the current
+    # span), so tracer.update_current_trace() only logs a "No active span" warning and is
+    # skipped. The payload must go through the explicit parent span instead.
+    current_trace_calls: list[dict] = []
+    parent_trace_calls: list[dict] = []
+
+    class FakeParentSpan:
+        def update_trace(self, **kwargs):
+            parent_trace_calls.append(kwargs)
 
     class FakeTracer:
         def update_current_trace(self, **kwargs):
-            calls.append(kwargs)
+            current_trace_calls.append(kwargs)
 
     monkeypatch.setattr(service, "tracer", FakeTracer())
 
     service._update_trace_monitoring(
+        trace_observation=FakeParentSpan(),
         route_domains=["TRANSACTION"],
         tool_calls=[{"name": "quick_order_tool", "output": '{"status":"success"}'}],
         final_template="orderComplete",
         latency_ms=100,
     )
 
-    assert calls
-    assert calls[0]["metadata"]["primary_af"] == "Quick Shopping AF"
-    assert calls[0]["metadata"]["final_status"] == "success"
-    assert "af:quick_shopping" in calls[0]["tags"]
+    assert current_trace_calls == []  # the redundant, active-span-dependent call is gone
+    assert parent_trace_calls  # payload applied via the explicit parent span
+    assert parent_trace_calls[0]["metadata"]["primary_af"] == "Quick Shopping AF"
+    assert parent_trace_calls[0]["metadata"]["final_status"] == "success"
+    assert "af:quick_shopping" in parent_trace_calls[0]["tags"]
 
 
-def test_update_trace_monitoring_keeps_current_trace_update_with_parent_span(monkeypatch) -> None:
+def test_update_trace_monitoring_applies_payload_to_parent_span(monkeypatch) -> None:
     current_trace_calls: list[dict] = []
     parent_trace_calls: list[dict] = []
 
@@ -174,11 +184,11 @@ def test_update_trace_monitoring_keeps_current_trace_update_with_parent_span(mon
         latency_ms=100,
     )
 
+    assert current_trace_calls == []
     assert parent_trace_calls
-    assert current_trace_calls
-    assert current_trace_calls[0]["metadata"]["primary_af"] == "Product Recommendation AF"
-    assert current_trace_calls[0]["input"] == "타이어 추천"
-    assert current_trace_calls[0]["output"] == "추천 타이어입니다."
+    assert parent_trace_calls[0]["metadata"]["primary_af"] == "Product Recommendation AF"
+    assert parent_trace_calls[0]["input"] == "타이어 추천"
+    assert parent_trace_calls[0]["output"] == "추천 타이어입니다."
 
 
 def test_update_trace_monitoring_records_customer_event_with_turn_metadata(monkeypatch) -> None:
