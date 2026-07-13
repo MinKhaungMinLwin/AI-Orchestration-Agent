@@ -1,7 +1,6 @@
 # Chat V3 — Migrating V2 features to V3 (LLM-first, zero-regex)
 
 > **Status:** Phases 0–8 implemented (2026-07-07) · **Flag:** `AI_CHAT_V3_PURE_LLM_ENABLED` · **V2 stays untouched.**
-> Vietnamese version: [MIGRATE_V2_TO_V3.md](MIGRATE_V2_TO_V3.md)
 
 ## Implementation status
 

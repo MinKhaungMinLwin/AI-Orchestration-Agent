@@ -4,7 +4,6 @@ Third-generation chat service for T-Station AI: **every decision is made by an L
 V2 (`services/tstation/chat.py`, ~40k lines) stays untouched and remains the default; V3 is enabled by a flag.
 
 > Migration plan + per-phase status: [`docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`](../../../../../docs/chat-v3/MIGRATE_V2_TO_V3_EN.md)
-> Vietnamese version of this document: [README.md](README.md)
 
 ---
 
