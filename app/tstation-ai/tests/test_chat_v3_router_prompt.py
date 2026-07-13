@@ -98,6 +98,15 @@ def test_router_prompt_blocks_internal_product_code_requests_as_guard():
     assert "상품명·규격·가격·재고·장착 가능 여부" in guard_section
 
 
+def test_router_prompt_requires_brand_role_context_for_unsupported_brand():
+    assert "brand_context" in ROUTER_PROMPT
+    assert "installed_brand" in ROUTER_PROMPT
+    assert "desired_brand" in ROUTER_PROMPT
+    assert "excluded_brand" in ROUTER_PROMPT
+    assert "unsupported_brand_target" in ROUTER_PROMPT
+    assert 'Use guard_id="unsupported_brand" only when unsupported_brand_target is filled' in ROUTER_PROMPT
+
+
 def test_router_prompt_routes_external_prediction_or_advice_as_out_of_scope():
     guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
 

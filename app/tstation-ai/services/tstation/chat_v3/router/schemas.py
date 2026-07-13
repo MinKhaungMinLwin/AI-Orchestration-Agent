@@ -7,6 +7,31 @@ from pydantic import BaseModel, Field
 from services.tstation.chat_v3.slots.schemas import SlotsPatch
 
 
+class BrandContext(BaseModel):
+    installed_brand: str | None = Field(
+        default=None,
+        description="Brand currently mounted on the user's vehicle, if the user states one.",
+    )
+    desired_brand: str | None = Field(
+        default=None,
+        description="Brand the user wants to buy, search, or receive recommendations for.",
+    )
+    excluded_brand: str | None = Field(
+        default=None,
+        description="Brand the user explicitly wants to exclude from recommendations.",
+    )
+    unsupported_brand_target: str | None = Field(
+        default=None,
+        description=(
+            "Unsupported brand only when that brand itself is the user's target for search, price, stock, "
+            "availability, or recommendation. Leave empty when the unsupported brand is only the installed brand."
+        ),
+    )
+
+    def has_non_target_brand_context(self) -> bool:
+        return any(str(value or "").strip() for value in (self.installed_brand, self.desired_brand, self.excluded_brand))
+
+
 class GuardId(str, Enum):
     NONE = "none"
     PII = "pii"
@@ -64,6 +89,13 @@ class RouteDecision(BaseModel):
     slots_patch: SlotsPatch = Field(
         default_factory=SlotsPatch,
         description="이번 사용자 발화에서 새로 알 수 있게 된 슬롯 값만",
+    )
+    brand_context: BrandContext = Field(
+        default_factory=BrandContext,
+        description=(
+            "Role of tire brands mentioned in the current user turn. Distinguish installed/current brand, "
+            "desired purchase/recommendation brand, excluded brand, and a truly unsupported target brand."
+        ),
     )
     needs_selection_card: bool = Field(
         default=True,
