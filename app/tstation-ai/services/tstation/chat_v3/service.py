@@ -584,9 +584,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             parent_span.end()
         _flush_trace()
         await _record_real_usage(request, usage_tracker)
+        await save_slots(request.session_id, slots, user_id=request.user_id)
         for event in sse.done():
             yield event
-        await save_slots(request.session_id, slots, user_id=request.user_id)
         return
 
     domains = decision.all_domains() if decision else ["LEADING"]
