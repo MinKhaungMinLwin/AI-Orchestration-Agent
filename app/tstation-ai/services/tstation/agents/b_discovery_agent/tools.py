@@ -8,7 +8,7 @@ from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedCli
 from services.tstation.common.tstation_be_client import (
     get_client,
     _error_response,
-    _success_response,
+    _success_response as _common_success_response,
     _to_dict,
 )
 from langchain_core.tools import tool
@@ -70,6 +70,24 @@ current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = co
 
 _RECOMMENDATION_LIMIT_CAP = 10
 _THREE_PMSF_DESCRIPTION = "3PMSF 인증으로 눈길 성능 기준을 충족해 올웨더 주행 신뢰도를 높인 타이어입니다."
+_AGENT_EXCLUDED_FIELDS = frozenset({"orpl_nm"})
+
+
+def _sanitize_agent_tool_data(value: Any) -> Any:
+    """Remove fields that no Agent discovery flow may use or persist."""
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_agent_tool_data(item)
+            for key, item in value.items()
+            if key.lower() not in _AGENT_EXCLUDED_FIELDS
+        }
+    if isinstance(value, list):
+        return [_sanitize_agent_tool_data(item) for item in value]
+    return value
+
+
+def _success_response(status_code: int, data: Any) -> dict[str, Any]:
+    return _common_success_response(status_code, _sanitize_agent_tool_data(data))
 
 
 def _truthy_flag(value: Any) -> bool:
@@ -291,11 +309,11 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "rating_avg", "rate", "review_count", "review_summary",
     # 상품 등록 일시 — used to identify newest product among same-keyword results
     "sys_reg_dtime",
-    # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
+    # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/출시/성능/라벨/공임·보증)
     "big_goods_nm", "ptrn_d_nm",
     "tire_width", "tire_series", "inch",
     "t_wgt_spd",
-    "brand_nm", "certify_brand_nm", "orpl_nm",
+    "brand_nm", "certify_brand_nm",
     "t_rls_yearmon",
     "t_high_perform", "t_handling", "t_dryroad_brk",
     "rr",
@@ -792,7 +810,7 @@ def search_product_tool(
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
         - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn, three_pmsf_yn
-        - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
+        - 브랜드/출시: brand_nm, certify_brand_nm, t_rls_yearmon
         - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
         - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심서비스)
     """
@@ -1174,7 +1192,7 @@ def get_product_description_tool(goods_no: str):
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
         - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn
-        - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
+        - 브랜드/출시: brand_nm, certify_brand_nm, t_rls_yearmon
         - 성능 점수: t_comfort, t_silence, t_high_perform, t_handling, t_life_span,
           t_snow, t_ice, t_dryroad_brk
         - EU 라벨: rr, wet, label_pndb
@@ -1371,7 +1389,7 @@ def get_products_recommendations_tool(
     Item field hints (사용자 질문 → 참조 필드, search_product_tool 과 동일):
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
-        - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
+        - 브랜드/출시: brand_nm, certify_brand_nm, t_rls_yearmon
         - 추가 성능: t_high_perform, t_handling, t_dryroad_brk
         - EU 라벨: rr (회전저항), wet, label_pndb (소음 dB)
         - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn

@@ -79,7 +79,7 @@ _RCMD_BASE_FIELDS: set[str] = {
     # 신규 BE 확장 필드 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
     "big_goods_nm", "ptrn_d_nm",
     "tire_width", "tire_series", "inch", "t_wgt_spd",
-    "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+    "brand_nm", "certify_brand_nm", "t_rls_yearmon",
     "t_high_perform", "t_handling", "t_dryroad_brk", "rr",
     "wage_prc", "wage_today_prc", "free_guarantee_yn",
     # 회원 보유 쿠폰 기반 최저가 (BE 측 enrich, tstation-backend@622ad6a 이후)
@@ -107,7 +107,7 @@ _SEARCH_PRODUCT_BASE_FIELDS: set[str] = {
     "tire_width", "tire_series", "inch",
     "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
     "season_nm", "car_knd_nm",
-    "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+    "brand_nm", "certify_brand_nm", "t_rls_yearmon",
     "t_comfort", "t_silence", "t_high_perform", "t_handling",
     "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
     "rr", "wet",
@@ -160,7 +160,7 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
             "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
             "season_nm", "car_knd_nm", "goods_pfm_nm",
             "t_oe_maker_1", "oe_badge_yn",
-            "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+            "brand_nm", "certify_brand_nm", "t_rls_yearmon",
             "t_comfort", "t_silence", "t_high_perform", "t_handling",
             "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
             "rr", "wet", "label_pndb",
@@ -409,7 +409,7 @@ def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None 
                 "season_nm", "car_knd_nm", "goods_pfm_nm", "goods_dtl_pfm_nm",
                 "sound_absorber_yn", "three_pmsf_yn",
                 "t_oe_maker_1", "oe_badge_yn",
-                "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
+                "brand_nm", "certify_brand_nm", "t_rls_yearmon",
                 "rr", "wet", "label_pndb",
                 "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
             )

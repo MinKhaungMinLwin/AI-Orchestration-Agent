@@ -61,6 +61,7 @@ from services.tstation.chat_v3.executor import (  # noqa: E402
 )
 from services.tstation.chat_v3.tools.discovery import DISCOVERY_TOOLS  # noqa: E402
 from services.tstation.chat_v3.tools import tools_for_domain  # noqa: E402
+from services.tstation.agents.b_discovery_agent import tools as discovery_tools  # noqa: E402
 
 
 def test_v3_discovery_tools_do_not_expose_car_model_group_lookup() -> None:
@@ -110,31 +111,29 @@ def test_inventory_tool_output_is_redacted_only_for_model_visible_observation() 
     assert "available_quantity_redacted" in visible
 
 
-def test_product_description_output_removes_origin_from_all_nested_data() -> None:
-    output = json.dumps(
+def test_discovery_success_response_removes_origin_from_all_nested_data() -> None:
+    response = discovery_tools._success_response(
+        200,
         {
-            "status": "success",
-            "data": {
-                "goods_nm": "벤투스 에어 S",
-                "orpl_nm": "한국",
-                "variants": [{"goods_no": "G1", "ORPL_NM": "한국", "season_nm": "사계절"}],
-            },
+            "goods_nm": "벤투스 에어 S",
+            "orpl_nm": "한국",
+            "variants": [{"goods_no": "G1", "ORPL_NM": "한국", "season_nm": "사계절"}],
         },
-        ensure_ascii=False,
     )
 
-    visible = _model_visible_tool_output("get_product_description_tool", output)
-    parsed = json.loads(visible)
+    serialized = json.dumps(response, ensure_ascii=False)
 
-    assert "orpl_nm" not in visible.lower()
-    assert parsed["data"]["goods_nm"] == "벤투스 에어 S"
-    assert parsed["data"]["variants"] == [{"goods_no": "G1", "season_nm": "사계절"}]
+    assert "orpl_nm" not in serialized.lower()
+    assert response["data"]["goods_nm"] == "벤투스 에어 S"
+    assert response["data"]["variants"] == [{"goods_no": "G1", "season_nm": "사계절"}]
 
 
-def test_origin_removal_only_applies_to_product_description_tool() -> None:
-    output = json.dumps({"status": "success", "data": {"orpl_nm": "한국"}}, ensure_ascii=False)
+def test_product_item_whitelist_does_not_restore_origin() -> None:
+    slim = discovery_tools._slim_product_item(
+        {"goods_no": "G1", "goods_nm": "벤투스 S2 AS", "orpl_nm": "한국", "season_nm": "사계절"}
+    )
 
-    assert _model_visible_tool_output("search_product_tool", output) == output
+    assert slim == {"goods_no": "G1", "goods_nm": "벤투스 S2 AS", "season_nm": "사계절"}
 
 
 def test_recommendation_output_compacts_all_product_price_contracts_before_truncation() -> None:
