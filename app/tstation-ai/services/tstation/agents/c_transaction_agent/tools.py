@@ -663,7 +663,10 @@ def get_store_install_availability_tool(
         shop_id_list (List[str]): Store IDs to check. Use IDs from store search results.
         goods_no (str | None): Product number. Pass None for a general store visit schedule.
         ord_qty (int): Quantity when goods_no is present. Default 1.
-        requested_cal_day (str | None): Optional YYYYMMDD date. If provided, returned schedule is filtered to that day.
+        requested_cal_day (str | None): YYYYMMDD date. REQUIRED whenever the user asked about a specific
+            day (including "today"/"tomorrow") — pass that day here. The returned schedule is then filtered
+            to that day, and an empty schedule means that day has no slots, which you must state plainly.
+            Leave it None only when the user named no day and just wants the earliest availability.
 
     Returns:
         {

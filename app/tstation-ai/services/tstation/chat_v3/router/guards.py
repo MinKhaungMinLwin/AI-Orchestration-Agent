@@ -4,10 +4,11 @@ Only the DATA lives here (text + chips). The trigger decision is made by
 the router LLM (see prompts/router.py); no matching logic in this file.
 """
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 from pydantic import BaseModel
 
+from common.curr_time import get_today
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.chat_v3.router.schemas import GuardId
 from services.tstation.policies.static_faq_policy import get_static_faq_policy
@@ -169,7 +170,10 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
 
 
 def _reservation_date_guard() -> Guard:
-    today = date.today()
+    # Must agree with route.py's notion of "today" (TZ_OFFSET, i.e. KST) — date.today()
+    # follows the container clock, which is UTC, and printed the wrong day to the customer
+    # for every request made before 09:00 KST.
+    today = get_today()
     max_day = today + timedelta(days=30)
     return Guard(
         id="reservation_date_range",
