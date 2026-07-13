@@ -22,6 +22,7 @@ MAX_TOOL_ROUNDS = 4
 _TOOL_OUTPUT_PREVIEW_CHARS = 4000
 _CAR_MODEL_GROUP_TOOL = "search_car_model_groups_tool"
 _RECOMMENDATION_TOOL = "get_products_recommendations_tool"
+_PRODUCT_DESCRIPTION_TOOL = "get_product_description_tool"
 _RECOMMENDATION_LLM_FIELDS = (
     "goods_no",
     "goods_nm",
@@ -84,9 +85,28 @@ def _normalize_tool_call(call: dict) -> dict:
 
 
 def _model_visible_tool_output(name: str, output_text: str) -> str:
+    if name == _PRODUCT_DESCRIPTION_TOOL:
+        return _without_product_origin(output_text)
     if name == _RECOMMENDATION_TOOL:
         return _compact_recommendation_output(output_text)
     return redact_inventory_output_for_model(name, output_text)
+
+
+def _without_product_origin(output_text: str) -> str:
+    """Remove origin data from every V3 product-description consumer."""
+    try:
+        parsed = json.loads(output_text)
+    except (TypeError, ValueError):
+        return output_text
+
+    def strip_origin(value: object) -> object:
+        if isinstance(value, dict):
+            return {key: strip_origin(item) for key, item in value.items() if key.lower() != "orpl_nm"}
+        if isinstance(value, list):
+            return [strip_origin(item) for item in value]
+        return value
+
+    return json.dumps(strip_origin(parsed), ensure_ascii=False)
 
 
 def _compact_recommendation_output(output_text: str) -> str:
@@ -268,8 +288,8 @@ class ToolLoopExecutor:
             except Exception as exc:
                 logger.exception("[CHAT_V3] tool %s failed", name)
                 output_text = f"Tool error: {exc}"
-        self.tool_calls.append({"name": name, "args": args, "output": output_text})
         model_visible_output = _model_visible_tool_output(name, output_text)
+        self.tool_calls.append({"name": name, "args": args, "output": model_visible_output})
         yield sse.tool_result(name, args, model_visible_output[:_TOOL_OUTPUT_PREVIEW_CHARS])
         yield sse.agent_flow(display, _output_flow_status(output_text))
         self._messages.append(

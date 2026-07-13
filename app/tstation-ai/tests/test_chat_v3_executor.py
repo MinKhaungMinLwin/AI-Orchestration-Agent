@@ -110,6 +110,33 @@ def test_inventory_tool_output_is_redacted_only_for_model_visible_observation() 
     assert "available_quantity_redacted" in visible
 
 
+def test_product_description_output_removes_origin_from_all_nested_data() -> None:
+    output = json.dumps(
+        {
+            "status": "success",
+            "data": {
+                "goods_nm": "벤투스 에어 S",
+                "orpl_nm": "한국",
+                "variants": [{"goods_no": "G1", "ORPL_NM": "한국", "season_nm": "사계절"}],
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    visible = _model_visible_tool_output("get_product_description_tool", output)
+    parsed = json.loads(visible)
+
+    assert "orpl_nm" not in visible.lower()
+    assert parsed["data"]["goods_nm"] == "벤투스 에어 S"
+    assert parsed["data"]["variants"] == [{"goods_no": "G1", "season_nm": "사계절"}]
+
+
+def test_origin_removal_only_applies_to_product_description_tool() -> None:
+    output = json.dumps({"status": "success", "data": {"orpl_nm": "한국"}}, ensure_ascii=False)
+
+    assert _model_visible_tool_output("search_product_tool", output) == output
+
+
 def test_recommendation_output_compacts_all_product_price_contracts_before_truncation() -> None:
     items = []
     for index in range(3):
