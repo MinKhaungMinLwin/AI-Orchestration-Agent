@@ -128,3 +128,16 @@ def test_reservation_history_guidance_calls_tool_instead_of_refusing_or_redirect
     assert "조회 기능이 없다고 답하거나 마이페이지로만 안내하지 마세요" in RESERVATION_HISTORY_GUIDANCE
     assert "오늘 오후에 예약한 거 있지?" in RESERVATION_HISTORY_GUIDANCE
     assert "get_store_install_availability_tool" in RESERVATION_HISTORY_GUIDANCE
+
+
+def test_vehicle_lookup_guidance_forbids_inventing_a_tire_size_for_a_named_car():
+    # Issue 5.4: asked for "BMW 520d 타이어 추천", the bot asserted 215/55R17 (the car is
+    # staggered 245/45R18 front / 275/40R18 rear) and showed products for that invented size.
+    # A hedging sentence is not enough — the products themselves must not appear.
+    assert "추측하지 마세요" in VEHICLE_LOOKUP_GUIDANCE
+    assert "규격이 확인되기 전에는 상품을 노출하지 마세요" in VEHICLE_LOOKUP_GUIDANCE
+    assert "주의 문구를" in VEHICLE_LOOKUP_GUIDANCE and "부족합니다" in VEHICLE_LOOKUP_GUIDANCE
+    # Generic browsing (bestsellers, price bands, an explicit size) must stay unaffected.
+    assert "차종이 언급된 경우에만 적용됩니다" in VEHICLE_LOOKUP_GUIDANCE
+    # Staggered vehicles must surface both sizes, not one merged size.
+    assert "tire_size_fr" in VEHICLE_LOOKUP_GUIDANCE and "tire_size_re" in VEHICLE_LOOKUP_GUIDANCE
