@@ -141,3 +141,13 @@ def test_vehicle_lookup_guidance_forbids_inventing_a_tire_size_for_a_named_car()
     assert "차종이 언급된 경우에만 적용됩니다" in VEHICLE_LOOKUP_GUIDANCE
     # Staggered vehicles must surface both sizes, not one merged size.
     assert "tire_size_fr" in VEHICLE_LOOKUP_GUIDANCE and "tire_size_re" in VEHICLE_LOOKUP_GUIDANCE
+
+
+def test_vehicle_lookup_guidance_gives_a_working_path_to_the_real_tire_size():
+    # Banning the guess is not enough: without a lookup path the bot can only refuse anyone who
+    # names a car. These two tools are the only source of tire_size_fr/re for a car model.
+    assert "search_car_model_groups_tool" in VEHICLE_LOOKUP_GUIDANCE
+    assert "get_car_trims_tool" in VEHICLE_LOOKUP_GUIDANCE
+    assert "tire_size 로 넘겨" in VEHICLE_LOOKUP_GUIDANCE
+    # Ask the user only after the lookup fails — not instead of it.
+    assert "되묻기 전에 먼저" in VEHICLE_LOOKUP_GUIDANCE

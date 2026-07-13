@@ -14,13 +14,11 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from services.tstation.chat_v3 import sse
 from services.tstation.chat_v3.llm import get_chat_llm
 from services.tstation.policies.inventory_response_policy import redact_inventory_output_for_model
-from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 
 logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 4
 _TOOL_OUTPUT_PREVIEW_CHARS = 4000
-_CAR_MODEL_GROUP_TOOL = "search_car_model_groups_tool"
 _RECOMMENDATION_TOOL = "get_products_recommendations_tool"
 _RECOMMENDATION_LLM_FIELDS = (
     "goods_no",
@@ -51,39 +49,6 @@ def _tool_output_text(output: object) -> str:
         return json.dumps(output, ensure_ascii=False, default=str)
     except (TypeError, ValueError):
         return str(output)
-
-
-def _normalize_tool_call(call: dict) -> dict:
-    """Map removed V3 discovery tools to the current executable recommendation path."""
-    name = call.get("name") or ""
-    if name != _CAR_MODEL_GROUP_TOOL:
-        return call
-
-    raw_args = call.get("args")
-    args = raw_args if isinstance(raw_args, dict) else {}
-    keyword = str(
-        args.get("keyword")
-        or args.get("car_model")
-        or args.get("vehicle_query")
-        or args.get("query")
-        or ""
-    ).strip()
-
-    recommendation_args: dict[str, object] = {"rcmd_type": "tstation", "limit": 3}
-    match = match_vehicle_model_category(keyword)
-    if match is not None:
-        recommendation_args["vehicle_type"] = match.category
-
-    normalized = dict(call)
-    normalized["name"] = _RECOMMENDATION_TOOL
-    normalized["args"] = recommendation_args
-    logger.info(
-        "[CHAT_V3] rewrote removed tool %s to %s args=%s",
-        _CAR_MODEL_GROUP_TOOL,
-        _RECOMMENDATION_TOOL,
-        recommendation_args,
-    )
-    return normalized
 
 
 def _model_visible_tool_output(name: str, output_text: str) -> str:
@@ -249,7 +214,6 @@ class ToolLoopExecutor:
         self.final_text = final_text
 
     async def _run_tool(self, call: dict):
-        call = _normalize_tool_call(call)
         if self._tool_call_normalizer is not None:
             call = self._tool_call_normalizer(call)
         name = call.get("name") or ""
