@@ -831,29 +831,13 @@ def get_nearby_stores_tool(
         data = _to_dict(response.parsed)
 
         # Truncate to top `limit` stores (clamped to 10 — LocationTemplate max_length=10).
-        # Priority: all_my_t first in all modes. Secondary key depends on sort_by:
-        #   rating/review_count → preserve BE sort order (stable sort on is_all_my_t only)
-        #   default/distance   → is_installable then distance_km
         cap = max(1, min(int(limit), 10))
         stores = data.get("stores") if isinstance(data, dict) else None
         if isinstance(stores, list) and len(stores) > cap:
             original_count = len(stores)
-            if sort_by in ("rating", "review_count"):
-                # BE already sorted by rating/review_count; stable-sort puts all_my_t first
-                # while preserving BE order within each group.
-                sorted_stores = sorted(stores, key=lambda s: not bool(s.get("is_all_my_t", False)))
-            else:
-                sorted_stores = sorted(
-                    stores,
-                    key=lambda s: (
-                        not bool(s.get("is_all_my_t", False)),
-                        not bool(s.get("is_installable", False)),
-                        s.get("distance_km") if isinstance(s.get("distance_km"), (int, float)) else float("inf"),
-                    ),
-                )
-            data["stores"] = sorted_stores[:cap]
+            data["stores"] = _sort_store_candidates(stores, sort_by)[:cap]
             logger.debug(
-                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top %d (all_my_t-first, sort_by=%s)",
+                "[TOOL][get_nearby_stores_tool] Truncated %d stores -> top %d (sort_by=%s)",
                 original_count, cap, sort_by,
             )
 
@@ -872,8 +856,12 @@ def _clamp_int(value: int | None, default: int, minimum: int, maximum: int) -> i
 
 
 def _sort_store_candidates(stores: list[dict], sort_by: str | None) -> list[dict]:
+    # An explicit sort_by is the user's ordering — the BE already returned the rows in
+    # that order (rating: SHOP_EVAL_CVRT_IDX DESC NULLS LAST). Re-ranking all_my_t stores
+    # to the front here would silently break the requested order, so keep BE order as-is.
+    # all_my_t priority still applies to the default/distance modes below.
     if sort_by in ("rating", "review_count"):
-        return sorted(stores, key=lambda s: not bool(s.get("is_all_my_t", False)))
+        return list(stores)
     return sorted(
         stores,
         key=lambda s: (
