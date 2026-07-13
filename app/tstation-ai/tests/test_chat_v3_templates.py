@@ -730,6 +730,62 @@ def test_location_answer_uses_fixed_store_info_labels():
     )
 
 
+def _store_row(shop_id: str, shop_nm: str, **overrides) -> dict:
+    row = {
+        "shop_id": shop_id,
+        "shop_nm": shop_nm,
+        "addr_base": "전라남도 여수시",
+        "addr_dtl": "여수로 1",
+        "tel_no": "061-000-0000",
+        "shop_biz_strt_time": "09",
+        "shop_biz_end_time": "19",
+        "shop_biz_end_wday": "토요일",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_location_answer_shows_customer_rating_when_store_has_one():
+    # Without a visible rating the "highest rated first" ordering is invisible to the user.
+    tool_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                _store_row("F001", "티스테이션 여수점", rating_idx=4.8),
+                _store_row("F002", "티스테이션 여천점", rating_idx=4.2),
+            ]
+        },
+    }
+
+    answer = templates.format_location_answer(
+        "여수 지역 매장을 평점 높은 순으로 보여드릴게요.",
+        [{
+            "name": "search_stores_tool",
+            "args": {"region_code": "여수", "sort_by": "rating"},
+            "output": json.dumps(tool_output, ensure_ascii=False),
+        }],
+    )
+
+    assert "평점: 4.8" in answer
+    assert "평점: 4.2" in answer
+    assert answer.index("평점: 4.8") < answer.index("평점: 4.2")
+
+
+def test_location_answer_omits_rating_line_when_store_has_no_rating():
+    # rating_idx is None for stores with no reviews — it must never render as "평점: 0.0".
+    tool_output = {
+        "status": "success",
+        "data": {"stores": [_store_row("F003", "티스테이션 돌산점", rating_idx=None)]},
+    }
+
+    answer = templates.format_location_answer(
+        "여수 지역 매장입니다.",
+        [{"name": "search_stores_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+    )
+
+    assert "평점" not in answer
+
+
 def test_compact_answer_spacing_reduces_blank_lines_to_single_newline():
     answer = templates.compact_answer_spacing(
         "좋아요 😊 T’Bot과 함께 타이어 쇼핑을 도와드릴게요.\n\n"

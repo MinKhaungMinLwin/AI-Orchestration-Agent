@@ -1397,8 +1397,17 @@ def _service_labels(row: dict[str, Any]) -> list[str]:
     return labels
 
 
+def _store_rating_label(row: dict[str, Any]) -> str:
+    """Customer rating (rating_idx). Absent for stores with no reviews — the BE
+    returns None, and a missing rating must never render as 0."""
+    rating = _get_num(row, "rating_idx", "rating_avg")
+    if rating is None or rating <= 0:
+        return ""
+    return f"{rating:.1f}"
+
+
 def _store_info_lines(row: dict[str, Any]) -> list[str]:
-    return [
+    lines = [
         f"주소: {_join_address(row.get('addr_base'), row.get('addr_dtl')) or '-'}",
         f"연락처: {str(row.get('tel_no') or '').strip() or '-'}",
         f"평일: {_format_time_range(row.get('shop_biz_strt_time'), row.get('shop_biz_end_time'))}",
@@ -1407,6 +1416,10 @@ def _store_info_lines(row: dict[str, Any]) -> list[str]:
         f"특징: {', '.join(_feature_labels(row)) or '-'}",
         f"서비스: {', '.join(_service_labels(row)) or '-'}",
     ]
+    rating = _store_rating_label(row)
+    if rating:
+        lines.append(f"평점: {rating}")
+    return lines
 
 
 def _intro_from_answer(answer: str) -> str:

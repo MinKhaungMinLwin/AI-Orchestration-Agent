@@ -14,12 +14,27 @@ RESERVATION_HISTORY_GUIDANCE = _PERSONA["RESERVATION_HISTORY_GUIDANCE"]
 
 def test_system_prompt_limits_store_recommendations_to_tool_verifiable_conditions():
     assert "도구가 확인할 수 있는 조건" in SYSTEM_PROMPT
-    assert "도구 데이터로 확인할 수 없는 매장 속성이나 선호 조건" in SYSTEM_PROMPT
-    assert "가능한 것처럼 찾아주겠다고 말하지 마세요" in SYSTEM_PROMPT
-    assert "평점순·리뷰 많은 순·후기 좋은 순" in SYSTEM_PROMPT
+    assert "가능한 것처럼 찾아주겠다고 말하지 말고" in SYSTEM_PROMPT
     assert "방문 예정 매장에 직접 문의" in SYSTEM_PROMPT
     assert "수입차 특화점 검색 의도" in SYSTEM_PROMPT
     assert "실제 BMW 5시리즈 정비 경험이 많다고 단정하지 말고" in SYSTEM_PROMPT
+
+
+def test_system_prompt_answers_subjective_service_requests_with_rating_sorted_stores():
+    # A "friendly service" store request must not dead-end at the disclaimer: the
+    # subjective attribute stays unguaranteed, but the region's stores are still
+    # listed by customer rating in the same turn.
+    assert "'친절한 매장을 찾았다'처럼 주관적 품질을 보장하는 표현은 쓰지 마세요" in SYSTEM_PROMPT
+    assert "거기서 멈추지 말고" in SYSTEM_PROMPT
+    assert "고객 평점 높은 순으로 조회해 목록까지 함께 보여주세요" in SYSTEM_PROMPT
+    assert "주관적 속성을 보장하지는 않는다는 점을 함께 밝히세요" in SYSTEM_PROMPT
+
+
+def test_system_prompt_still_declines_store_attributes_with_no_rating_proxy():
+    # Rating substitutes only for service-quality asks. Amenities/cleanliness/crowding
+    # have no data proxy at all and must still be declined.
+    assert "편의시설, 대기/휴게 공간의 쾌적함, 가족 동반 편의, 청결도, 숙련도, 혼잡도" in SYSTEM_PROMPT
+    assert "평점으로도 대신할 수 " in SYSTEM_PROMPT
 
 
 def test_system_prompt_locks_user_facing_price_labels():
@@ -70,6 +85,19 @@ def test_store_flow_prompt_maps_imported_vehicle_experience_to_imported_specialt
     assert "수입차 특화점 검색 의도" in STORE_SEARCH_FLOW_GUIDANCE
     assert "차종별 정비 경험 수" in STORE_SEARCH_FLOW_GUIDANCE
     assert "수입차 특화점 기준으로 확인" in STORE_SEARCH_FLOW_GUIDANCE
+
+
+def test_store_flow_prompt_searches_rating_sorted_stores_for_subjective_quality_asks():
+    assert 'sort_by="rating"' in STORE_SEARCH_FLOW_GUIDANCE
+    assert "평점 높은 순" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "지역이 없으면 지역만 물어보고" in STORE_SEARCH_FLOW_GUIDANCE
+    # Data traps the model must not walk into. Verified against live BE data for 여수:
+    # 2 of 4 stores have rating_idx=None, and review_count is null even under sort_by=rating.
+    assert "rating_idx 가 모두 비어 있으면 평점 순으로 정렬했다고 말하지 말고" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "일부 매장만 rating_idx 가 비어 있으면" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "아직 평점이 없는 매장은 목록 마지막에" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "낮은 평가가 아니라 등록된 평가가 없다는 뜻" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "평점 검색 결과에서 리뷰 수는 언급하지 마세요" in STORE_SEARCH_FLOW_GUIDANCE
 
 
 def test_confirmed_order_recheck_uses_unified_install_availability_tool():
