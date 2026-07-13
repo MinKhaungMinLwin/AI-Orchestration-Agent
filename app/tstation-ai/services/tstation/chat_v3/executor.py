@@ -32,6 +32,9 @@ _RECOMMENDATION_LLM_FIELDS = (
     "cheapest_final_prc",
     "cheapest_total_discount",
     "season_nm",
+    # 차종 분류명 (전기차 / SUV / 승용 / 화물·승합). Without it the model cannot tell an
+    # EV-only or van-only tire from a passenger one, and recommends iON for a petrol car.
+    "car_knd_nm",
     "goods_pfm_nm",
     "goods_dtl_pfm_nm",
     "t_wgt_spd",
@@ -120,20 +123,24 @@ def _compact_recommendation_output(output_text: str) -> str:
             ]
         compact_items.append(compact)
 
-    return json.dumps(
-        {
-            "status": parsed.get("status"),
-            "data": {
-                "total": data.get("total"),
-                "items": compact_items,
-                "price_contract": {
-                    "sale_prc": "기본가",
-                    "extra_fvr_sale_prc": "일반 혜택가",
-                    "cheapest_final_prc": "보유쿠폰 적용 혜택가",
-                    "instruction": "각 상품에서 존재하는 세 가격을 서로 대체하지 말고 라벨별로 모두 표시",
-                },
-            },
+    compact_data: dict[str, object] = {
+        "total": data.get("total"),
+        "items": compact_items,
+        "price_contract": {
+            "sale_prc": "기본가",
+            "extra_fvr_sale_prc": "일반 혜택가",
+            "cheapest_final_prc": "보유쿠폰 적용 혜택가",
+            "instruction": "각 상품에서 존재하는 세 가격을 서로 대체하지 말고 라벨별로 모두 표시",
         },
+    }
+    # The tool silently drops the vehicle_type filter when it would return nothing, and says so
+    # in this block (it even carries the sentence for the assistant). Dropping it here is how a
+    # van-only or EV-only tire reaches a customer presented as a fit for their car.
+    if isinstance(data.get("recommendation_fallback"), dict):
+        compact_data["recommendation_fallback"] = data["recommendation_fallback"]
+
+    return json.dumps(
+        {"status": parsed.get("status"), "data": compact_data},
         ensure_ascii=False,
         separators=(",", ":"),
     )

@@ -172,6 +172,43 @@ def test_recommendation_output_compacts_all_product_price_contracts_before_trunc
     assert "pc_prod_tech_desc" not in visible
 
 
+def test_recommendation_output_keeps_car_knd_nm_so_ev_only_tires_are_visible() -> None:
+    """Without 차종 분류명 the model cannot tell an EV-only tire from a passenger one, and has
+    recommended iON (전기차 전용) for a petrol Carnival."""
+    output = json.dumps(
+        {
+            "status": "success",
+            "data": {"total": 1, "items": [{"goods_no": "G1", "goods_nm": "아이온", "car_knd_nm": "전기차"}]},
+        },
+        ensure_ascii=False,
+    )
+
+    visible = _model_visible_tool_output("get_products_recommendations_tool", output)
+
+    assert json.loads(visible)["data"]["items"][0]["car_knd_nm"] == "전기차"
+
+
+def test_recommendation_output_keeps_the_relaxed_vehicle_type_warning() -> None:
+    """The tool drops the vehicle_type filter when it would return nothing and says so in
+    recommendation_fallback — the model must see that, or it presents van tires as a fit."""
+    fallback = {
+        "requested_vehicle_type": "truck_van",
+        "applied_vehicle_type": None,
+        "assistant_response_hint": "요청하신 차량 타입 전용 상품이 확인되지 않아 차량 타입 필터 없이 추천했습니다.",
+    }
+    output = json.dumps(
+        {
+            "status": "success",
+            "data": {"total": 1, "items": [{"goods_no": "G1"}], "recommendation_fallback": fallback},
+        },
+        ensure_ascii=False,
+    )
+
+    visible = _model_visible_tool_output("get_products_recommendations_tool", output)
+
+    assert json.loads(visible)["data"]["recommendation_fallback"] == fallback
+
+
 def test_cart_result_false_is_normalized_to_error() -> None:
     output = json.dumps(
         {"status": "success", "http_status": 200, "data": {"result": False, "message": "이미 장바구니에 담겨있는 상품입니다."}},
