@@ -390,6 +390,10 @@ async def _record_real_usage(request: TStationChatRequest, usage_tracker: TurnTo
             request.tracing_id or "",
             settings.MONTHLY_TOKEN_LIMIT,
         )
+        # The monthly_tokens_used score record_monthly_tokens just posted is created
+        # AFTER this turn's _flush_trace(), so flush again or it stays queued and may
+        # never reach Langfuse (works on dev by background-export luck; not on staging).
+        await asyncio.to_thread(_flush_trace)
     except Exception:
         logger.debug("[CHAT_V3] quota usage recording failed", exc_info=True)
 
@@ -474,10 +478,11 @@ def _update_trace_monitoring(
             )
         except Exception:
             logger.debug("[CHAT_V3] Langfuse customer monitoring event failed", exc_info=True)
-    try:
-        tracer.update_current_trace(**trace_update)
-    except Exception:
-        logger.debug("[CHAT_V3] Langfuse customer monitoring update failed", exc_info=True)
+    # NOTE: do not call tracer.update_current_trace() here — the turn's parent span is
+    # created with start_span() (never activated as the current span), so there is no
+    # active span in context and the call is skipped with a "No active span" warning.
+    # safe_trace_update(trace_observation, trace=True, ...) above already applies the
+    # same trace_update to the explicit parent span, so this was redundant noise.
 
 
 async def _run_turn(request: TStationChatRequest, result: dict):
