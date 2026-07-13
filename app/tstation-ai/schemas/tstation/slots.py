@@ -215,6 +215,9 @@ class ConversationSlots(BaseModel):
     pending_check_object_type: Optional[PendingCheckObjectType] = None
     pending_check_object_value: Optional[str] = None
     pending_check_turns_remaining: Optional[int] = None
+    # Guard-repeat tracking — see chat_v3/slots/derive.py::track_guard_repeat.
+    last_guard_id: Optional[str] = None
+    guard_repeat_count: Optional[int] = None
 
     @field_validator("tire_model", "pending_product_name", mode="before")
     @classmethod
