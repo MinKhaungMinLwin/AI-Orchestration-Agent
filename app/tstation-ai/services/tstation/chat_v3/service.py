@@ -36,6 +36,7 @@ from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision
 from services.tstation.chat_v3.slots.derive import (
+    GUARD_REPEAT_ESCALATION_THRESHOLD,
     STAGGERED_MAX_ORD_QTY,
     apply_fe_slots,
     apply_text_vehicle_selection,
@@ -43,6 +44,7 @@ from services.tstation.chat_v3.slots.derive import (
     derive_slots_from_tool_calls,
     is_staggered_vehicle,
     promote_selected_vehicle,
+    track_guard_repeat,
 )
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
@@ -537,8 +539,16 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     )
     t_route = time.perf_counter()
 
+    slots = track_guard_repeat(decision.guard_id.value if decision else "none", slots)
     guard = get_guard(decision.guard_id) if decision else None
-    if guard:
+    # Repeated same guard → hand off to domain agent instead of repeating canned text.
+    guard_stuck = bool(guard) and (slots.guard_repeat_count or 0) >= GUARD_REPEAT_ESCALATION_THRESHOLD
+    if guard_stuck:
+        logger.info(
+            "[CHAT_V3] guard=%s repeated %s turns for session=%s — handing off to domain agent",
+            guard.id, slots.guard_repeat_count, request.session_id,
+        )
+    if guard and not guard_stuck:
         logger.info("[CHAT_V3] guard=%s for session=%s", guard.id, request.session_id)
         guard_text = templates.compact_answer_spacing(guard.text)
         result["answer"] = guard_text
@@ -576,6 +586,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         await _record_real_usage(request, usage_tracker)
         for event in sse.done():
             yield event
+        await save_slots(request.session_id, slots, user_id=request.user_id)
         return
 
     domains = decision.all_domains() if decision else ["LEADING"]

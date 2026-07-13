@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.chat_history_service import get_chat_history_service
+from services.tstation.chat_v3.slots.derive import GUARD_REPEAT_ESCALATION_THRESHOLD
 from services.tstation.chat_v3.slots.schemas import SlotsPatch
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.product_name_normalization import normalize_product_slot_values
@@ -108,6 +109,12 @@ def slots_context_block(slots: ConversationSlots) -> str | None:
         values["staggered_tire_purchase_guidance"] = (
             "전/후륜 규격이 다른 차량은 도구로 확인되지 않은 상태에서 두 규격을 한 번에 구매 가능하다고 "
             "단정하지 말고, 현재 채팅 흐름은 선택한 규격 하나씩 상품 추천/구매를 진행한다고 안내하세요."
+        )
+    if (slots.guard_repeat_count or 0) >= GUARD_REPEAT_ESCALATION_THRESHOLD:
+        values["repeated_guard_deescalation_guidance"] = (
+            "직전 턴들에서 같은 정책 안내가 반복되어 사용자의 실제 의도가 해결되지 않았을 수 있습니다. "
+            "이전 판단에 얽매이지 말고 사용자의 이번 발화만 근거로 다시 판단하세요. 오해가 있었다면 "
+            "짧게 사과하고 정확한 의도를 다시 확인하세요. 이번에도 해결이 어려우면 1:1 문의 상담 연결을 안내하세요."
         )
     return "## CONVERSATION SLOTS (known context from earlier turns)\n" + json.dumps(
         values, ensure_ascii=False, separators=(",", ":")

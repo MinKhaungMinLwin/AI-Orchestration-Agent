@@ -107,6 +107,19 @@ def _vehicle_size_patch(merged: dict, *, allow_selected_size: bool = True) -> di
 # Staggered vehicles allow at most 2 tires per order, typed input included.
 STAGGERED_MAX_ORD_QTY = 2
 
+# Consecutive same-guard turns past this hand off to the domain agent instead of repeating.
+GUARD_REPEAT_ESCALATION_THRESHOLD = 2
+
+
+def track_guard_repeat(guard_id: str, slots: ConversationSlots) -> ConversationSlots:
+    """Count consecutive turns the router has fired the same policy guard."""
+    if guard_id == "none":
+        if slots.last_guard_id is None and slots.guard_repeat_count is None:
+            return slots
+        return slots.model_copy(update={"last_guard_id": None, "guard_repeat_count": None})
+    repeat_count = (slots.guard_repeat_count or 0) + 1 if slots.last_guard_id == guard_id else 1
+    return slots.model_copy(update={"last_guard_id": guard_id, "guard_repeat_count": repeat_count})
+
 
 def is_staggered_vehicle(slots: ConversationSlots) -> bool:
     front = str(slots.tire_size_front or "").strip()
