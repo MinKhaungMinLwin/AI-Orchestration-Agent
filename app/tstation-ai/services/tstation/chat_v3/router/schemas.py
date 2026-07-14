@@ -97,6 +97,13 @@ class RouteDecision(BaseModel):
             "desired purchase/recommendation brand, excluded brand, and a truly unsupported target brand."
         ),
     )
+    installation_schedule_change: bool = Field(
+        default=False,
+        description=(
+            "True when the user wants to change the selected installation date or time for an active "
+            "preOrder/order confirmation. Do not set this for questions about why an order attempt failed."
+        ),
+    )
     needs_selection_card: bool = Field(
         default=True,
         description=(

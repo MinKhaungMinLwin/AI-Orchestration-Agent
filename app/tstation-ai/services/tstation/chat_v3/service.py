@@ -63,6 +63,7 @@ _STREAM_HEADERS = {
 }
 _ADD_TO_CART_INTENT = "add_to_cart"
 _PLACE_ORDER_INTENT = "place_order"
+_INSTALLATION_SCHEDULE_CHANGE_INTENT = "installation_schedule_change"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
 _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
@@ -100,6 +101,25 @@ def _normalize_transaction_goal_slots(decision: RouteDecision | None, slots: Con
             fill_only=True,
         )
     return slots
+
+
+def _apply_installation_schedule_change_intent(
+    decision: RouteDecision | None,
+    slots: ConversationSlots,
+) -> ConversationSlots:
+    if decision is None or not (
+        decision.installation_schedule_change or _INSTALLATION_SCHEDULE_CHANGE_INTENT in decision.intents
+    ):
+        return slots
+    return slots.model_copy(update={
+        "requested_cal_day": None,
+        "rsv_hour": None,
+        "payment_amount": None,
+        "price_basis": None,
+        "price_source_tool": None,
+        "price_facts": None,
+        "coupon_facts": None,
+    })
 
 
 def _as_int(value: object) -> int | None:
@@ -597,6 +617,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     # Staggered vehicles: even a typed quantity is capped at 2.
     slots = clamp_staggered_ord_qty(slots)
     slots = _normalize_transaction_goal_slots(decision, slots)
+    slots = _apply_installation_schedule_change_intent(decision, slots)
 
     staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
         decision,
@@ -695,6 +716,13 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         extra_context.append(ORDER_HISTORY_GUIDANCE)
         extra_context.append(RESERVATION_HISTORY_GUIDANCE)
         extra_context.append(SMART_PAY_GUIDANCE)
+        if decision and (decision.installation_schedule_change or _INSTALLATION_SCHEDULE_CHANGE_INTENT in decision.intents):
+            extra_context.append(
+                "INSTALLATION SCHEDULE CHANGE:\n"
+                "- The user wants to change the selected installation date or time for the active order.\n"
+                "- Keep the confirmed product, quantity, and store.\n"
+                "- Do not emit preOrder with the old schedule. Show available installation schedule choices first."
+            )
     if "DISCOVERY" in domains:
         extra_context.append(VEHICLE_LOOKUP_GUIDANCE)
     static_faq_context = _static_faq_policy_context(decision)
