@@ -25,6 +25,7 @@ from services.tstation.chat_v3.token_usage import TurnTokenUsage
 from services.tstation.quota_service import record_monthly_tokens
 from services.tstation.chat_v3.prompts.persona import (
     ERROR_RESPONSE,
+    MAINTENANCE_HISTORY_GUIDANCE,
     ORDER_HISTORY_GUIDANCE,
     RESERVATION_HISTORY_GUIDANCE,
     SMART_PAY_GUIDANCE,
@@ -715,6 +716,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         extra_context.append(STORE_SEARCH_FLOW_GUIDANCE)
         extra_context.append(ORDER_HISTORY_GUIDANCE)
         extra_context.append(RESERVATION_HISTORY_GUIDANCE)
+        extra_context.append(MAINTENANCE_HISTORY_GUIDANCE)
         extra_context.append(SMART_PAY_GUIDANCE)
         if decision and (decision.installation_schedule_change or _INSTALLATION_SCHEDULE_CHANGE_INTENT in decision.intents):
             extra_context.append(
@@ -902,6 +904,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             slots=slots,
             previous_slots=slots_before_harvest,
             allow_selection_cards=_allow_selection_cards(decision),
+            user_text=user_text,
         )
     )
     quantity_chips = [] if rich_event or preorder_event else templates.quantity_quick_replies(slots, decision)

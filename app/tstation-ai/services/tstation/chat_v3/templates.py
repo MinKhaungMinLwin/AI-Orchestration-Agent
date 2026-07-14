@@ -37,6 +37,7 @@ from services.tstation.chat_v3.prompts.templates import TEMPLATE_BUILDER_PROMPT
 from services.tstation.chat_v3.router.schemas import RouteDecision
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
+from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
 
 logger = logging.getLogger(__name__)
 
@@ -571,6 +572,48 @@ def _tool_payload(output: object) -> dict[str, Any]:
     parsed = _parse_tool_output(output)
     data = parsed.get("data")
     return data if isinstance(data, dict) else parsed
+
+
+def _order_history_lookup_event(answer: str, call: dict) -> dict | None:
+    from services.tstation.template_mapper import current_transaction_response_decision, try_build_template
+
+    decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "order_history_lookup"},
+    )
+    token = current_transaction_response_decision.set(decision)
+    try:
+        event = try_build_template(
+            [
+                {
+                    "tool": "get_orders_of_user_tool",
+                    "args": call.get("args") or {},
+                    "data": _parse_tool_output(call.get("output")),
+                }
+            ],
+            answer,
+        )
+    finally:
+        current_transaction_response_decision.reset(token)
+    return event if isinstance(event, dict) else None
+
+
+def _maintenance_history_lookup_event(call: dict, user_text: str) -> dict | None:
+    from services.tstation.policies.support_response_policy import build_maintenance_history_event
+
+    event = build_maintenance_history_event(_parse_tool_output(call.get("output")), user_text)
+    return event if isinstance(event, dict) else None
+
+
+def _history_lookup_event(answer: str, tool_calls: list[dict], user_text: str) -> dict | None:
+    for call in reversed(tool_calls):
+        tool_name = str(call.get("name") or "")
+        if tool_name == "get_orders_of_user_tool":
+            return _order_history_lookup_event(answer, call)
+        if tool_name == "get_maintenance_history_tool":
+            return _maintenance_history_lookup_event(call, user_text)
+    return None
 
 
 def _get_str(row: dict[str, Any], *keys: str) -> str:
@@ -1821,8 +1864,13 @@ async def build_rich_data_event(
     slots: ConversationSlots | None = None,
     previous_slots: ConversationSlots | None = None,
     allow_selection_cards: bool = True,
+    user_text: str = "",
 ) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
+    history_event = _history_lookup_event(answer, tool_calls, user_text)
+    if history_event is not None:
+        return history_event
+
     source = _pick_source(tool_calls, slots, previous_slots)
     if source is None:
         return None

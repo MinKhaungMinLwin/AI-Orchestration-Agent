@@ -72,6 +72,14 @@ def test_router_prompt_moves_fixed_policy_faqs_out_of_guard_routing():
         assert policy_key in static_faq_section
 
 
+def test_router_prompt_separates_maintenance_history_lookup_from_access_policy():
+    static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
+
+    assert "maintenance_history_lookup" in static_faq_section
+    assert "domain=TRANSACTION" in static_faq_section
+    assert "maintenance_history_access_policy" in static_faq_section
+
+
 def test_router_prompt_routes_pickup_questions_to_faq_not_static_policy():
     pickup_section = ROUTER_PROMPT.split("### 스마트픽업 FAQ 라우팅", maxsplit=1)[1].split(
         "### 고정 FAQ 정책 key 라우팅",
