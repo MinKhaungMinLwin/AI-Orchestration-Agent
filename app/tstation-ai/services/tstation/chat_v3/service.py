@@ -50,6 +50,7 @@ from services.tstation.chat_v3.slots.derive import (
 )
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
 from services.tstation.policies.cta_registry import normalize_quickreply_ctas
 from services.tstation.policies.internal_product_code_policy import sanitize_internal_product_codes
@@ -203,6 +204,52 @@ def _staggered_sizes(slots: ConversationSlots) -> tuple[str, str]:
         if front_size and rear_size:
             return front_size, rear_size
     return "", ""
+
+
+def _store_visit_schedule_redirect_event(slots: ConversationSlots) -> dict | None:
+    if not (slots.shop_id and slots.requested_cal_day and slots.rsv_hour):
+        return None
+    if any((slots.goods_no, slots.tire_size, slots.tire_model, slots.pending_product_name, slots.ord_qty)):
+        return None
+    if slots.goal_type in {"place_order", "add_to_cart"} or slots.pending_intent in {"order", "cart"}:
+        return None
+
+    cal_day = str(slots.requested_cal_day)
+    if len(cal_day) == 8 and cal_day.isdigit():
+        date_text = f"{cal_day[:4]}년 {cal_day[4:6]}월 {cal_day[6:]}일"
+    else:
+        date_text = cal_day
+    hour_text = str(slots.rsv_hour).zfill(2)
+    shop_name = str(slots.shop_name or "선택하신 매장").strip()
+    answer = (
+        f"{shop_name} {date_text} {hour_text}:00 방문 가능 시간으로 확인됩니다.\n\n"
+        "방문 예약은 티스테이션닷컴 매장 상세 페이지에서 진행해 주세요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "TRANSACTION",
+        "assistant_response_source": "code_store_visit_schedule_redirect",
+        "data": {
+            "assistantResponse": answer,
+            "quickReplies": [
+                {
+                    "label": "매장 상세 페이지로 이동",
+                    "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", str(slots.shop_id)),
+                    "domain": "TRANSACTION",
+                },
+                {"label": "다른 시간 선택", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "store_visit_schedule_redirect",
+                "shopId": slots.shop_id,
+                "shopName": slots.shop_name,
+                "requestedCalDay": slots.requested_cal_day,
+                "rsvHour": slots.rsv_hour,
+            },
+        },
+    }
 
 
 def _request_has_selected_tire_size(request: TStationChatRequest) -> bool:
@@ -683,6 +730,48 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     slots = clamp_staggered_ord_qty(slots)
     slots = _normalize_transaction_goal_slots(decision, slots)
     slots = _apply_installation_schedule_change_intent(decision, slots)
+
+    store_visit_schedule_event = _store_visit_schedule_redirect_event(slots)
+    if store_visit_schedule_event:
+        answer = str(store_visit_schedule_event["data"]["assistantResponse"])
+        chips = store_visit_schedule_event["data"]["quickReplies"]
+        predicted_domains = store_visit_schedule_event["data"]["predictedDomains"]
+        result["answer"] = answer
+        if _tokens_enabled():
+            yield sse.token(answer)
+        yield sse.message(answer)
+        yield sse.sse(store_visit_schedule_event)
+        _update_trace_monitoring(
+            route_domains=domains,
+            tool_calls=[],
+            final_template="quickReply",
+            trace_id=request.tracing_id,
+            parent_span_id=parent_span_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            answer=answer,
+            user_text=user_text,
+            message_id=message_id,
+            route_intents=list(decision.intents if decision else []),
+            fallback_used=False,
+            latency_ms=int((time.perf_counter() - t0) * 1000),
+            trace_observation=parent_span,
+        )
+        if parent_span is not None:
+            parent_span.end()
+        _flush_trace()
+        await _record_real_usage(request, usage_tracker)
+        await save_slots(request.session_id, slots, user_id=request.user_id)
+        await memory.persist_turn_context(
+            request.session_id,
+            tool_calls=[],
+            quick_reply_domains=[str(chip.get("domain") or "") for chip in chips],
+            predicted_domains=predicted_domains,
+            user_id=request.user_id,
+        )
+        for event in sse.done():
+            yield event
+        return
 
     staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
         decision,
