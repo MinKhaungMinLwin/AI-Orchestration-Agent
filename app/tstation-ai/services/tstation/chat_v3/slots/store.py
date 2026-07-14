@@ -99,6 +99,13 @@ def slots_context_block(slots: ConversationSlots) -> str | None:
     values = {k: v for k, v in slots.model_dump(mode="json").items() if v is not None}
     if not values:
         return None
+    last_order_attempt = (slots.order_context or {}).get("last_order_attempt") if slots.order_context else None
+    if isinstance(last_order_attempt, dict) and last_order_attempt.get("status") != "success":
+        values["order_attempt_recovery_guidance"] = (
+            "A previous quick_order_tool attempt did not succeed. If the user asks about that order attempt, "
+            "answer from order_context.last_order_attempt and preserve the confirmed order slots. Do not show "
+            "a schedule/date picker again unless the user explicitly asks to change the installation schedule."
+        )
     if (
         slots.tire_size
         and slots.tire_size_front

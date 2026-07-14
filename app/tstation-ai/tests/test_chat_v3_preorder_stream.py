@@ -133,6 +133,59 @@ def test_place_order_intent_replaces_stale_cart_flow_state() -> None:
     assert slots.pending_intent == "order"
 
 
+def test_quick_order_attempt_context_keeps_confirmed_order_snapshot() -> None:
+    context = chat_message_module._quick_order_attempt_context(
+        {
+            "goods_no": "G0001",
+            "ord_qty": 3,
+            "shop_id": "S001",
+            "rsv_date": "20260716",
+            "rsv_hour": "16",
+        },
+        {
+            "product_name": "Ventus S1 Evo Z AS X 235/55R19",
+            "store_name": "T-Station Seocho Branch",
+            "booking_datetime": "July 16, 2026 16:00",
+            "payment_amount": 768000,
+        },
+        {"status": "error", "message": "temporary failure"},
+    )
+
+    attempt = context["last_order_attempt"]
+
+    assert attempt["tool"] == "quick_order_tool"
+    assert attempt["status"] == "error"
+    assert attempt["message"] == "temporary failure"
+    assert attempt["order"]["ord_qty"] == 3
+    assert attempt["order"]["requested_cal_day"] == "20260716"
+    assert attempt["order"]["rsv_hour"] == "16"
+
+
+def test_slots_context_block_guides_failed_order_attempt_recovery() -> None:
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="235/55R19",
+        ord_qty=3,
+        shop_id="S001",
+        requested_cal_day="20260716",
+        rsv_hour="16",
+        order_context={
+            "last_order_attempt": {
+                "tool": "quick_order_tool",
+                "status": "error",
+                "order": {"ord_qty": 3},
+            }
+        },
+    )
+
+    context = slots_context_block(slots)
+
+    assert context is not None
+    assert "order_attempt_recovery_guidance" in context
+    assert "last_order_attempt" in context
+    assert "schedule/date picker" in context
+
+
 def test_store_finder_intent_does_not_infer_purchase_flow_state() -> None:
     decision = RouteDecision(domain=Domain.TRANSACTION, intents=["store_finder"])
 

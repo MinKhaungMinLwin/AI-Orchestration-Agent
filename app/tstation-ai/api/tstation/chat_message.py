@@ -272,6 +272,61 @@ def _validate_quick_order_action_payload(normalized: dict, preorder_payload: dic
     return True, "ok"
 
 
+def _quick_order_attempt_context(tool_input: dict, normalized: dict, quick_order_result: dict) -> dict:
+    order_snapshot = {
+        key: value
+        for key, value in {
+            "goods_no": tool_input.get("goods_no"),
+            "ord_qty": tool_input.get("ord_qty"),
+            "shop_id": tool_input.get("shop_id"),
+            "requested_cal_day": tool_input.get("rsv_date"),
+            "rsv_hour": tool_input.get("rsv_hour"),
+            "product_name": normalized.get("product_name"),
+            "store_name": normalized.get("store_name"),
+            "booking_datetime": normalized.get("booking_datetime"),
+            "payment_amount": normalized.get("payment_amount"),
+        }.items()
+        if value not in (None, "", 0)
+    }
+    return {
+        "last_order_attempt": {
+            "tool": "quick_order_tool",
+            "status": str(quick_order_result.get("status") or "unknown"),
+            "message": str(quick_order_result.get("message") or "").strip() or None,
+            "order": order_snapshot,
+        }
+    }
+
+
+async def _persist_quick_order_attempt_context(
+    history_service,
+    *,
+    session_id: str,
+    user_id: str | None,
+    tool_input: dict,
+    normalized: dict,
+    quick_order_result: dict,
+) -> None:
+    try:
+        await history_service.finalize_chat_context_async(
+            session_id=session_id,
+            tool_data=[{"tool": "quick_order_tool", "input": tool_input, "data": quick_order_result}],
+            quick_reply_domains=["TRANSACTION"],
+            predicted_domains=["TRANSACTION"],
+            user_id=user_id,
+        )
+        slots = await asyncio.to_thread(history_service.get_slots, session_id)
+        order_context = dict(slots.order_context or {})
+        order_context.update(_quick_order_attempt_context(tool_input, normalized, quick_order_result))
+        await history_service.save_slots_async(
+            session_id,
+            slots.apply_runtime_values({"order_context": order_context}, source="quick_order_action"),
+            user_id=user_id,
+        )
+    except Exception:
+        logger.exception("[QUICK_ORDER_ACTION] failed to persist quick order attempt context")
+
+
 def _dict_tool_result(raw_result) -> dict:
     if isinstance(raw_result, dict):
         return raw_result
@@ -692,6 +747,14 @@ async def quick_order_action(
             except Exception as exc:
                 logger.exception("[QUICK_ORDER_ACTION] quick_order_tool failed: %s", exc)
                 quick_order_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            await _persist_quick_order_attempt_context(
+                service,
+                session_id=action_body.session_id,
+                user_id=user_id,
+                tool_input=tool_input,
+                normalized=normalized,
+                quick_order_result=quick_order_result,
+            )
 
             agent_flow_event = {
                 "type": "agent_flow",
