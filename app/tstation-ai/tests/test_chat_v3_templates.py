@@ -994,6 +994,47 @@ def test_maintenance_history_tool_builds_lookup_quickreply_with_service_history_
     assert "티스테이션 고양시청점" in event["data"]["assistantResponse"]
 
 
+def test_static_faq_policy_tool_preserves_official_quick_replies():
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정비이력과 매장서비스 내역은 마이페이지에서 확인할 수 있어요.",
+            [
+                {
+                    "name": "get_static_faq_policy_tool",
+                    "args": {"policy_key": "maintenance_history_access_policy"},
+                    "output": json.dumps(
+                        {
+                            "status": "success",
+                            "data": {
+                                "policy_key": "maintenance_history_access_policy",
+                                "answer": "정비이력과 매장서비스 내역은 마이페이지의 매장서비스 내역에서 확인할 수 있어요.",
+                                "quick_replies": [
+                                    {
+                                        "label": "매장서비스 내역",
+                                        "url": CTAUrls.STORE_SERVICE_HISTORY,
+                                        "domain": "SUPPORT",
+                                    },
+                                    {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+                                ],
+                                "predicted_domains": ["SUPPORT", "TRANSACTION"],
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+            user_text="정비이력은 어디서 확인해?",
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_static_faq_policy"
+    quick_replies = event["data"]["quickReplies"]
+    assert quick_replies[0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
+    assert all(chip.get("url") != CTAUrls.MY_COUPON_LIST_PC for chip in quick_replies)
+
+
 def test_quantity_required_flow_uses_fixed_quantity_quick_replies():
     slots = ConversationSlots(goods_no="G000000309783", pending_intent="order", goal_type="place_order")
     decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])

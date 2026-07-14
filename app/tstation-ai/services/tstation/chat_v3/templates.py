@@ -616,6 +616,32 @@ def _history_lookup_event(answer: str, tool_calls: list[dict], user_text: str) -
     return None
 
 
+def _static_faq_policy_event(tool_calls: list[dict]) -> dict | None:
+    for call in reversed(tool_calls):
+        if str(call.get("name") or "") != "get_static_faq_policy_tool":
+            continue
+        result = _parse_tool_output(call.get("output"))
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        answer = str(data.get("answer") or "").strip()
+        quick_replies = data.get("quick_replies")
+        predicted_domains = data.get("predicted_domains")
+        if not answer or not isinstance(quick_replies, list):
+            return None
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "assistant_response_source": "code_static_faq_policy",
+            "source_tool": "get_static_faq_policy_tool",
+            "data": {
+                "assistantResponse": answer,
+                "quickReplies": [chip for chip in quick_replies if isinstance(chip, dict)],
+                "predictedDomains": predicted_domains if isinstance(predicted_domains, list) else ["SUPPORT"],
+                "metadata": {"policyKey": data.get("policy_key")},
+            },
+        }
+    return None
+
+
 def _get_str(row: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = row.get(key)
@@ -1867,6 +1893,10 @@ async def build_rich_data_event(
     user_text: str = "",
 ) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
+    static_faq_event = _static_faq_policy_event(tool_calls)
+    if static_faq_event is not None:
+        return static_faq_event
+
     history_event = _history_lookup_event(answer, tool_calls, user_text)
     if history_event is not None:
         return history_event
