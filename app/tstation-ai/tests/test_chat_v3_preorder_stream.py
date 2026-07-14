@@ -186,6 +186,42 @@ def test_slots_context_block_guides_failed_order_attempt_recovery() -> None:
     assert "schedule/date picker" in context
 
 
+def test_installation_schedule_change_clears_old_schedule_but_keeps_order_core() -> None:
+    decision = RouteDecision(domain=Domain.TRANSACTION, installation_schedule_change=True)
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="225/45R17",
+        ord_qty=3,
+        shop_id="S001",
+        shop_name="T-Station Songpa Samjeon Branch",
+        requested_cal_day="20260716",
+        rsv_hour="11",
+        payment_amount=356400,
+        price_basis="payment_amount",
+        price_source_tool="get_final_price_tool",
+        price_facts={"amount": 356400},
+        coupon_facts={"used": True},
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    updated = service._apply_installation_schedule_change_intent(decision, slots)
+
+    assert updated.goods_no == "G0001"
+    assert updated.ord_qty == 3
+    assert updated.shop_id == "S001"
+    assert updated.shop_name == "T-Station Songpa Samjeon Branch"
+    assert updated.requested_cal_day is None
+    assert updated.rsv_hour is None
+    assert updated.payment_amount is None
+    assert updated.price_basis is None
+    assert updated.price_source_tool is None
+    assert updated.price_facts is None
+    assert updated.coupon_facts is None
+    assert updated.pending_intent == "order"
+    assert updated.goal_type == "place_order"
+
+
 def test_store_finder_intent_does_not_infer_purchase_flow_state() -> None:
     decision = RouteDecision(domain=Domain.TRANSACTION, intents=["store_finder"])
 

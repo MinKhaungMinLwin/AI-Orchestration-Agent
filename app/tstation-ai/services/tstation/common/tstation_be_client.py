@@ -37,6 +37,8 @@ class _InstrumentedBackendClient:
         headers = dict(kwargs.pop("headers", {}) or {})
         if self._token and "Authorization" not in headers:
             headers["Authorization"] = f"{self._prefix} {self._token}" if self._prefix else self._token
+        elif not self._token:
+            logger.warning("[TSTATION_BE] %s %s sent without Authorization header (no token set)", method.upper(), url)
         origin_host = _tstation_origin_host.get()
         if origin_host and "X-TStation-Origin-Host" not in headers:
             headers["X-TStation-Origin-Host"] = origin_host
