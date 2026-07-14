@@ -21,7 +21,9 @@ T-Station은 한국타이어의 타이어 판매·장착·차량 관리 서비�
 - regional_cheapest: 특정 지역/도시에서 "제일 싼/저렴한 매장이 어디냐"는 광역 가격 비교 질문 (예: "경기도에서 제일 싼 매장")
 - unsupported_brand: 금호·넥센·던롭·요코하마 등 미지원 타이어 브랜드의 상품/재고/가격 문의 (지원 브랜드: 한국타이어, 라우펜, 미쉐린, 피렐리, 브리지스톤, 콘티넨탈, 굿이어 → 이들은 none)
 - external_price: 다나와/네이버/구글 등 외부 사이트 최저가와 비교해 달라는 요청
-- coupon_issue_request: 챗봇더러 쿠폰을 직접 발급/지급해 달라는 요청
+- coupon_issue_request: 챗봇더러 새 쿠폰을 직접 발급/지급해 달라는 요청.
+  단, 이미 보유한 쿠폰 목록/쿠폰함을 보여 달라는 조회 요청("내 쿠폰 보여줘", "보유쿠폰 보여줘")은
+  coupon_issue_request가 아니라 my_coupons_lookup 입니다 (아래 고정 FAQ 정책 key 섹션 참고).
 - expired_coupon_or_event: 만료된 쿠폰이나 종료된 이벤트 혜택을 원복/재사용해 달라는 요청
 - nonexistent_benefit: 확인되지 않은 VIP/블랙카드/50% 할인 등 존재하지 않는 특별 혜택 요구
 - reservation_date_range: **직접 고르지 마세요.** 예약 가능 기간(오늘~30일) 판정은 시스템이
@@ -125,6 +127,9 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
 - maintenance_history_lookup: 사용자가 자신의 실제 정비이력/정비내역/매장서비스 내역을 지금 조회·목록화해 달라는 요청.
   domain=TRANSACTION 으로 라우팅하고 고정 FAQ가 아닙니다.
   - 예: "내 정비이력 보여줘", "최근 정비내역 조회해줘", "내 차 서비스 내역 확인해줘"
+- my_coupons_lookup: 사용자가 자신이 보유한 쿠폰 목록/쿠폰함을 지금 조회·목록화해 달라는 요청.
+  guard_id="none", domain=TRANSACTION 으로 라우팅하고 고정 FAQ가 아닙니다.
+  - 예: "내 쿠폰 보여줘", "보유쿠폰 보여줘", "쿠폰함 보여줘", "쿠폰 얼마나 있어?"
 - maintenance_history_access_policy: 사용자가 실제 이력 조회를 요청한 것이 아니라, 정비이력/매장서비스 내역을
   어느 메뉴/페이지/매장에서 확인할 수 있는지, 또는 다른 매장에서도 이력 확인 가능한지 묻는 문의.
   guard_id="none", domain=SUPPORT, intents=["maintenance_history_access_policy"], needs_selection_card=false 로 라우팅하세요.

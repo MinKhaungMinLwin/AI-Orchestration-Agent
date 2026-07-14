@@ -107,7 +107,7 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         ),
         chips=[
             {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            {"label": "내 쿠폰 확인", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
         ],
         predicted_domains=["TRANSACTION"],
     ),

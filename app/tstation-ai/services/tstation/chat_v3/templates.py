@@ -606,6 +606,13 @@ def _maintenance_history_lookup_event(call: dict, user_text: str) -> dict | None
     return event if isinstance(event, dict) else None
 
 
+def _my_coupons_lookup_event(call: dict) -> dict | None:
+    from services.tstation.policies.coupon_response_policy import build_my_coupons_list_event
+
+    event = build_my_coupons_list_event(_parse_tool_output(call.get("output")))
+    return event if isinstance(event, dict) else None
+
+
 def _history_lookup_event(answer: str, tool_calls: list[dict], user_text: str) -> dict | None:
     for call in reversed(tool_calls):
         tool_name = str(call.get("name") or "")
@@ -613,6 +620,8 @@ def _history_lookup_event(answer: str, tool_calls: list[dict], user_text: str) -
             return _order_history_lookup_event(answer, call)
         if tool_name == "get_maintenance_history_tool":
             return _maintenance_history_lookup_event(call, user_text)
+        if tool_name == "get_my_coupons_tool":
+            return _my_coupons_lookup_event(call)
     return None
 
 

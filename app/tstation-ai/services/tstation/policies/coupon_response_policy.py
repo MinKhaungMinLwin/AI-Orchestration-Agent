@@ -27,7 +27,7 @@ _COUPON_ISSUE_INTENT_RE = re.compile(
 
 _COUPON_BOX_CHIPS: list[dict] = [
     {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
-    {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+    {"label": "내 쿠폰 확인", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
 ]
 
 _OWNED_COUPON_BEST_DISCOUNT_RE = re.compile(
@@ -586,6 +586,54 @@ def _build_owned_coupon_best_discount_event(tool_result: dict) -> dict:
             "predictedDomains": ["TRANSACTION"],
         },
     }
+
+
+def _build_my_coupons_list_event(tool_result: dict) -> dict:
+    if tool_result.get("status") == "error":
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_my_coupons_lookup",
+            "data": {
+                "assistantResponse": "쿠폰 목록 조회 중 오류가 발생했어요. 잠시 후 다시 시도하거나 쿠폰함에서 확인해 주세요.",
+                "quickReplies": list(_COUPON_BOX_CHIPS),
+                "predictedDomains": ["TRANSACTION"],
+            },
+        }
+
+    rows = [row for row in _coupon_rows_from_my_coupons(tool_result) if str(row.get("mbr_use_yn") or "N") != "Y"]
+
+    if not rows:
+        assistant_response = "현재 보유 중인 쿠폰이 없어요."
+    else:
+        lines = [f"보유 쿠폰은 총 {len(rows)}개예요."]
+        for row in rows[:10]:
+            name = _coupon_name(row)
+            discount = _format_coupon_discount_text(row)
+            end_date = _coupon_end_date(row)
+            detail_parts = [part for part in (discount, f"~{end_date.isoformat()}" if end_date else "") if part]
+            detail = f" ({', '.join(detail_parts)})" if detail_parts else ""
+            lines.append(f"- {name}{detail}")
+        if len(rows) > 10:
+            lines.append(f"외 {len(rows) - 10}개는 쿠폰함에서 확인해 주세요.")
+        assistant_response = "\n".join(lines)
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_my_coupons_lookup",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": list(_COUPON_BOX_CHIPS),
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
+def build_my_coupons_list_event(tool_result: dict) -> dict:
+    return _build_my_coupons_list_event(tool_result)
 
 
 def _find_coupon_from_owned_coupons(user_text: str, tool_result: dict) -> dict | None:
