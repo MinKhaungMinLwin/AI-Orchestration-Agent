@@ -26,6 +26,7 @@ from services.tstation.quota_service import record_monthly_tokens
 from services.tstation.chat_v3.prompts.persona import (
     ERROR_RESPONSE,
     MAINTENANCE_HISTORY_GUIDANCE,
+    MY_COUPONS_GUIDANCE,
     ORDER_HISTORY_GUIDANCE,
     RESERVATION_HISTORY_GUIDANCE,
     SMART_PAY_GUIDANCE,
@@ -209,7 +210,7 @@ def _staggered_sizes(slots: ConversationSlots) -> tuple[str, str]:
 def _store_visit_schedule_redirect_event(slots: ConversationSlots) -> dict | None:
     if not (slots.shop_id and slots.requested_cal_day and slots.rsv_hour):
         return None
-    if any((slots.goods_no, slots.tire_size, slots.tire_model, slots.pending_product_name, slots.ord_qty)):
+    if any((slots.goods_no, slots.tire_size, slots.tire_model, slots.pending_product_name)):
         return None
     if slots.goal_type in {"place_order", "add_to_cart"} or slots.pending_intent in {"order", "cart"}:
         return None
@@ -870,6 +871,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         extra_context.append(ORDER_HISTORY_GUIDANCE)
         extra_context.append(RESERVATION_HISTORY_GUIDANCE)
         extra_context.append(MAINTENANCE_HISTORY_GUIDANCE)
+        extra_context.append(MY_COUPONS_GUIDANCE)
         extra_context.append(SMART_PAY_GUIDANCE)
         if decision and (decision.installation_schedule_change or _INSTALLATION_SCHEDULE_CHANGE_INTENT in decision.intents):
             extra_context.append(

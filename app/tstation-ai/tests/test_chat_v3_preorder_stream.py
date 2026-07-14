@@ -330,6 +330,7 @@ async def _assert_store_visit_schedule_selection_uses_store_detail_cta(monkeypat
         return ConversationSlots(
             shop_id="F203675962",
             shop_name="티스테이션 한남점",
+            ord_qty=1,
             pending_intent="reservation",
         )
 
@@ -358,7 +359,7 @@ async def _assert_store_visit_schedule_selection_uses_store_detail_cta(monkeypat
         stream=True,
         user_id="test-user",
         session_id="store-visit-schedule-cta-test",
-        slots={"requested_cal_day": "20260715", "rsv_hour": "17"},
+        slots={"requested_cal_day": "20260715", "rsv_hour": "17", "ord_qty": 1},
     )
 
     events = []
