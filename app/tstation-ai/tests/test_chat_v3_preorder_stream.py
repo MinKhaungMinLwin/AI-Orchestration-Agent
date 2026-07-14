@@ -115,6 +115,10 @@ def test_static_faq_policy_route_uses_registered_ctas(monkeypatch: pytest.Monkey
     asyncio.run(_assert_static_faq_policy_route_uses_registered_ctas(monkeypatch))
 
 
+def test_store_visit_schedule_selection_uses_store_detail_cta(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_store_visit_schedule_selection_uses_store_detail_cta(monkeypatch))
+
+
 def test_cart_confirmation_turn_does_not_write_cart_directly(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_cart_turn_goes_through_executor(monkeypatch, intent="cart_confirmation"))
 
@@ -309,6 +313,69 @@ async def _assert_static_faq_policy_route_uses_registered_ctas(monkeypatch: pyte
     assert quick_replies[0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
     assert all(chip.get("url") != CTAUrls.MY_COUPON_LIST_PC for chip in quick_replies)
     assert saved_slots
+    assert persisted_context["tool_calls"] == []
+
+
+async def _assert_store_visit_schedule_selection_uses_store_detail_cta(monkeypatch: pytest.MonkeyPatch) -> None:
+    persisted_context = {}
+
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(
+            domain=Domain.TRANSACTION,
+            intents=["store_schedule"],
+            needs_selection_card=False,
+        )
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots(
+            shop_id="F203675962",
+            shop_name="티스테이션 한남점",
+            pending_intent="reservation",
+        )
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        assert next_slots.requested_cal_day == "20260715"
+        assert next_slots.rsv_hour == "17"
+
+    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
+        persisted_context["tool_calls"] = tool_calls
+        persisted_context["quick_reply_domains"] = quick_reply_domains
+        persisted_context["predicted_domains"] = predicted_domains
+
+    async def forbidden_composer(*args, **kwargs):
+        raise AssertionError("store visit schedule selection must use the registered store-detail CTA")
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
+    monkeypatch.setattr(service, "_record_real_usage", _noop_async)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+    monkeypatch.setattr(service.composer, "suggest_quick_replies", forbidden_composer)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2026년 07월 15일\n17:00"}],
+        stream=True,
+        user_id="test-user",
+        session_id="store-visit-schedule-cta-test",
+        slots={"requested_cal_day": "20260715", "rsv_hour": "17"},
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert data_events
+    assert data_events[0]["assistant_response_source"] == "code_store_visit_schedule_redirect"
+    quick_replies = data_events[0]["data"]["quickReplies"]
+    assert quick_replies[0]["label"] == "매장 상세 페이지로 이동"
+    assert quick_replies[0]["url"] == CTAUrls.STORE_DETAIL.replace("<shop_seq>", "F203675962")
+    assert quick_replies[0]["domain"] == "TRANSACTION"
+    assert "타이어 추천 받기" not in [chip["label"] for chip in quick_replies]
+    assert "1:1 문의하기" not in [chip["label"] for chip in quick_replies]
     assert persisted_context["tool_calls"] == []
 
 
