@@ -56,7 +56,6 @@ from services.tstation.chat_v3.executor import (  # noqa: E402
     ToolLoopExecutor,
     _model_visible_tool_output,
     _normalize_business_failure,
-    _normalize_tool_call,
     _output_flow_status,
 )
 from services.tstation.chat_v3.price_notice import COUPON_PRICE_NOTICE, apply_coupon_price_notice  # noqa: E402
@@ -65,10 +64,17 @@ from services.tstation.chat_v3.tools import tools_for_domain  # noqa: E402
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools  # noqa: E402
 
 
-def test_v3_discovery_tools_do_not_expose_car_model_group_lookup() -> None:
+def test_v3_discovery_exposes_the_two_step_car_model_size_lookup() -> None:
+    """A named car model must be resolvable to its real tire_size_fr/re.
+
+    These two tools are the only path to that: search_car_model_groups_tool yields a
+    car_model_det, get_car_trims_tool turns it into per-trim front/rear sizes. With step 1
+    unbound the chain was dead, so the model guessed the size (215/55R17 for a BMW 520d).
+    """
     tool_names = {tool.name for tool in DISCOVERY_TOOLS}
 
-    assert "search_car_model_groups_tool" not in tool_names
+    assert "search_car_model_groups_tool" in tool_names
+    assert "get_car_trims_tool" in tool_names
     assert "get_products_recommendations_tool" in tool_names
 
 
@@ -76,29 +82,6 @@ def test_v3_transaction_tools_can_resolve_product_goods_no() -> None:
     tool_names = {tool.name for tool in tools_for_domain("TRANSACTION")}
 
     assert "search_product_tool" in tool_names
-
-
-def test_removed_car_model_group_call_rewrites_to_recommendation_vehicle_type() -> None:
-    normalized = _normalize_tool_call(
-        {"name": "search_car_model_groups_tool", "args": {"keyword": "그랜저"}, "id": "call-1"}
-    )
-
-    assert normalized["name"] == "get_products_recommendations_tool"
-    assert normalized["args"] == {"rcmd_type": "tstation", "limit": 3, "vehicle_type": "passenger"}
-    assert normalized["id"] == "call-1"
-
-
-def test_removed_car_model_group_call_rewrites_suv_alias() -> None:
-    normalized = _normalize_tool_call({"name": "search_car_model_groups_tool", "args": {"keyword": "G바겐"}})
-
-    assert normalized["name"] == "get_products_recommendations_tool"
-    assert normalized["args"]["vehicle_type"] == "suv"
-
-
-def test_non_removed_tool_call_is_preserved() -> None:
-    call = {"name": "search_product_tool", "args": {"keyword": "벤투스"}}
-
-    assert _normalize_tool_call(call) is call
 
 
 def test_inventory_tool_output_is_redacted_only_for_model_visible_observation() -> None:
