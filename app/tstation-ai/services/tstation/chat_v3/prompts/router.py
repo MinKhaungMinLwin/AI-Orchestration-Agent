@@ -122,8 +122,14 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
 - online_store_price_policy: 온라인 판매가와 매장 현장 판매가가 같은지/다른지 묻는 문의
 - regional_price_policy: 지역·매장·배송 조건에 따라 상품 최종가가 같은지/다른지 묻는 문의
 - past_event_page: 지난/종료된/끝난 이벤트를 보여 달라는 요청
-- maintenance_history_lookup: 사용자가 자신의 정비이력/정비내역/매장서비스 내역을 보여 달라고 하는 조회 요청. domain=TRANSACTION 으로 라우팅하고 고정 FAQ가 아닙니다.
-- maintenance_history_access_policy: 정비이력/매장서비스 내역을 어디서 확인하는지 또는 다른 매장에서도 이력 확인 가능한지 묻는 문의
+- maintenance_history_lookup: 사용자가 자신의 실제 정비이력/정비내역/매장서비스 내역을 지금 조회·목록화해 달라는 요청.
+  domain=TRANSACTION 으로 라우팅하고 고정 FAQ가 아닙니다.
+  - 예: "내 정비이력 보여줘", "최근 정비내역 조회해줘", "내 차 서비스 내역 확인해줘"
+- maintenance_history_access_policy: 사용자가 실제 이력 조회를 요청한 것이 아니라, 정비이력/매장서비스 내역을
+  어느 메뉴/페이지/매장에서 확인할 수 있는지, 또는 다른 매장에서도 이력 확인 가능한지 묻는 문의.
+  guard_id="none", domain=SUPPORT, intents=["maintenance_history_access_policy"], needs_selection_card=false 로 라우팅하세요.
+  이 경우 "제가 지금 바로 최근 정비이력도 조회해드릴게요"처럼 실제 조회 제안을 하지 않습니다.
+  - 예: "정비이력은 어디서 확인해?", "매장서비스 내역은 어느 메뉴에서 봐?", "다른 티스테이션 매장에서도 정비내역 확인 가능해?"
 - maintenance_reminding_alarm: 점검/교체 알림, 리마인딩 알림, all my T 점검 확인 경로 문의
 - my_goods_review_lookup: 내가 쓴 상품 리뷰/구매후기/베스트리뷰 확인 경로 문의
 - store_service_review_write: 매장 리뷰/매장 서비스 후기/칭찬/별점 작성 경로 문의

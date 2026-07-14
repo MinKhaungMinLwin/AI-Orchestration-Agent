@@ -78,6 +78,11 @@ def test_router_prompt_separates_maintenance_history_lookup_from_access_policy()
     assert "maintenance_history_lookup" in static_faq_section
     assert "domain=TRANSACTION" in static_faq_section
     assert "maintenance_history_access_policy" in static_faq_section
+    assert "어느 메뉴/페이지/매장에서 확인할 수 있는지" in static_faq_section
+    assert "needs_selection_card=false" in static_faq_section
+    assert "제가 지금 바로 최근 정비이력도 조회해드릴게요" in static_faq_section
+    assert "정비이력은 어디서 확인해?" in static_faq_section
+    assert "내 정비이력 보여줘" in static_faq_section
 
 
 def test_router_prompt_routes_pickup_questions_to_faq_not_static_policy():
