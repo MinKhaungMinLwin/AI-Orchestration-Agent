@@ -66,6 +66,7 @@ from services.tstation.chat_v3.slots.derive import (  # noqa: E402
 )
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 from services.tstation.chat_v3.slots.store import slots_context_block  # noqa: E402
+from services.tstation.common.cta_urls import CTAUrls  # noqa: E402
 
 
 def _parse_sse_event(line: str) -> dict | None:
@@ -75,6 +76,10 @@ def _parse_sse_event(line: str) -> dict | None:
     if payload == "[DONE]":
         return None
     return json.loads(payload)
+
+
+async def _noop_async(*args, **kwargs):
+    return None
 
 
 class _FakeRedis:
@@ -104,6 +109,10 @@ def test_preorder_stream_does_not_emit_duplicate_message(monkeypatch: pytest.Mon
 
 def test_stream_chat_response_saves_preorder_template_without_text(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_stream_chat_response_saves_preorder_template_without_text(monkeypatch))
+
+
+def test_static_faq_policy_route_uses_registered_ctas(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_static_faq_policy_route_uses_registered_ctas(monkeypatch))
 
 
 def test_cart_confirmation_turn_does_not_write_cart_directly(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -245,6 +254,62 @@ def test_fe_vehicle_patch_preserves_staggered_sizes_without_selecting_one() -> N
     assert slots.tire_size is None
     assert slots.tire_size_front == "225/50R18"
     assert slots.tire_size_rear == "255/50R18"
+
+
+async def _assert_static_faq_policy_route_uses_registered_ctas(monkeypatch: pytest.MonkeyPatch) -> None:
+    saved_slots = []
+    persisted_context = {}
+
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(
+            domain=Domain.SUPPORT,
+            intents=["maintenance_history_access_policy"],
+            needs_selection_card=False,
+        )
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots()
+
+    async def fake_save_slots(session_id, next_slots, user_id=None):
+        saved_slots.append(next_slots)
+
+    async def fake_persist_turn_context(session_id, tool_calls, quick_reply_domains, predicted_domains, user_id=None):
+        persisted_context["tool_calls"] = tool_calls
+        persisted_context["quick_reply_domains"] = quick_reply_domains
+        persisted_context["predicted_domains"] = predicted_domains
+
+    async def forbidden_composer(*args, **kwargs):
+        raise AssertionError("static FAQ policy must use registered quick replies")
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_persist_turn_context)
+    monkeypatch.setattr(service, "_record_real_usage", _noop_async)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+    monkeypatch.setattr(service.composer, "suggest_quick_replies", forbidden_composer)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "정비이력은 어디서 확인해?"}],
+        stream=True,
+        user_id="test-user",
+        session_id="static-faq-policy-cta-test",
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert data_events
+    assert data_events[0]["assistant_response_source"] == "code_static_faq_policy"
+    quick_replies = data_events[0]["data"]["quickReplies"]
+    assert quick_replies[0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
+    assert all(chip.get("url") != CTAUrls.MY_COUPON_LIST_PC for chip in quick_replies)
+    assert saved_slots
+    assert persisted_context["tool_calls"] == []
 
 
 def test_fe_vehicle_ui_action_preserves_staggered_sizes_without_selecting_one() -> None:
