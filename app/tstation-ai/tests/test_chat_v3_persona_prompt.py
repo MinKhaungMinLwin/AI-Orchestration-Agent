@@ -10,6 +10,7 @@ STORE_SEARCH_FLOW_GUIDANCE = _PERSONA["STORE_SEARCH_FLOW_GUIDANCE"]
 VEHICLE_LOOKUP_GUIDANCE = _PERSONA["VEHICLE_LOOKUP_GUIDANCE"]
 ORDER_HISTORY_GUIDANCE = _PERSONA["ORDER_HISTORY_GUIDANCE"]
 RESERVATION_HISTORY_GUIDANCE = _PERSONA["RESERVATION_HISTORY_GUIDANCE"]
+MAINTENANCE_HISTORY_GUIDANCE = _PERSONA["MAINTENANCE_HISTORY_GUIDANCE"]
 
 
 def test_system_prompt_limits_store_recommendations_to_tool_verifiable_conditions():
@@ -128,6 +129,12 @@ def test_reservation_history_guidance_calls_tool_instead_of_refusing_or_redirect
     assert "조회 기능이 없다고 답하거나 마이페이지로만 안내하지 마세요" in RESERVATION_HISTORY_GUIDANCE
     assert "오늘 오후에 예약한 거 있지?" in RESERVATION_HISTORY_GUIDANCE
     assert "get_store_install_availability_tool" in RESERVATION_HISTORY_GUIDANCE
+
+
+def test_maintenance_history_guidance_calls_tool_instead_of_redirecting_to_mypage():
+    assert "get_maintenance_history_tool" in MAINTENANCE_HISTORY_GUIDANCE
+    assert "마이페이지로만 안내하지 말고" in MAINTENANCE_HISTORY_GUIDANCE
+    assert "maintenance_history_access_policy" in MAINTENANCE_HISTORY_GUIDANCE
 
 
 def test_vehicle_lookup_guidance_forbids_inventing_a_tire_size_for_a_named_car():

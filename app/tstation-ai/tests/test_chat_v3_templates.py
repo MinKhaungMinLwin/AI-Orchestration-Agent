@@ -54,6 +54,7 @@ from schemas.tstation.slots import ConversationSlots  # noqa: E402
 from services.tstation.chat_v3 import service  # noqa: E402
 from services.tstation.chat_v3 import templates  # noqa: E402
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
+from services.tstation.common.cta_urls import CTAUrls  # noqa: E402
 
 
 def _wrap_relevant(struct_llm):
@@ -915,6 +916,82 @@ def test_events_and_deals_emit_both_ctas():
     assert "\n\n진행 중인 기획전\n" in assistant
     assert "\n\n원하시면 특정 이벤트나 기획전의 대상 상품과 적용 가능한 혜택도 확인해드릴게요." in assistant
     assert [chip["label"] for chip in event["data"]["quickReplies"]] == ["진행 중인 이벤트", "진행 중인 기획전"]
+
+
+def test_order_history_tool_builds_history_quickreply_instead_of_quantity_chips():
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "주문내역을 확인했어요.",
+            [
+                {
+                    "name": "get_orders_of_user_tool",
+                    "args": {},
+                    "output": json.dumps(
+                        {
+                            "status": "success",
+                            "data": {
+                                "items": [
+                                    {
+                                        "ord_no": "O202604080001",
+                                        "ord_prgs_stat_nm": "출고완료",
+                                        "goods_nm": "Ventus S2 AS",
+                                        "ord_qty": "2",
+                                        "sys_reg_dtime": "2026-04-08",
+                                    }
+                                ]
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+            slots=ConversationSlots(goods_no="G000000309783", pending_intent="order", goal_type="place_order"),
+            user_text="내 주문내역 보여줘",
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    quick_replies = event["data"]["quickReplies"]
+    assert any(chip.get("url") == CTAUrls.ORDER_HISTORY for chip in quick_replies)
+    assert [chip["label"] for chip in quick_replies] != ["1개", "2개", "3개", "4개"]
+
+
+def test_maintenance_history_tool_builds_lookup_quickreply_with_service_history_cta():
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정비이력을 확인했어요.",
+            [
+                {
+                    "name": "get_maintenance_history_tool",
+                    "args": {"limit": 5},
+                    "output": json.dumps(
+                        {
+                            "status": "success",
+                            "data": {
+                                "items": [
+                                    {
+                                        "car_svc_dt": "2026-04-18",
+                                        "shop_nm": "티스테이션 고양시청점",
+                                        "car_svc_info": "타이어 장착",
+                                        "car_svc_qty": "2",
+                                    }
+                                ]
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+            user_text="내차 정비내역 보여줘",
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_maintenance_history_lookup"
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
+    assert "티스테이션 고양시청점" in event["data"]["assistantResponse"]
 
 
 def test_quantity_required_flow_uses_fixed_quantity_quick_replies():

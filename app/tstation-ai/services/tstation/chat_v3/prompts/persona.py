@@ -128,6 +128,14 @@ RESERVATION_HISTORY_GUIDANCE = (
     "get_store_install_availability_tool 로 새 예약 가능 일정을 찾지 말고 get_my_reservations_tool 을 호출하세요."
 )
 
+MAINTENANCE_HISTORY_GUIDANCE = (
+    "## 정비이력/매장서비스 내역 조회 규칙\n"
+    "사용자가 자신의 정비이력, 정비내역, 매장서비스 내역, 관리받은 내역을 보여 달라고 하면 "
+    "마이페이지로만 안내하지 말고 get_maintenance_history_tool 을 호출해 실제 이력을 확인하세요.\n"
+    "사용자가 어디서 확인하는지, 다른 매장에서도 확인 가능한지처럼 접근 방법을 묻는 경우에만 "
+    "maintenance_history_access_policy 로 안내하세요."
+)
+
 VEHICLE_LOOKUP_GUIDANCE = (
     "## 차량 조회 규칙\n"
     "사용자 메시지에 어떤 도구의 필수 파라미터에 해당하는 정보가 이미 있다면, 되묻거나 대화만으로 넘어가지 말고 "
