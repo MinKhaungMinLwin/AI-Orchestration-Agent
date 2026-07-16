@@ -24,6 +24,7 @@ from services.tstation.chat_v3.price_notice import apply_coupon_price_notice
 from services.tstation.chat_v3.token_usage import TurnTokenUsage
 from services.tstation.quota_service import record_monthly_tokens
 from services.tstation.chat_v3.prompts.persona import (
+    BENEFIT_INQUIRY_GUIDANCE,
     ERROR_RESPONSE,
     MAINTENANCE_HISTORY_GUIDANCE,
     MY_COUPONS_GUIDANCE,
@@ -885,6 +886,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             )
     if "DISCOVERY" in domains:
         extra_context.append(VEHICLE_LOOKUP_GUIDANCE)
+    if "SUPPORT" in domains:
+        extra_context.append(BENEFIT_INQUIRY_GUIDANCE)
     static_faq_context = _static_faq_policy_context(decision)
     if static_faq_context:
         extra_context.append(static_faq_context)
