@@ -72,6 +72,7 @@ _INSTALLATION_SCHEDULE_CHANGE_INTENT = "installation_schedule_change"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
 _PRESENT_ORDER_PREVIEW_TOOL = "present_order_preview_tool"
 _QUICK_ORDER_TOOL = "quick_order_tool"
+_INSTALL_AVAILABILITY_TOOL = "get_store_install_availability_tool"
 _STAGGERED_INSTALL_AVAILABILITY_INTENT = "staggered_install_availability"
 _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
@@ -289,6 +290,19 @@ def _is_staggered_install_availability_lookup(
     return bool(front_size and rear_size and front_size != rear_size and not selected_size)
 
 
+def _discard_inferred_staggered_quantity(
+    decision: RouteDecision | None,
+    existing: ConversationSlots,
+    patched: ConversationSlots,
+) -> ConversationSlots:
+    """Reject a router quantity that lacks explicit current-turn evidence."""
+    if decision is None or _STAGGERED_INSTALL_AVAILABILITY_INTENT not in decision.intents:
+        return patched
+    if decision.quantity_explicitly_provided or existing.ord_qty is not None:
+        return patched
+    return patched.model_copy(update={"ord_qty": None})
+
+
 def _staggered_simultaneous_purchase_event(
     decision: RouteDecision | None,
     slots: ConversationSlots,
@@ -398,9 +412,16 @@ def _transaction_tool_guard(
     selected_size = str(slots.tire_size or "").strip()
     has_selected_size = selected_size in {front_size, rear_size}
     must_select_size = bool(front_size and rear_size and front_size != rear_size and not has_selected_size)
+    missing_combined_quantity = bool(must_select_size and slots.ord_qty is None)
 
     def guard(call: dict) -> str | None:
         name = str(call.get("name") or "")
+        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        if missing_combined_quantity and name == _INSTALL_AVAILABILITY_TOOL and args.get("goods_items"):
+            return (
+                "The user did not provide a tire quantity. Do not infer quantity from front/rear axle labels. "
+                "Ask how many tires to check for each size before calling installation availability."
+            )
         if must_select_size and name in _UNSELECTED_STAGGERED_ORDER_TOOLS:
             return (
                 "The front and rear tire sizes differ, but no single size has been selected for this order. "
@@ -777,7 +798,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
     recovered_staggered_size_event = _staggered_tire_size_choice_event(slots)
+    slots_before_router_patch = slots
     slots = apply_patch(slots, decision.slots_patch if decision else None)
+    slots = _discard_inferred_staggered_quantity(decision, slots_before_router_patch, slots)
     # Staggered vehicles: even a typed quantity is capped at 2.
     slots = clamp_staggered_ord_qty(slots)
     slots = _normalize_transaction_goal_slots(decision, slots)

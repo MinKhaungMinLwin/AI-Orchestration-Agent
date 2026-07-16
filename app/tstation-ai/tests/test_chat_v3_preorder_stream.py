@@ -797,6 +797,20 @@ def test_direct_staggered_availability_patch_preserves_both_sizes_without_select
     assert service._is_staggered_install_availability_lookup(decision, slots) is True
 
 
+def test_direct_staggered_availability_discards_quantity_without_explicit_evidence() -> None:
+    inferred = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["staggered_install_availability"],
+        slots_patch=SlotsPatch(tire_size_front="245/40R19", tire_size_rear="275/35R19", ord_qty=2),
+    )
+    patched = apply_patch(ConversationSlots(), inferred.slots_patch)
+
+    assert service._discard_inferred_staggered_quantity(inferred, ConversationSlots(), patched).ord_qty is None
+
+    explicit = inferred.model_copy(update={"quantity_explicitly_provided": True})
+    assert service._discard_inferred_staggered_quantity(explicit, ConversationSlots(), patched).ord_qty == 2
+
+
 def test_direct_staggered_availability_enters_tool_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_direct_staggered_availability_enters_tool_loop(monkeypatch))
 
@@ -893,6 +907,24 @@ def test_transaction_tool_guard_blocks_order_tools_until_staggered_size_is_selec
     for tool_name in ("present_order_preview_tool", "quick_order_tool", "save_to_cart_tool"):
         assert guard({"name": tool_name, "args": {}}) is not None
     assert guard({"name": "get_store_install_availability_tool", "args": {}}) is None
+    assert guard({
+        "name": "get_store_install_availability_tool",
+        "args": {"goods_items": [{"goods_no": "G1", "ord_qty": 2}, {"goods_no": "G2", "ord_qty": 2}]},
+    }) is not None
+
+
+def test_transaction_tool_guard_allows_combined_availability_after_quantity_confirmation() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2 each"}], stream=True, user_id="u", session_id="s"
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["staggered_install_availability"])
+    slots = ConversationSlots(tire_size_front="245/40R19", tire_size_rear="275/35R19", ord_qty=2)
+    guard = service._transaction_tool_guard(decision, request, slots)
+
+    assert guard({
+        "name": "get_store_install_availability_tool",
+        "args": {"goods_items": [{"goods_no": "G1", "ord_qty": 2}, {"goods_no": "G2", "ord_qty": 2}]},
+    }) is None
 
 
 def test_transaction_tool_guard_allows_order_after_staggered_size_selection() -> None:
@@ -1024,7 +1056,7 @@ async def _assert_direct_staggered_availability_enters_tool_loop(monkeypatch: py
         def __init__(self, *args, **kwargs) -> None:
             nonlocal executor_started
             executor_started = True
-            self.final_text = "Combined availability lookup completed."
+            self.final_text = "How many tires should I check for each size?"
             self.tool_calls = []
 
         async def stream(self):
@@ -1089,7 +1121,9 @@ async def _assert_direct_staggered_availability_enters_tool_loop(monkeypatch: py
             events.append(event)
 
     assert executor_started is True
-    assert [event.get("template") for event in events if event.get("type") == "data"] == ["quickReply"]
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert [event.get("template") for event in data_events] == ["quickReply"]
+    assert [chip["label"] for chip in data_events[0]["data"]["quickReplies"]] == ["1개", "2개"]
     assert saved_slots[0].tire_size is None
     assert saved_slots[0].tire_size_front == "245/40R19"
     assert saved_slots[0].tire_size_rear == "275/35R19"

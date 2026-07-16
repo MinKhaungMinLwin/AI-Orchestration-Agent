@@ -190,6 +190,8 @@ STORE_SEARCH_FLOW_GUIDANCE = (
     "MULTI-PRODUCT INSTALL AVAILABILITY:\n"
     "- When known front/rear sizes differ and the user asks for stock, stores, or installation for both, "
     "search_product_tool must resolve one goods_no for each size.\n"
+    "- Never infer quantity from front/rear axle labels. If ord_qty is missing, ask how many tires to check "
+    "for each size and stop before the availability lookup.\n"
     "- Call get_store_install_availability_tool once with goods_items containing each goods_no and requested "
     "quantity. The tool returns only stores and exact schedule slots shared by every product.\n"
     "- Report dates and times only from combined.first_available_slot and schedule.stores. Never merge two "

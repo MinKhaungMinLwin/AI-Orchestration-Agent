@@ -1523,10 +1523,12 @@ def _has_confirmed_quantity(slots: ConversationSlots | None) -> bool:
 def _is_quantity_required_flow(slots: ConversationSlots | None, decision: RouteDecision | None = None) -> bool:
     if slots is None or _has_confirmed_quantity(slots):
         return False
-    if not slots.goods_no:
-        return False
     pending_intent = str(slots.pending_intent or "").strip()
     goal_type = str(slots.goal_type or "").strip()
+    if is_staggered_vehicle(slots) and (pending_intent == "stock" or goal_type == "store_with_stock"):
+        return True
+    if not slots.goods_no:
+        return False
     if pending_intent in {"order", "reservation", "cart"}:
         return True
     if goal_type in {"place_order", "add_to_cart", "store_with_stock"}:
