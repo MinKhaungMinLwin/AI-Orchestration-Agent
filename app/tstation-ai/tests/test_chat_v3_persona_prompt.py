@@ -81,6 +81,13 @@ def test_store_flow_prompt_uses_unified_install_availability_tool():
     assert "get_store_schedule_tool" not in STORE_SEARCH_FLOW_GUIDANCE
 
 
+def test_store_flow_prompt_uses_combined_availability_for_staggered_sizes() -> None:
+    assert "MULTI-PRODUCT INSTALL AVAILABILITY" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "goods_items" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "combined.first_available_slot" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "Do not offer a combined preOrder card" in STORE_SEARCH_FLOW_GUIDANCE
+
+
 def test_store_flow_prompt_maps_imported_vehicle_experience_to_imported_specialty_search():
     assert "BMW 5시리즈" in STORE_SEARCH_FLOW_GUIDANCE
     assert "수입차 특화점 검색 의도" in STORE_SEARCH_FLOW_GUIDANCE

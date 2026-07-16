@@ -72,6 +72,7 @@ _INSTALLATION_SCHEDULE_CHANGE_INTENT = "installation_schedule_change"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
 _PRESENT_ORDER_PREVIEW_TOOL = "present_order_preview_tool"
 _QUICK_ORDER_TOOL = "quick_order_tool"
+_STAGGERED_INSTALL_AVAILABILITY_INTENT = "staggered_install_availability"
 _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
     "staggered_simultaneous_purchase_inquiry",
@@ -274,6 +275,18 @@ def _fills_transaction_slot(decision: RouteDecision | None) -> bool:
     if decision is None or decision.slots_patch is None:
         return False
     return bool(_TRANSACTION_SLOT_FILL_FIELDS.intersection(decision.slots_patch.non_empty()))
+
+
+def _is_staggered_install_availability_lookup(
+    decision: RouteDecision | None,
+    slots: ConversationSlots,
+) -> bool:
+    """Identify the router's explicit read-only lookup for both staggered sizes."""
+    if decision is None or _STAGGERED_INSTALL_AVAILABILITY_INTENT not in decision.intents:
+        return False
+    front_size, rear_size = _staggered_sizes(slots)
+    selected_size = str(slots.tire_size or "").strip()
+    return bool(front_size and rear_size and front_size != rear_size and not selected_size)
 
 
 def _staggered_simultaneous_purchase_event(
@@ -812,11 +825,14 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             yield event
         return
 
-    staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
-        decision,
-        slots,
-        size_selected_from_ui=_request_has_selected_tire_size(request),
-    )
+    staggered_install_availability_lookup = _is_staggered_install_availability_lookup(decision, slots)
+    staggered_simultaneous_purchase_event = None
+    if not staggered_install_availability_lookup:
+        staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
+            decision,
+            slots,
+            size_selected_from_ui=_request_has_selected_tire_size(request),
+        )
     if staggered_simultaneous_purchase_event:
         answer = str(staggered_simultaneous_purchase_event["data"]["assistantResponse"])
         chips = staggered_simultaneous_purchase_event["data"]["quickReplies"]
@@ -857,11 +873,13 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         )
         return
 
-    staggered_size_event = (
-        _staggered_tire_size_choice_event(slots)
-        if _fills_transaction_slot(decision)
-        else recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
-    )
+    staggered_size_event = None
+    if not staggered_install_availability_lookup:
+        staggered_size_event = (
+            _staggered_tire_size_choice_event(slots)
+            if _fills_transaction_slot(decision)
+            else recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
+        )
     if staggered_size_event:
         answer = str(staggered_size_event["data"]["assistantResponse"])
         chips = staggered_size_event["data"]["quickReplies"]
@@ -937,6 +955,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
 
     def stop_for_staggered_vehicle(tool_calls: list[dict]) -> bool:
         derived = derive_slots_from_tool_calls(vehicle_policy_state["slots"], tool_calls)
+        if staggered_install_availability_lookup:
+            vehicle_policy_state["slots"] = derived
+            return False
         promoted = promote_selected_vehicle(
             derived,
             tool_calls,
@@ -1025,6 +1046,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     # have their required args even when a later turn no longer re-calls the tools.
     slots_before_harvest = slots.model_copy()
     slots = templates.harvest_order_slots(slots, executor.tool_calls)
+    if staggered_install_availability_lookup:
+        slots = slots.model_copy(update={"goods_no": None, "tire_size": None})
     slots = clamp_staggered_ord_qty(slots)
 
     answer = executor.final_text.strip() or ERROR_RESPONSE

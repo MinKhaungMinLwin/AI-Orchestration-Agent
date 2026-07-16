@@ -148,6 +148,18 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         ],
         predicted_domains=["DISCOVERY", "TRANSACTION"],
     ),
+    GuardId.RESERVATION_MODIFY_REQUEST: Guard(
+        id="reservation_modify_request",
+        text=(
+            "예약 시간은 제가 직접 변경해 드릴 수는 없어요. "
+            "주문 내역에서 확인하신 후 변경하시거나, 매장으로 연락해 변경 가능 여부를 확인해 주세요."
+        ),
+        chips=[
+            {"label": "주문 내역 확인", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ],
+        predicted_domains=["TRANSACTION", "SUPPORT"],
+    ),
     GuardId.VEHICLE_TYPE_COMPATIBILITY: _guard_from_static_faq_policy("vehicle_type_compatibility"),
     GuardId.DIRECT_HOME_DELIVERY: _guard_from_static_faq_policy("direct_home_delivery"),
     GuardId.SHIPPING_FEE_REGION: _guard_from_static_faq_policy("shipping_fee_region"),

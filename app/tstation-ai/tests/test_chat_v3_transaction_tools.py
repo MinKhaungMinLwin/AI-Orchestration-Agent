@@ -1,5 +1,7 @@
 import os
 
+import pytest
+
 _TEST_ENV_DEFAULTS = {
     "PROJECT_NAME": "test",
     "ROOT_PATH": "",
@@ -45,13 +47,79 @@ for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
 from services.tstation.chat_v3.tools.transaction import TRANSACTION_READ_TOOLS  # noqa: E402
+from services.tstation.agents.c_transaction_agent import tools as transaction_tools  # noqa: E402
+from services.tstation.agents.c_transaction_agent.install_availability import (  # noqa: E402
+    combine_install_availability,
+)
 
 
 def test_transaction_tools_use_unified_install_availability_lookup() -> None:
     names = {tool.name for tool in TRANSACTION_READ_TOOLS}
+    availability_tool = next(tool for tool in TRANSACTION_READ_TOOLS if tool.name == "get_store_install_availability_tool")
 
     assert "get_store_install_availability_tool" in names
+    assert "goods_items" in availability_tool.args
     assert "get_logistics_inventory_tool" not in names
     assert "get_store_inventory_tool" not in names
     assert "get_store_schedule_tool" not in names
     assert "get_multi_store_schedule_tool" not in names
+
+
+def _availability_result(stores: list[tuple[str, list[str]]]) -> dict:
+    return {
+        "status": "success",
+        "data": {
+            "items": [{"shop_id": shop_id, "status": "available"} for shop_id, _ in stores],
+            "schedule": {
+                "stores": [
+                    {
+                        "shop_id": shop_id,
+                        "shop_nm": shop_id,
+                        "is_installable": True,
+                        "slots": [{"cal_day": "20260717", "tm": tm} for tm in times],
+                    }
+                    for shop_id, times in stores
+                ]
+            },
+        },
+    }
+
+
+def test_combined_install_availability_intersects_stores_and_exact_slots() -> None:
+    payload = combine_install_availability(
+        results=[
+            _availability_result([("S1", ["09", "10"]), ("S2", ["09"])]),
+            _availability_result([("S1", ["09", "11"]), ("S3", ["09"])]),
+        ],
+        candidate_shop_ids=["S1", "S2", "S3"],
+        requested_cal_day=None,
+    )
+
+    assert payload["combined"] == {
+        "all_products_available_together": True,
+        "common_shop_ids": ["S1"],
+        "first_available_slot": {"cal_day": "20260717", "tm": "09"},
+    }
+    assert payload["items"][0]["available_times_on_first_day"] == ["09"]
+
+
+def test_install_availability_tool_uses_all_goods_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def fake_lookup(**kwargs):
+        calls.append(kwargs)
+        return _availability_result([("S1", ["09"])])
+
+    monkeypatch.setattr(transaction_tools, "_get_store_install_availability_result", fake_lookup)
+
+    result = transaction_tools.get_store_install_availability_tool.invoke({
+        "shop_id_list": ["S1"],
+        "goods_items": [
+            {"goods_no": "G-FRONT", "ord_qty": 2},
+            {"goods_no": "G-REAR", "ord_qty": 2},
+        ],
+    })
+
+    assert [call["goods_no"] for call in calls] == ["G-FRONT", "G-REAR"]
+    assert result["data"]["combined"]["common_shop_ids"] == ["S1"]
+    assert result["data"]["combined"]["first_available_slot"] == {"cal_day": "20260717", "tm": "09"}

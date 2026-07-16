@@ -164,3 +164,6 @@ def test_router_prompt_extracts_direct_staggered_tire_sizes_into_separate_slots(
     assert "slots_patch.tire_size_front" in ROUTER_PROMPT
     assert "slots_patch.tire_size_rear" in ROUTER_PROMPT
     assert "slots_patch.tire_size 를 채우지 마세요" in ROUTER_PROMPT
+    assert 'intent "staggered_install_availability"' in ROUTER_PROMPT
+    assert 'slots_patch.goal_type="store_with_stock"' in ROUTER_PROMPT
+    assert 'slots_patch.pending_intent="stock"' in ROUTER_PROMPT

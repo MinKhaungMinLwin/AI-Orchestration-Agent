@@ -65,7 +65,7 @@ from services.tstation.chat_v3.slots.derive import (  # noqa: E402
     promote_selected_vehicle,
 )
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
-from services.tstation.chat_v3.slots.store import slots_context_block  # noqa: E402
+from services.tstation.chat_v3.slots.store import apply_patch, slots_context_block  # noqa: E402
 from services.tstation.common.cta_urls import CTAUrls  # noqa: E402
 
 
@@ -776,26 +776,29 @@ def test_staggered_vehicle_size_guard_survives_router_car_no_patch(monkeypatch: 
     )
 
 
-def test_direct_staggered_size_patch_blocks_tools_and_requests_size_selection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    asyncio.run(
-        _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
-            monkeypatch,
-            slots=ConversationSlots(),
-            decision=RouteDecision(
-                domain=Domain.TRANSACTION,
-                intents=["store_with_stock"],
-                slots_patch=SlotsPatch(
-                    tire_size_front="245 40 r19",
-                    tire_size_rear="275 35 r19",
-                    region="Dongtan",
-                ),
-            ),
-            expected_front_size="245/40R19",
-            expected_rear_size="275/35R19",
-        )
+def test_direct_staggered_availability_patch_preserves_both_sizes_without_selecting_one() -> None:
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["staggered_install_availability"],
+        slots_patch=SlotsPatch(
+            tire_size_front="245 40 r19",
+            tire_size_rear="275 35 r19",
+            region="Dongtan",
+            goal_type="store_with_stock",
+            pending_intent="stock",
+        ),
     )
+
+    slots = apply_patch(ConversationSlots(), decision.slots_patch)
+
+    assert slots.tire_size is None
+    assert slots.tire_size_front == "245/40R19"
+    assert slots.tire_size_rear == "275/35R19"
+    assert service._is_staggered_install_availability_lookup(decision, slots) is True
+
+
+def test_direct_staggered_availability_enters_tool_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_direct_staggered_availability_enters_tool_loop(monkeypatch))
 
 
 def test_staggered_vehicle_card_click_guard_blocks_recommendation_flow(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1011,6 +1014,78 @@ async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
     assert data_events[0]["data"]["quickReplies"][1]["metadata"]["slots"]["tire_size"] == expected_rear_size
     assert saved_slots[0].tire_size is None
     assert persisted_domains == ["DISCOVERY", "DISCOVERY"]
+
+
+async def _assert_direct_staggered_availability_enters_tool_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    saved_slots = []
+    executor_started = False
+
+    class FakeExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            nonlocal executor_started
+            executor_started = True
+            self.final_text = "Combined availability lookup completed."
+            self.tool_calls = []
+
+        async def stream(self):
+            yield service.sse.token(self.final_text)
+
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(
+            domain=Domain.TRANSACTION,
+            extra_domains=[Domain.DISCOVERY],
+            intents=["staggered_install_availability"],
+            slots_patch=SlotsPatch(
+                tire_size_front="245 40 r19",
+                tire_size_rear="275 35 r19",
+                tire_model="Ventus S2 AS",
+                region="Dongtan",
+                goal_type="store_with_stock",
+                pending_intent="stock",
+            ),
+        )
+
+    async def fake_save_slots(session_id, slots, user_id=None):
+        saved_slots.append(slots)
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots()
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    async def fake_verify_answer(answer, tool_calls, trace_config):
+        return answer
+
+    async def fake_chips(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
+    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service.templates, "build_rich_data_event", fake_noop)
+    monkeypatch.setattr(service.composer, "suggest_quick_replies", fake_chips)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "Check both staggered sizes near Dongtan."}],
+        stream=True,
+        user_id="test-user",
+        session_id="staggered-availability-test",
+    )
+
+    async for _ in service._run_turn(request, {}):
+        pass
+
+    assert executor_started is True
+    assert saved_slots[0].tire_size is None
+    assert saved_slots[0].tire_size_front == "245/40R19"
+    assert saved_slots[0].tire_size_rear == "275/35R19"
 
 
 async def _assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(

@@ -193,6 +193,15 @@ VEHICLE_LOOKUP_GUIDANCE = (
 )
 
 STORE_SEARCH_FLOW_GUIDANCE = (
+    "MULTI-PRODUCT INSTALL AVAILABILITY:\n"
+    "- When known front/rear sizes differ and the user asks for stock, stores, or installation for both, "
+    "search_product_tool must resolve one goods_no for each size.\n"
+    "- Call get_store_install_availability_tool once with goods_items containing each goods_no and requested "
+    "quantity. The tool returns only stores and exact schedule slots shared by every product.\n"
+    "- Report dates and times only from combined.first_available_slot and schedule.stores. Never merge two "
+    "independent schedules yourself.\n"
+    "- This lookup does not prove that a combined online order is supported. Do not offer a combined preOrder "
+    "card. If the user later asks to order, explain that each SKU must proceed separately.\n\n"
     "## 매장 검색 → 장착 가능 일정 통합 확인 흐름\n"
     "상품(goods_no)·수량·지역이 이미 확정된 상태에서 사용자가 구매/장착을 원하면, 매장을 검색해도 되는지 "
     "다시 묻지 말고 바로 진행하세요 — 매장 검색·재고 조회는 데이터를 바꾸지 않는 조회 동작이라 "

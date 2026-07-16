@@ -48,6 +48,7 @@ class GuardId(str, Enum):
     EXPIRED_COUPON_OR_EVENT = "expired_coupon_or_event"
     NONEXISTENT_BENEFIT = "nonexistent_benefit"
     RESERVATION_DATE_RANGE = "reservation_date_range"
+    RESERVATION_MODIFY_REQUEST = "reservation_modify_request"
     VEHICLE_TYPE_COMPATIBILITY = "vehicle_type_compatibility"
     PICKUP_STATUS = "pickup_status"
     PICKUP_INFO = "pickup_info"
