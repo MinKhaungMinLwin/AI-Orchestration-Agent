@@ -84,6 +84,8 @@ def test_store_flow_prompt_uses_unified_install_availability_tool():
 def test_store_flow_prompt_uses_combined_availability_for_staggered_sizes() -> None:
     assert "MULTI-PRODUCT INSTALL AVAILABILITY" in STORE_SEARCH_FLOW_GUIDANCE
     assert "goods_items" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "Never infer quantity from front/rear axle labels" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "If ord_qty is missing" in STORE_SEARCH_FLOW_GUIDANCE
     assert "combined.first_available_slot" in STORE_SEARCH_FLOW_GUIDANCE
     assert "Do not offer a combined preOrder card" in STORE_SEARCH_FLOW_GUIDANCE
 

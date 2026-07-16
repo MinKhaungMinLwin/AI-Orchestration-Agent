@@ -110,6 +110,13 @@ class RouteDecision(BaseModel):
             "preOrder/order confirmation. Do not set this for questions about why an order attempt failed."
         ),
     )
+    quantity_explicitly_provided: bool = Field(
+        default=False,
+        description=(
+            "True only when the user explicitly supplied a tire quantity in the current message or UI action. "
+            "Front/rear axle labels and the presence of two tire sizes do not imply a quantity."
+        ),
+    )
     needs_selection_card: bool = Field(
         default=True,
         description=(

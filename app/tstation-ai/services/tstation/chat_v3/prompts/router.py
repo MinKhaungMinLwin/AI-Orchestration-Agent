@@ -48,14 +48,17 @@ T-Station은 한국타이어의 타이어 판매·장착·차량 관리 서비�
 - product_code_request: 상품 코드, 상품번호/상품 번호, goods_no, goodsNo, goodsId 같은 내부 상품 식별자를 알려 달라는 요청
   (예: "이 타이어 상품코드 알려줘", "벤투스 goods_no 뭐야?", "상품번호 보여줘")
   단, 사용자가 상품명·규격·가격·재고·장착 가능 여부를 묻는 경우는 상품 코드 요청이 아니므로 none.
-- reservation_modify_request: 사용자가 이미 확정되어 예약번호/주문번호가 있는 기존 방문예약·장착예약의 날짜나
-  시간을 바꿔 달라는 요청 (예: "장착일을 변경하고싶어요", "예약 변경해줘", "예약 시간 바꾸고 싶어요",
-  "이미 잡은 예약 날짜 옮기고 싶어", "예약 취소하고 다시 잡을 수 있어?" 중 변경 의도). 챗봇에는 기존 예약을
-  실제로 변경 처리하는 기능이 없으므로, 새 날짜/시간을 묻거나 매장 예약 가능 일정을 조회하지 말고 즉시 이
-  guard를 선택하세요.
-  ⚠️ 아직 확정되지 않은 새 주문/예약을 진행하는 중에 후보 날짜·시간을 다시 고르는 경우(예: preOrder 확인
-  단계에서 "다른 날짜로 할래", "시간대 바꿔줘")는 이 guard가 아니라 일반 예약 흐름입니다 — 그 경우
-  slots_patch만 갱신하고 guard_id는 none으로 두세요.
+- reservation_modify_request: **먼저 바로 직전 챗봇 응답을 확인하세요.** 직전 챗봇 응답이 아직 결제/주문 확정
+  전 상태(예: "주문하기"/결제하기 버튼이 있는 주문 요약 카드, 또는 날짜·시간 후보를 고르는 중인 preOrder 흐름)
+  였다면, 사용자가 "다른 날짜로 할래", "시간대 바꿔줘", "날짜 변경할게요"처럼 말해도 **이 guard가 아닙니다**.
+  이는 아직 주문번호가 발급되지 않은 진행 중인 주문의 날짜/시간을 다시 고르는 정상 흐름이므로, guard_id는
+  none으로 두고 slots_patch.installation_schedule_change=true 로 표시한 뒤 사용자가 원하는 새 날짜를
+  requested_cal_day 에 반영하세요.
+  이 guard는 오직 대화 맥락상 **이미 끝난, 주문번호가 이미 발급된 과거 예약**(예: 이전 턴에서 조회된 예약
+  목록의 항목, "이미 예약한 거", "저번에 예약해놨는데", "예약 내역에 있는 그 건")의 날짜/시간을 바꿔 달라는
+  요청에만 사용하세요 (예: "장착일을 변경하고싶어요", "예약 변경해줘", "이미 예약한 거 시간 바꾸고 싶어요").
+  챗봇에는 기존 예약을 실제로 변경 처리하는 기능이 없으므로, 이 guard에 해당하면 새 날짜/시간을 묻거나 매장
+  예약 가능 일정을 조회하지 말고 즉시 guard를 선택하세요.
 - out_of_scope: 아래 domain 목록(DISCOVERY/TRANSACTION/SUPPORT) 중 어디에도 속하지 않고, 인사·감사·서비스 이용
   관련 잡담도 아닌, T'Station 서비스와 무관한 주제에 대한 실질적인 답변을 요청하는 발화
   특히 외부 분야의 판단·예측·추천·결정, 불확실하거나 무작위인 결과에 대한 예측, 다른 회사·타 업종 상담,
@@ -197,6 +200,9 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   availability for both sizes, include intent "staggered_install_availability". This is a read-only lookup,
   not a simultaneous purchase request. Set slots_patch.goal_type="store_with_stock" and
   slots_patch.pending_intent="stock".
+- Set quantity_explicitly_provided=true only when the current user message or UI action explicitly supplies
+  a numeric tire quantity. Front/rear axle labels, two different sizes, or a request to check both products do
+  not imply two tires. When quantity_explicitly_provided=false, leave slots_patch.ord_qty empty.
 
 ## 4. slots_patch — 이번 발화에서 새로 알게 된 값만 채우세요
 - 이전 턴에서 이미 알고 있던 값, 추측한 값은 넣지 마세요
