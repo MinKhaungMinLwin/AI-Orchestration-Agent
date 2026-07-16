@@ -115,6 +115,17 @@ def test_vehicle_lookup_guidance_calls_tool_without_waiting_for_a_request_verb()
     assert "요청 문구가 없어도" in VEHICLE_LOOKUP_GUIDANCE
 
 
+def test_vehicle_lookup_guidance_checks_registered_cars_before_asking_owner_name():
+    # Issue: a plate-only message ("29조3344") made the bot ask for the owner name
+    # immediately, even when the plate belongs to the user's own registered car.
+    # Expected flow: get_my_cars_tool first → match → let the user confirm/select;
+    # only when no registered car matches, ask for 소유주명 → get_user_vehicles_tool.
+    assert "차량번호만 있고 소유주명이 없을 때" in VEHICLE_LOOKUP_GUIDANCE
+    assert "소유주명을 바로 되묻지 마세요" in VEHICLE_LOOKUP_GUIDANCE
+    assert "get_my_cars_tool" in VEHICLE_LOOKUP_GUIDANCE
+    assert "일치하는 차량이 없으면" in VEHICLE_LOOKUP_GUIDANCE
+
+
 def test_order_history_guidance_calls_tool_instead_of_refusing_or_redirecting():
     # Issue: bot told a customer order history "isn't connected in this chat" and
     # pointed them to MyPage instead of calling the bound get_orders_of_user_tool.
