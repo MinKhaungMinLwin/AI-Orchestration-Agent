@@ -47,6 +47,7 @@ from services.tstation.chat_v3.slots.derive import (
     derive_slots_from_tool_calls,
     is_staggered_vehicle,
     promote_selected_vehicle,
+    reset_for_supported_brand_switch,
     track_guard_repeat,
 )
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
@@ -630,6 +631,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     )
     t_route = time.perf_counter()
 
+    if decision and decision.brand_context.switch_to_supported_alternative:
+        slots = reset_for_supported_brand_switch(slots)
     slots = track_guard_repeat(decision.guard_id.value if decision else "none", slots)
     guard = get_guard(decision.guard_id) if decision else None
     # Repeated same guard → hand off to domain agent instead of repeating canned text.

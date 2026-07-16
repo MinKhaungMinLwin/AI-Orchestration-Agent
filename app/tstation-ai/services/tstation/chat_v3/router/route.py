@@ -179,10 +179,10 @@ def _clear_non_target_unsupported_brand_guard(decision: RouteDecision) -> RouteD
     if decision.guard_id != GuardId.UNSUPPORTED_BRAND:
         return decision
     brand_context = decision.brand_context
-    if brand_context.unsupported_brand_target or not brand_context.has_non_target_brand_context():
+    if brand_context.unsupported_brand_target and not brand_context.switch_to_supported_alternative:
         return decision
     logger.info(
-        "[CHAT_V3] cleared unsupported_brand guard for non-target brand context=%s",
+        "[CHAT_V3] cleared unsupported_brand guard without a current unsupported target context=%s",
         brand_context.model_dump(exclude_none=True),
     )
     decision.guard_id = GuardId.NONE

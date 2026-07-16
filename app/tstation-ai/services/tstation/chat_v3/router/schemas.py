@@ -27,9 +27,13 @@ class BrandContext(BaseModel):
             "availability, or recommendation. Leave empty when the unsupported brand is only the installed brand."
         ),
     )
-
-    def has_non_target_brand_context(self) -> bool:
-        return any(str(value or "").strip() for value in (self.installed_brand, self.desired_brand, self.excluded_brand))
+    switch_to_supported_alternative: bool = Field(
+        default=False,
+        description=(
+            "True when the current turn abandons a previous unsupported brand and asks for a supported "
+            "alternative, including when no replacement brand is named."
+        ),
+    )
 
 
 class GuardId(str, Enum):
@@ -82,6 +86,7 @@ class RouteDecision(BaseModel):
             if extra.value not in ordered:
                 ordered.append(extra.value)
         return ordered
+
     intents: list[str] = Field(
         default_factory=list,
         description="이번 턴의 세부 의도 키워드 (자유 서술, 1~3개)",
