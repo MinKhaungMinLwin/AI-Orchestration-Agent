@@ -865,23 +865,16 @@ def test_staggered_availability_uses_only_typed_explicit_quantity() -> None:
 
     assert service._apply_explicit_staggered_quantity(inferred, ConversationSlots(), patched).ord_qty is None
 
-    inferred_per_axle = inferred.model_copy(
-        update={"slots_patch": SlotsPatch(tire_size_front="245/40R19", tire_size_rear="275/35R19", ord_qty_front=2, ord_qty_rear=1)}
-    )
-    patched_per_axle = apply_patch(ConversationSlots(), inferred_per_axle.slots_patch)
-    discarded = service._apply_explicit_staggered_quantity(
-        inferred_per_axle,
-        ConversationSlots(),
-        patched_per_axle,
-    )
-    assert discarded.ord_qty_front is None
-    assert discarded.ord_qty_rear is None
-
     explicit = inferred.model_copy(
         update={"explicit_staggered_quantity": ExplicitStaggeredQuantity(ord_qty=2)}
     )
     confirmed = service._apply_explicit_staggered_quantity(explicit, ConversationSlots(), patched)
     assert confirmed.ord_qty == 2
+
+
+def test_staggered_per_axle_quantities_have_only_one_router_schema_location() -> None:
+    assert "ord_qty_front" not in SlotsPatch.model_fields
+    assert "ord_qty_rear" not in SlotsPatch.model_fields
 
 
 def test_direct_staggered_availability_enters_tool_loop(monkeypatch: pytest.MonkeyPatch) -> None:

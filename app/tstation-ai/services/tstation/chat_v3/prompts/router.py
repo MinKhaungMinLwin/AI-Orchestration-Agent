@@ -205,7 +205,8 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   check both products do not imply two tires. When one quantity applies to both sizes, set
   explicit_staggered_quantity.ord_qty. When the user supplies quantities for the front and rear sizes separately,
   set explicit_staggered_quantity.ord_qty_front and explicit_staggered_quantity.ord_qty_rear. Leave the entire
-  object empty when no quantity was explicitly stated.
+  object empty when no quantity was explicitly stated. Never put staggered front/rear quantities in slots_patch;
+  explicit_staggered_quantity is their only output location.
 - When CONVERSATION SLOTS already have goal_type="store_with_stock", pending_intent="stock", and different
   front/rear sizes, a quantity-only follow-up continues intent "staggered_install_availability". It is not a
   simultaneous purchase request and does not require the user to select one size.
@@ -216,6 +217,9 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   slots_patch.tire_size_front 와 slots_patch.tire_size_rear 를 각각 채우세요. 사용자가 한 규격을
   진행할 대상으로 선택하기 전에는 slots_patch.tire_size 를 채우지 마세요.
 - 날짜는 YYYYMMDD, 시간은 HH (24시간)로 정규화
+- The "오늘 날짜/시간: Current Time" line is system reference context, not a date stated by the user. Never
+  copy that system date into slots_patch.requested_cal_day. If the current user message or UI action does not
+  request a date, leave requested_cal_day empty instead of using today's date or copying a known slot.
 - goal_type/pending_intent는 설명에 명시된 값만 사용
 - 사용자가 원하는 날짜를 조금이라도 언급하면 **항상** requested_cal_day 를 채우세요. "오늘", "내일",
   "모레", "이번 주말", "금요일"처럼 상대적인 표현도 맨 위에 주어진 오늘 날짜를 기준으로 YYYYMMDD 로
