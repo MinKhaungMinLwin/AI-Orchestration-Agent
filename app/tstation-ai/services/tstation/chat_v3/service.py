@@ -302,18 +302,31 @@ def _is_staggered_install_availability_lookup(
     return bool(front_size and rear_size and front_size != rear_size and not selected_size)
 
 
-def _discard_inferred_staggered_quantity(
+def _apply_explicit_staggered_quantity(
     decision: RouteDecision | None,
     existing: ConversationSlots,
     patched: ConversationSlots,
 ) -> ConversationSlots:
-    """Reject a router quantity that lacks explicit current-turn evidence."""
+    """Apply only the router's typed, current-turn staggered quantity selection."""
     if decision is None or not _is_staggered_install_availability_lookup(decision, patched):
         return patched
-    if decision.quantity_explicitly_provided:
-        return patched
     quantity_fields = ("ord_qty", "ord_qty_front", "ord_qty_rear")
-    return patched.model_copy(update={field: getattr(existing, field) for field in quantity_fields})
+    restored = patched.model_copy(update={field: getattr(existing, field) for field in quantity_fields})
+    explicit = decision.explicit_staggered_quantity
+    if explicit is None:
+        return restored
+    values = explicit.model_dump(exclude_none=True)
+    if not values:
+        return restored
+    if "ord_qty" in values:
+        return restored.model_copy(update={"ord_qty": values["ord_qty"], "ord_qty_front": None, "ord_qty_rear": None})
+    existing_front = existing.ord_qty_front if existing.ord_qty_front is not None else existing.ord_qty
+    existing_rear = existing.ord_qty_rear if existing.ord_qty_rear is not None else existing.ord_qty
+    return restored.model_copy(update={
+        "ord_qty": None,
+        "ord_qty_front": values.get("ord_qty_front", existing_front),
+        "ord_qty_rear": values.get("ord_qty_rear", existing_rear),
+    })
 
 
 def _has_staggered_availability_quantity(slots: ConversationSlots) -> bool:
@@ -821,7 +834,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     recovered_staggered_size_event = _staggered_tire_size_choice_event(slots)
     slots_before_router_patch = slots
     slots = apply_patch(slots, decision.slots_patch if decision else None)
-    slots = _discard_inferred_staggered_quantity(decision, slots_before_router_patch, slots)
+    slots = _apply_explicit_staggered_quantity(decision, slots_before_router_patch, slots)
     # Staggered vehicles: even a typed quantity is capped at 2.
     slots = clamp_staggered_ord_qty(slots)
     slots = _normalize_transaction_goal_slots(decision, slots)

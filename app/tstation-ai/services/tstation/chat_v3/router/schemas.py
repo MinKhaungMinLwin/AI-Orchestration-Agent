@@ -67,6 +67,23 @@ class Domain(str, Enum):
     SUPPORT = "SUPPORT"
 
 
+class ExplicitStaggeredQuantity(BaseModel):
+    """Tire quantities explicitly stated for a staggered-size lookup in the current turn."""
+
+    ord_qty: int | None = Field(
+        default=None,
+        description="One explicitly stated quantity that applies to both front and rear tire sizes.",
+    )
+    ord_qty_front: int | None = Field(
+        default=None,
+        description="Quantity explicitly stated for the front tire size.",
+    )
+    ord_qty_rear: int | None = Field(
+        default=None,
+        description="Quantity explicitly stated for the rear tire size.",
+    )
+
+
 class RouteDecision(BaseModel):
     guard_id: GuardId = Field(
         default=GuardId.NONE,
@@ -110,11 +127,11 @@ class RouteDecision(BaseModel):
             "preOrder/order confirmation. Do not set this for questions about why an order attempt failed."
         ),
     )
-    quantity_explicitly_provided: bool = Field(
-        default=False,
+    explicit_staggered_quantity: ExplicitStaggeredQuantity | None = Field(
+        default=None,
         description=(
-            "True only when the user explicitly supplied a tire quantity in the current message or UI action. "
-            "Front/rear axle labels and the presence of two tire sizes do not imply a quantity."
+            "Quantities explicitly supplied in the current message or UI action for a staggered front/rear lookup. "
+            "Leave empty when the user did not state a quantity; axle labels and two sizes do not imply quantities."
         ),
     )
     needs_selection_card: bool = Field(
