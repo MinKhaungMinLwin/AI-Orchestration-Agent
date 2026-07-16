@@ -67,8 +67,12 @@ Fill brand_context whenever the current user turn mentions tire brands.
 - desired_brand: a brand the user wants to buy, search, or receive recommendations for.
 - excluded_brand: a brand the user wants to exclude.
 - unsupported_brand_target: fill only when an unsupported brand itself is the user's target for product search, recommendation, price, stock, or install availability.
+- switch_to_supported_alternative: true when the current turn abandons the previous unsupported brand and asks to
+  continue with any supported alternative, even when no replacement brand is named.
 
 Use guard_id="unsupported_brand" only when unsupported_brand_target is filled. Do not use unsupported_brand when the unsupported brand is only installed_brand and the user is asking to switch to another brand or get alternatives. Supported brands are never unsupported_brand.
+When switch_to_supported_alternative is true, ignore an unsupported target carried only by conversation history,
+use guard_id="none", and route to DISCOVERY for a new supported-brand recommendation.
 
 ## 2. domain — guard가 none일 때 이번 턴을 처리할 주 영역
 - DISCOVERY: 타이어 추천, 상품 검색, 차량-타이어 호환, 내 차량 조회, 이벤트/혜택 상품 탐색

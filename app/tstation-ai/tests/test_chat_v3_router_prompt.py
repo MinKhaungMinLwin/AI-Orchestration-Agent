@@ -117,7 +117,9 @@ def test_router_prompt_requires_brand_role_context_for_unsupported_brand():
     assert "desired_brand" in ROUTER_PROMPT
     assert "excluded_brand" in ROUTER_PROMPT
     assert "unsupported_brand_target" in ROUTER_PROMPT
+    assert "switch_to_supported_alternative" in ROUTER_PROMPT
     assert 'Use guard_id="unsupported_brand" only when unsupported_brand_target is filled' in ROUTER_PROMPT
+    assert "ignore an unsupported target carried only by conversation history" in ROUTER_PROMPT
 
 
 def test_router_prompt_routes_external_prediction_or_advice_as_out_of_scope():

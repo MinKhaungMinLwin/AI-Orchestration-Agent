@@ -121,6 +121,18 @@ def track_guard_repeat(guard_id: str, slots: ConversationSlots) -> ConversationS
     return slots.model_copy(update={"last_guard_id": guard_id, "guard_repeat_count": repeat_count})
 
 
+def reset_for_supported_brand_switch(slots: ConversationSlots) -> ConversationSlots:
+    """Clear stale product and guard state while preserving vehicle fitment context."""
+    reset_fields = {
+        "tire_model",
+        "pending_product_name",
+        "last_guard_id",
+        "guard_repeat_count",
+        *ConversationSlots.DEPENDENT_RESETS["tire_model"],
+    }
+    return slots.model_copy(update={field: None for field in reset_fields})
+
+
 def is_staggered_vehicle(slots: ConversationSlots) -> bool:
     front = str(slots.tire_size_front or "").strip()
     rear = str(slots.tire_size_rear or "").strip()

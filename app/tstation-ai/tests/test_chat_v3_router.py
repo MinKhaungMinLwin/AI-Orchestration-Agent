@@ -48,6 +48,7 @@ for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
 from schemas.tstation.chat import TStationChatRequest  # noqa: E402
+from schemas.tstation.slots import ConversationSlots  # noqa: E402
 from services.tstation.chat_v3.router.guards import get_guard  # noqa: E402
 from services.tstation.chat_v3.router.route import (  # noqa: E402
     _apply_delivery_policy_guard,
@@ -59,6 +60,7 @@ from services.tstation.chat_v3.router.route import (  # noqa: E402
     _move_static_faq_guard_to_intent,
 )
 from services.tstation.chat_v3.router.schemas import BrandContext, Domain, GuardId, RouteDecision  # noqa: E402
+from services.tstation.chat_v3.slots.derive import reset_for_supported_brand_switch  # noqa: E402
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 
 
@@ -244,6 +246,69 @@ def test_unsupported_brand_guard_stays_when_unsupported_brand_is_target() -> Non
     result = _clear_non_target_unsupported_brand_guard(decision)
 
     assert result.guard_id == GuardId.UNSUPPORTED_BRAND
+
+
+def test_unsupported_brand_guard_clears_when_current_brand_context_is_empty() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.UNSUPPORTED_BRAND,
+        domain=Domain.DISCOVERY,
+        intents=["tire_recommend"],
+        brand_context=BrandContext(),
+        needs_selection_card=False,
+    )
+
+    result = _clear_non_target_unsupported_brand_guard(decision)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.DISCOVERY
+    assert result.needs_selection_card is True
+
+
+def test_supported_alternative_switch_overrides_unsupported_target_from_history() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.UNSUPPORTED_BRAND,
+        domain=Domain.DISCOVERY,
+        intents=["tire_recommend"],
+        brand_context=BrandContext(
+            unsupported_brand_target="Kumho",
+            switch_to_supported_alternative=True,
+        ),
+        needs_selection_card=False,
+    )
+
+    result = _clear_non_target_unsupported_brand_guard(decision)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.DISCOVERY
+    assert result.needs_selection_card is True
+
+
+def test_supported_brand_switch_resets_product_and_guard_state_but_preserves_fitment() -> None:
+    slots = ConversationSlots(
+        tire_size="245/45R18",
+        car_model="Grandeur IG",
+        region="Gangnam",
+        ord_qty=4,
+        tire_model="Unsupported Model",
+        goods_no="GOLD",
+        shop_id="SHOP1",
+        requested_cal_day="20260717",
+        last_guard_id="unsupported_brand",
+        guard_repeat_count=1,
+    )
+
+    result = reset_for_supported_brand_switch(slots)
+
+    assert result.tire_size == "245/45R18"
+    assert result.car_model == "Grandeur IG"
+    assert result.region == "Gangnam"
+    assert result.ord_qty == 4
+    assert result.tire_model is None
+    assert result.goods_no is None
+    assert result.shop_id is None
+    assert result.requested_cal_day is None
+    assert result.last_guard_id is None
+    assert result.guard_repeat_count is None
 
 
 def test_out_of_scope_guard_does_not_offer_qna_handoff() -> None:
