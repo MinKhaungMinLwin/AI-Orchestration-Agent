@@ -169,4 +169,7 @@ def test_router_prompt_extracts_direct_staggered_tire_sizes_into_separate_slots(
     assert 'slots_patch.pending_intent="stock"' in ROUTER_PROMPT
     assert "quantity_explicitly_provided=true" in ROUTER_PROMPT
     assert "not imply two tires" in ROUTER_PROMPT
-    assert "leave slots_patch.ord_qty empty" in ROUTER_PROMPT
+    assert "slots_patch.ord_qty_front" in ROUTER_PROMPT
+    assert "slots_patch.ord_qty_rear" in ROUTER_PROMPT
+    assert 'goal_type="store_with_stock"' in ROUTER_PROMPT
+    assert "quantity-only follow-up" in ROUTER_PROMPT

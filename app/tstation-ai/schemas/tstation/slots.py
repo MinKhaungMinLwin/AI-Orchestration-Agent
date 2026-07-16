@@ -161,6 +161,8 @@ class ConversationSlots(BaseModel):
     tire_model: Optional[str] = None     # e.g. "벤투스 S2"
     goods_no: Optional[str] = None       # e.g. "G000000314254"
     ord_qty: Optional[int] = None        # e.g. 4
+    ord_qty_front: Optional[int] = None  # quantity for tire_size_front
+    ord_qty_rear: Optional[int] = None   # quantity for tire_size_rear
     shop_id: Optional[str] = None        # store code
     shop_name: Optional[str] = None      # e.g. "한남점"
     user_xpos: Optional[float] = None    # browser/user longitude for nearby store search
@@ -289,6 +291,7 @@ class ConversationSlots(BaseModel):
             "coupon_facts",
         ],
         "tire_size_front": [
+            "ord_qty_front",
             "goods_no",
             "shop_id",
             "shop_name",
@@ -304,6 +307,7 @@ class ConversationSlots(BaseModel):
             "coupon_facts",
         ],
         "tire_size_rear": [
+            "ord_qty_rear",
             "goods_no",
             "shop_id",
             "shop_name",
@@ -349,6 +353,24 @@ class ConversationSlots(BaseModel):
             "price_facts",
             "coupon_facts",
         ],
+        "ord_qty_front": [
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+        ],
+        "ord_qty_rear": [
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+        ],
         "shop_name": [
             "shop_id",
             "requested_cal_day",
@@ -371,6 +393,8 @@ class ConversationSlots(BaseModel):
             "tire_size",
             "tire_size_front",
             "tire_size_rear",
+            "ord_qty_front",
+            "ord_qty_rear",
             "goods_no",
             "payment_amount",
             "price_basis",
@@ -385,6 +409,8 @@ class ConversationSlots(BaseModel):
             "tire_size",
             "tire_size_front",
             "tire_size_rear",
+            "ord_qty_front",
+            "ord_qty_rear",
             "goods_no",
             "payment_amount",
             "price_basis",

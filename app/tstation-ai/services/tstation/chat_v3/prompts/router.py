@@ -202,7 +202,13 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   slots_patch.pending_intent="stock".
 - Set quantity_explicitly_provided=true only when the current user message or UI action explicitly supplies
   a numeric tire quantity. Front/rear axle labels, two different sizes, or a request to check both products do
-  not imply two tires. When quantity_explicitly_provided=false, leave slots_patch.ord_qty empty.
+  not imply two tires. When one quantity applies to both sizes, set slots_patch.ord_qty. When the user supplies
+  different quantities for the front and rear sizes, set slots_patch.ord_qty_front and slots_patch.ord_qty_rear
+  respectively and leave slots_patch.ord_qty empty. When quantity_explicitly_provided=false, leave all quantity
+  fields empty.
+- When CONVERSATION SLOTS already have goal_type="store_with_stock", pending_intent="stock", and different
+  front/rear sizes, a quantity-only follow-up continues intent "staggered_install_availability". It is not a
+  simultaneous purchase request and does not require the user to select one size.
 
 ## 4. slots_patch — 이번 발화에서 새로 알게 된 값만 채우세요
 - 이전 턴에서 이미 알고 있던 값, 추측한 값은 넣지 마세요
