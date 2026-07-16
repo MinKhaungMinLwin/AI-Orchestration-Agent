@@ -396,6 +396,12 @@ def test_generic_jeom_suffix_nouns_do_not_false_positive(store_source) -> None:
     assert verify_draft(draft, store_source) == []
 
 
+def test_service_text_musangjeomgeom_does_not_false_positive(store_source) -> None:
+    """"무상점검" in a store's service list must not be read as store name "무상점"."""
+    draft = "서비스: 휠얼라이먼트, 무상점검"
+    assert verify_draft(draft, store_source) == []
+
+
 def test_store_name_check_skipped_when_source_empty() -> None:
     source = [("get_faq_tool", {"data": {"faqs": []}})]
     assert verify_draft("티스테이션 아무말점에서 확인해 보세요.", source) == []

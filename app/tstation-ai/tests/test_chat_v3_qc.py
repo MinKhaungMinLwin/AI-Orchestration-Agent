@@ -48,48 +48,80 @@ for key, value in _TEST_ENV_DEFAULTS.items():
 from services.tstation.chat_v3 import qc  # noqa: E402
 
 
-def test_qc_failure_keeps_original_answer_and_suppresses_correction(monkeypatch) -> None:
+class _UnusedLlm:
+    """Deterministic-layer tests must never reach the LLM fallback."""
+
+    def with_structured_output(self, *args, **kwargs):
+        raise AssertionError("LLM QC must not be called when tool outputs are parseable")
+
+
+# Non-JSON tool output: unparseable by qc_verifier → exercises the LLM fallback branch.
+_UNPARSEABLE_TOOL_CALLS = [{"name": "get_store_install_availability_tool", "args": {}, "output": "plain text result"}]
+
+
+def test_qc_llm_fallback_failure_keeps_original_answer(monkeypatch) -> None:
     class FakeLlm:
         def with_structured_output(self, *args, **kwargs):
             return self
 
         async def ainvoke(self, *args, **kwargs):
-            return qc.QCVerdict(passed=False, corrected_response="틀리게 고친 답변")
+            return qc.QCVerdict(passed=False, reason="가격 불일치")
 
     monkeypatch.setattr(qc.settings, "AI_QC_ENABLED", True)
     monkeypatch.setattr(qc, "get_router_llm", lambda: FakeLlm())
 
-    result = asyncio.run(
-        qc.verify_answer(
-            "원래 tool 기반 답변",
-            [{"name": "get_store_install_availability_tool", "args": {}, "output": '{"status":"success"}'}],
-        )
-    )
+    result = asyncio.run(qc.verify_answer("원래 tool 기반 답변", _UNPARSEABLE_TOOL_CALLS))
 
     assert result.answer == "원래 tool 기반 답변"
     assert result.failed is True
-    assert result.corrected_response == "틀리게 고친 답변"
-    assert result.reason == "qc_failed_correction_suppressed"
+    assert result.corrected_response == ""
+    assert result.reason == "가격 불일치"
 
 
-def test_qc_pass_keeps_original_answer(monkeypatch) -> None:
+def test_qc_llm_fallback_pass_keeps_original_answer(monkeypatch) -> None:
     class FakeLlm:
         def with_structured_output(self, *args, **kwargs):
             return self
 
         async def ainvoke(self, *args, **kwargs):
-            return qc.QCVerdict(passed=True, corrected_response="")
+            return qc.QCVerdict(passed=True)
 
     monkeypatch.setattr(qc.settings, "AI_QC_ENABLED", True)
     monkeypatch.setattr(qc, "get_router_llm", lambda: FakeLlm())
 
-    result = asyncio.run(
-        qc.verify_answer(
-            "원래 답변",
-            [{"name": "get_products_recommendations_tool", "args": {}, "output": '{"status":"success"}'}],
-        )
-    )
+    result = asyncio.run(qc.verify_answer("원래 답변", _UNPARSEABLE_TOOL_CALLS))
 
     assert result.answer == "원래 답변"
     assert result.failed is False
     assert result.reason == "qc_passed"
+
+
+def test_qc_deterministic_pass_skips_llm(monkeypatch) -> None:
+    monkeypatch.setattr(qc.settings, "AI_QC_ENABLED", True)
+    monkeypatch.setattr(qc, "get_router_llm", lambda: _UnusedLlm())
+
+    result = asyncio.run(
+        qc.verify_answer(
+            "벤투스 S2 가격은 150,000원입니다.",
+            [{"name": "get_final_price_tool", "args": {}, "output": '{"data": {"sale_prc": 150000}}'}],
+        )
+    )
+
+    assert result.failed is False
+    assert result.reason == "qc_det_passed"
+
+
+def test_qc_deterministic_mismatch_flags_without_llm(monkeypatch) -> None:
+    monkeypatch.setattr(qc.settings, "AI_QC_ENABLED", True)
+    monkeypatch.setattr(qc, "get_router_llm", lambda: _UnusedLlm())
+
+    result = asyncio.run(
+        qc.verify_answer(
+            "벤투스 S2 가격은 999,000원입니다.",
+            [{"name": "get_final_price_tool", "args": {}, "output": '{"data": {"sale_prc": 150000}}'}],
+        )
+    )
+
+    assert result.answer == "벤투스 S2 가격은 999,000원입니다."
+    assert result.failed is True
+    assert result.reason.startswith("qc_det_failed:price=")

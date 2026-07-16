@@ -64,6 +64,8 @@ _STORE_NAME_PATTERN = re.compile(r"(?:티스테이션\s*)?([가-힣a-zA-Z0-9]{2,
 # specific named location, so they must never be treated as a store-name claim.
 _GENERIC_STORE_SUFFIX_NOUNS = frozenset({
     "장착점", "장단점", "판매점", "취급점", "대리점", "직영점", "가맹점", "출발점", "도착점",
+    # "무상점검" (서비스 항목 텍스트) 의 부분 매치 — 매장명 주장 아님.
+    "무상점",
 })
 
 # ISO date (2026-07-15) and Korean month/day (7월 15일, optional year).
