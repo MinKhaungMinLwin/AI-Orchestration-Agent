@@ -17,8 +17,6 @@ class SlotsPatch(BaseModel):
     region: str | None = Field(default=None, description="지역명, 예: 강남구, 수원")
     shop_name: str | None = Field(default=None, description="언급된 매장 이름")
     ord_qty: int | None = Field(default=None, description="구매/장착 수량")
-    ord_qty_front: int | None = Field(default=None, description="전륜 구매/장착 수량")
-    ord_qty_rear: int | None = Field(default=None, description="후륜 구매/장착 수량")
     requested_cal_day: str | None = Field(default=None, description="희망 예약 날짜 YYYYMMDD")
     rsv_hour: str | None = Field(default=None, description="희망 예약 시간 HH")
     goal_type: str | None = Field(

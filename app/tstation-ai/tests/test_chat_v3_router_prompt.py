@@ -171,5 +171,12 @@ def test_router_prompt_extracts_direct_staggered_tire_sizes_into_separate_slots(
     assert "not imply two tires" in ROUTER_PROMPT
     assert "explicit_staggered_quantity.ord_qty_front" in ROUTER_PROMPT
     assert "explicit_staggered_quantity.ord_qty_rear" in ROUTER_PROMPT
+    assert "only output location" in ROUTER_PROMPT
     assert 'goal_type="store_with_stock"' in ROUTER_PROMPT
     assert "quantity-only follow-up" in ROUTER_PROMPT
+
+
+def test_router_prompt_does_not_treat_system_time_as_a_requested_date() -> None:
+    normalized_prompt = " ".join(ROUTER_PROMPT.split())
+    assert '"오늘 날짜/시간: Current Time" line is system reference context' in ROUTER_PROMPT
+    assert "Never copy that system date into slots_patch.requested_cal_day" in normalized_prompt
