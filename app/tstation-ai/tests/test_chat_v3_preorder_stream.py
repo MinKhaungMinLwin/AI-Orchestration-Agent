@@ -56,7 +56,11 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/2"
 
 from api.tstation import chat_message as chat_message_module  # noqa: E402
 from services.tstation.chat_v3 import service  # noqa: E402
-from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
+from services.tstation.chat_v3.router.schemas import (  # noqa: E402
+    Domain,
+    ExplicitStaggeredQuantity,
+    RouteDecision,
+)
 from services.tstation.chat_v3.slots.derive import (  # noqa: E402
     apply_fe_slots,
     apply_text_vehicle_selection,
@@ -818,8 +822,7 @@ def test_staggered_quantity_followup_continues_pending_availability_lookup() -> 
     decision = RouteDecision(
         domain=Domain.TRANSACTION,
         intents=["quantity_confirmation"],
-        quantity_explicitly_provided=True,
-        slots_patch=SlotsPatch(ord_qty_front=2, ord_qty_rear=1),
+        explicit_staggered_quantity=ExplicitStaggeredQuantity(ord_qty_front=2, ord_qty_rear=2),
     )
     existing = ConversationSlots(
         tire_size_front="245/40R19",
@@ -828,11 +831,12 @@ def test_staggered_quantity_followup_continues_pending_availability_lookup() -> 
         pending_intent="stock",
     )
 
-    slots = apply_patch(existing, decision.slots_patch)
+    patched = apply_patch(existing, decision.slots_patch)
+    slots = service._apply_explicit_staggered_quantity(decision, existing, patched)
 
     assert slots.ord_qty is None
     assert slots.ord_qty_front == 2
-    assert slots.ord_qty_rear == 1
+    assert slots.ord_qty_rear == 2
     assert service._is_staggered_install_availability_lookup(decision, slots) is True
 
 
@@ -851,7 +855,7 @@ def test_staggered_purchase_request_overrides_pending_availability_lookup() -> N
     assert service._is_staggered_install_availability_lookup(decision, slots) is False
 
 
-def test_direct_staggered_availability_discards_quantity_without_explicit_evidence() -> None:
+def test_staggered_availability_uses_only_typed_explicit_quantity() -> None:
     inferred = RouteDecision(
         domain=Domain.TRANSACTION,
         intents=["staggered_install_availability"],
@@ -859,13 +863,13 @@ def test_direct_staggered_availability_discards_quantity_without_explicit_eviden
     )
     patched = apply_patch(ConversationSlots(), inferred.slots_patch)
 
-    assert service._discard_inferred_staggered_quantity(inferred, ConversationSlots(), patched).ord_qty is None
+    assert service._apply_explicit_staggered_quantity(inferred, ConversationSlots(), patched).ord_qty is None
 
     inferred_per_axle = inferred.model_copy(
         update={"slots_patch": SlotsPatch(tire_size_front="245/40R19", tire_size_rear="275/35R19", ord_qty_front=2, ord_qty_rear=1)}
     )
     patched_per_axle = apply_patch(ConversationSlots(), inferred_per_axle.slots_patch)
-    discarded = service._discard_inferred_staggered_quantity(
+    discarded = service._apply_explicit_staggered_quantity(
         inferred_per_axle,
         ConversationSlots(),
         patched_per_axle,
@@ -873,8 +877,11 @@ def test_direct_staggered_availability_discards_quantity_without_explicit_eviden
     assert discarded.ord_qty_front is None
     assert discarded.ord_qty_rear is None
 
-    explicit = inferred.model_copy(update={"quantity_explicitly_provided": True})
-    assert service._discard_inferred_staggered_quantity(explicit, ConversationSlots(), patched).ord_qty == 2
+    explicit = inferred.model_copy(
+        update={"explicit_staggered_quantity": ExplicitStaggeredQuantity(ord_qty=2)}
+    )
+    confirmed = service._apply_explicit_staggered_quantity(explicit, ConversationSlots(), patched)
+    assert confirmed.ord_qty == 2
 
 
 def test_direct_staggered_availability_enters_tool_loop(monkeypatch: pytest.MonkeyPatch) -> None:

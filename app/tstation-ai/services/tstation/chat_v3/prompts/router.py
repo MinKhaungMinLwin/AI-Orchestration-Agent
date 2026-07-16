@@ -200,12 +200,12 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   availability for both sizes, include intent "staggered_install_availability". This is a read-only lookup,
   not a simultaneous purchase request. Set slots_patch.goal_type="store_with_stock" and
   slots_patch.pending_intent="stock".
-- Set quantity_explicitly_provided=true only when the current user message or UI action explicitly supplies
-  a numeric tire quantity. Front/rear axle labels, two different sizes, or a request to check both products do
-  not imply two tires. When one quantity applies to both sizes, set slots_patch.ord_qty. When the user supplies
-  different quantities for the front and rear sizes, set slots_patch.ord_qty_front and slots_patch.ord_qty_rear
-  respectively and leave slots_patch.ord_qty empty. When quantity_explicitly_provided=false, leave all quantity
-  fields empty.
+- Fill explicit_staggered_quantity only when the current user message or UI action explicitly supplies a numeric
+  tire quantity for a staggered front/rear lookup. Front/rear axle labels, two different sizes, or a request to
+  check both products do not imply two tires. When one quantity applies to both sizes, set
+  explicit_staggered_quantity.ord_qty. When the user supplies quantities for the front and rear sizes separately,
+  set explicit_staggered_quantity.ord_qty_front and explicit_staggered_quantity.ord_qty_rear. Leave the entire
+  object empty when no quantity was explicitly stated.
 - When CONVERSATION SLOTS already have goal_type="store_with_stock", pending_intent="stock", and different
   front/rear sizes, a quantity-only follow-up continues intent "staggered_install_availability". It is not a
   simultaneous purchase request and does not require the user to select one size.
