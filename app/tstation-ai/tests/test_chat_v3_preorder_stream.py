@@ -1060,6 +1060,9 @@ async def _assert_direct_staggered_availability_enters_tool_loop(monkeypatch: py
     async def fake_chips(*args, **kwargs):
         return []
 
+    async def forbidden_rich_event(*args, **kwargs):
+        raise AssertionError("read-only combined availability must not render datepick or another rich template")
+
     monkeypatch.setattr(service, "route_request", fake_route_request)
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
     monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
@@ -1068,7 +1071,7 @@ async def _assert_direct_staggered_availability_enters_tool_loop(monkeypatch: py
     monkeypatch.setattr(service, "save_slots", fake_save_slots)
     monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
-    monkeypatch.setattr(service.templates, "build_rich_data_event", fake_noop)
+    monkeypatch.setattr(service.templates, "build_rich_data_event", forbidden_rich_event)
     monkeypatch.setattr(service.composer, "suggest_quick_replies", fake_chips)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
 
@@ -1079,10 +1082,14 @@ async def _assert_direct_staggered_availability_enters_tool_loop(monkeypatch: py
         session_id="staggered-availability-test",
     )
 
-    async for _ in service._run_turn(request, {}):
-        pass
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
 
     assert executor_started is True
+    assert [event.get("template") for event in events if event.get("type") == "data"] == ["quickReply"]
     assert saved_slots[0].tire_size is None
     assert saved_slots[0].tire_size_front == "245/40R19"
     assert saved_slots[0].tire_size_rear == "275/35R19"

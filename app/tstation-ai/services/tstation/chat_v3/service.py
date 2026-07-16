@@ -1107,7 +1107,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     preorder_event = templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
-        if preorder_event or current_events_event
+        if preorder_event or current_events_event or staggered_install_availability_lookup
         else await templates.build_rich_data_event(
             answer,
             executor.tool_calls,
