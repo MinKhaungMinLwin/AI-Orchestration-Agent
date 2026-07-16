@@ -67,6 +67,23 @@ def set_trace_name(name: str | None) -> None:
     _trace_name_var.set(name)
 
 
+def _redact_system_entries(value: Any, placeholder: str) -> Any:
+    from langchain_core.messages import BaseMessage, SystemMessage
+
+    if isinstance(value, BaseMessage):
+        return SystemMessage(content=placeholder) if value.type == "system" else value
+    if isinstance(value, dict):
+        if str(value.get("role") or value.get("type") or "").lower() == "system":
+            return {**value, "content": placeholder}
+        return {key: _redact_system_entries(val, placeholder) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        if len(value) == 2 and isinstance(value[0], str) and value[0].lower() == "system":
+            return (value[0], placeholder) if isinstance(value, tuple) else [value[0], placeholder]
+        redacted_items = [_redact_system_entries(item, placeholder) for item in value]
+        return tuple(redacted_items) if isinstance(value, tuple) else redacted_items
+    return value
+
+
 class FilteredCallbackHandler(CallbackHandler):
     """LangChain callback handler that:
     - Replaces system prompts with ``[prompt:<name>]`` to keep generation spans small.
@@ -88,8 +105,9 @@ class FilteredCallbackHandler(CallbackHandler):
         parent_run_id: Any = None,
         **kwargs: Any,
     ) -> Any:
+        filtered_inputs = _redact_system_entries(inputs, f"[prompt:{self._prompt_name}]")
         result = super().on_chain_start(
-            serialized, inputs, run_id=run_id, parent_run_id=parent_run_id, **kwargs
+            serialized, filtered_inputs, run_id=run_id, parent_run_id=parent_run_id, **kwargs
         )
         # For the root chain of each callback handler (parent_run_id is None from
         # LangChain's perspective), override the trace name with the user message.
@@ -103,6 +121,22 @@ class FilteredCallbackHandler(CallbackHandler):
                     except Exception:
                         pass
         return result
+
+    def on_chain_end(
+        self,
+        outputs: dict[str, Any],
+        *,
+        run_id: Any,
+        parent_run_id: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        placeholder = f"[prompt:{self._prompt_name}]"
+        filtered_outputs = _redact_system_entries(outputs, placeholder)
+        if kwargs.get("inputs") is not None:
+            kwargs["inputs"] = _redact_system_entries(kwargs["inputs"], placeholder)
+        return super().on_chain_end(
+            filtered_outputs, run_id=run_id, parent_run_id=parent_run_id, **kwargs
+        )
 
     def on_chat_model_start(
         self,
