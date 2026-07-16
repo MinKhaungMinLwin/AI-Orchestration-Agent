@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 
 class SlotsPatch(BaseModel):
     tire_size: str | None = Field(default=None, description="타이어 사이즈, 예: 245/45R18")
+    tire_size_front: str | None = Field(default=None, description="전륜 타이어 사이즈")
+    tire_size_rear: str | None = Field(default=None, description="후륜 타이어 사이즈")
     tire_model: str | None = Field(default=None, description="타이어 모델/패턴명, 예: 벤투스 S2 AS")
     car_model: str | None = Field(default=None, description="차종명, 예: 그랜저 IG")
     car_no: str | None = Field(default=None, description="차량 번호판, 예: 12가3456")

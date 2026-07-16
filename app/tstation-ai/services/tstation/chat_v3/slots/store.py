@@ -55,23 +55,26 @@ async def load_slots(session_id: str) -> ConversationSlots:
         return ConversationSlots()
 
 
-def _normalize_patch_tire_size(values: dict) -> dict:
-    """tire_size only ever stores a normalized size (e.g. '255/35R19') — never
-    free text such as a combined product-name + size string from the router LLM."""
-    raw = values.get("tire_size")
-    if raw in (None, ""):
-        return values
-    normalized = normalize_tire_size(str(raw))
-    if normalized:
-        return {**values, "tire_size": normalized}
-    logger.info("[CHAT_V3] dropped unnormalizable tire_size from router patch: %r", raw)
-    return {k: v for k, v in values.items() if k != "tire_size"}
+def _normalize_patch_tire_sizes(values: dict) -> dict:
+    """Keep router-extracted tire sizes canonical and drop invalid values."""
+    normalized_values = dict(values)
+    for field in ("tire_size", "tire_size_front", "tire_size_rear"):
+        raw = normalized_values.get(field)
+        if raw in (None, ""):
+            continue
+        normalized = normalize_tire_size(str(raw))
+        if normalized:
+            normalized_values[field] = normalized
+            continue
+        logger.info("[CHAT_V3] dropped unnormalizable %s from router patch: %r", field, raw)
+        normalized_values.pop(field, None)
+    return normalized_values
 
 
 def apply_patch(existing: ConversationSlots, patch: SlotsPatch | None) -> ConversationSlots:
     if patch is None:
         return existing
-    values = _normalize_patch_tire_size(normalize_product_slot_values(patch.non_empty()))
+    values = _normalize_patch_tire_sizes(normalize_product_slot_values(patch.non_empty()))
     while values:
         try:
             merged = existing.merge(ConversationSlots.model_validate(values))

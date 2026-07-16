@@ -158,3 +158,9 @@ def test_router_prompt_requires_explicit_cart_request():
     assert "명시적으로 장바구니 담기를 요청한 경우" in ROUTER_PROMPT
     assert "짧은 동의 발화는 장바구니 담기 요청이" in ROUTER_PROMPT
     assert "짧은 승인/동의 발화만으로 장바구니 담기를 실행 의도로 분류하지 마세요" in ROUTER_PROMPT
+
+
+def test_router_prompt_extracts_direct_staggered_tire_sizes_into_separate_slots() -> None:
+    assert "slots_patch.tire_size_front" in ROUTER_PROMPT
+    assert "slots_patch.tire_size_rear" in ROUTER_PROMPT
+    assert "slots_patch.tire_size 를 채우지 마세요" in ROUTER_PROMPT

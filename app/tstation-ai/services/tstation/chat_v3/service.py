@@ -70,6 +70,8 @@ _ADD_TO_CART_INTENT = "add_to_cart"
 _PLACE_ORDER_INTENT = "place_order"
 _INSTALLATION_SCHEDULE_CHANGE_INTENT = "installation_schedule_change"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
+_PRESENT_ORDER_PREVIEW_TOOL = "present_order_preview_tool"
+_QUICK_ORDER_TOOL = "quick_order_tool"
 _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
     "staggered_simultaneous_purchase_inquiry",
@@ -364,7 +366,39 @@ def _cart_write_guard(decision: RouteDecision | None, request: TStationChatReque
     return guard
 
 
-_QTY_CAPPED_TOOLS = {_SAVE_TO_CART_TOOL, "quick_order_tool"}
+_UNSELECTED_STAGGERED_ORDER_TOOLS = {
+    _PRESENT_ORDER_PREVIEW_TOOL,
+    _QUICK_ORDER_TOOL,
+    _SAVE_TO_CART_TOOL,
+}
+
+
+def _transaction_tool_guard(
+    decision: RouteDecision | None,
+    request: TStationChatRequest,
+    slots: ConversationSlots,
+) -> Callable[[dict], str | None]:
+    """Enforce transaction boundaries that must not depend on model compliance."""
+    cart_guard = _cart_write_guard(decision, request)
+    front_size = str(slots.tire_size_front or "").strip()
+    rear_size = str(slots.tire_size_rear or "").strip()
+    selected_size = str(slots.tire_size or "").strip()
+    has_selected_size = selected_size in {front_size, rear_size}
+    must_select_size = bool(front_size and rear_size and front_size != rear_size and not has_selected_size)
+
+    def guard(call: dict) -> str | None:
+        name = str(call.get("name") or "")
+        if must_select_size and name in _UNSELECTED_STAGGERED_ORDER_TOOLS:
+            return (
+                "The front and rear tire sizes differ, but no single size has been selected for this order. "
+                "Do not create an order, cart item, or pre-order preview until the user selects one size."
+            )
+        return cart_guard(call)
+
+    return guard
+
+
+_QTY_CAPPED_TOOLS = {_SAVE_TO_CART_TOOL, _QUICK_ORDER_TOOL}
 
 
 def _staggered_qty_tool_normalizer(slots: ConversationSlots) -> Callable[[dict], dict]:
@@ -928,7 +962,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             usage_tracker=usage_tracker,
         ),
         tool_call_normalizer=_staggered_qty_tool_normalizer(slots),
-        tool_call_guard=_cart_write_guard(decision, request),
+        tool_call_guard=_transaction_tool_guard(decision, request, slots),
         stop_after_tool=stop_for_staggered_vehicle,
     )
     yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")

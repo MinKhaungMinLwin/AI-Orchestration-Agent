@@ -187,6 +187,9 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
 
 ## 4. slots_patch — 이번 발화에서 새로 알게 된 값만 채우세요
 - 이전 턴에서 이미 알고 있던 값, 추측한 값은 넣지 마세요
+- 사용자가 이번 발화에서 전륜과 후륜의 서로 다른 타이어 규격을 직접 지정하면
+  slots_patch.tire_size_front 와 slots_patch.tire_size_rear 를 각각 채우세요. 사용자가 한 규격을
+  진행할 대상으로 선택하기 전에는 slots_patch.tire_size 를 채우지 마세요.
 - 날짜는 YYYYMMDD, 시간은 HH (24시간)로 정규화
 - goal_type/pending_intent는 설명에 명시된 값만 사용
 - 사용자가 원하는 날짜를 조금이라도 언급하면 **항상** requested_cal_day 를 채우세요. "오늘", "내일",
