@@ -15,6 +15,7 @@ from services.tstation.common.tstation_be_client import (
 )
 from services.tstation.policies.domestic_region_gate import decide_domestic_search_area
 from services.tstation.policies.reservation_template_policy import reservation_sale_min_install_date
+from services.tstation.agents.c_transaction_agent.install_availability import combine_install_availability
 from langchain_core.tools import tool
 from common.brand_mapping import normalize_brand_name
 
@@ -639,12 +640,68 @@ def get_store_inventory_tool(goods_list: List[Dict[str, Any]], shop_id_list: Lis
         return _error_response(None, str(e), "Failed to get store inventory")
 
 
+def _normalize_availability_goods_items(
+    goods_no: str | None,
+    ord_qty: int,
+    goods_items: List[Dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Validate the public tool boundary for single- or multi-product input."""
+    if goods_items is None:
+        try:
+            safe_qty = max(1, int(ord_qty or 1))
+        except (TypeError, ValueError):
+            safe_qty = 1
+        return [{"goods_no": str(goods_no).strip() if goods_no else None, "ord_qty": safe_qty}], None
+    if goods_no or not goods_items:
+        return [], "provide either goods_no or a non-empty goods_items list"
+
+    normalized = []
+    for item in goods_items:
+        item_goods_no = str(item.get("goods_no") or "").strip() if isinstance(item, dict) else ""
+        if not item_goods_no:
+            return [], "each goods_items entry requires goods_no"
+        try:
+            item_qty = max(1, int(item.get("ord_qty") or 1))
+        except (TypeError, ValueError):
+            return [], f"invalid ord_qty for goods_no={item_goods_no}"
+        normalized.append({"goods_no": item_goods_no, "ord_qty": item_qty})
+    return normalized, None
+
+
+def _get_store_install_availability_result(
+    *,
+    candidates: list[str],
+    goods_no: str | None,
+    ord_qty: int,
+    requested_cal_day: str | None,
+) -> dict:
+    """Call the unified BE availability endpoint for one product."""
+    body = StoreInstallAvailabilityRequest(shop_ids=candidates, goods_no=goods_no, qty=ord_qty)
+    response = get_store_install_availability(client=get_client(), body=body)
+    if response.parsed is None:
+        return _error_response(
+            response.status_code,
+            f"HTTP {response.status_code}",
+            response.content.decode(errors="ignore") or "Failed to get store install availability",
+        )
+    data = _to_dict(response.parsed)
+    data["inventory"] = _availability_inventory_payload(data)
+    data["logistics"] = {"has_logistics_stock": _availability_has_logistics(data)}
+    data["schedule"] = _availability_schedule_payload(
+        data,
+        candidate_shop_ids=candidates,
+        requested_cal_day=requested_cal_day,
+    )
+    return _success_response(response.status_code, data)
+
+
 @tool
 def get_store_install_availability_tool(
     shop_id_list: List[str],
     goods_no: str | None = None,
     ord_qty: int = 1,
     requested_cal_day: str | None = None,
+    goods_items: List[Dict[str, Any]] | None = None,
 ):
     """
     Unified store install availability lookup.
@@ -663,6 +720,8 @@ def get_store_install_availability_tool(
         shop_id_list (List[str]): Store IDs to check. Use IDs from store search results.
         goods_no (str | None): Product number. Pass None for a general store visit schedule.
         ord_qty (int): Quantity when goods_no is present. Default 1.
+        goods_items (List[Dict] | None): Products that must all be available, formatted as
+            [{"goods_no": "G...", "ord_qty": 2}, ...]. Do not also pass goods_no.
         requested_cal_day (str | None): YYYYMMDD date. REQUIRED whenever the user asked about a specific
             day (including "today"/"tomorrow") — pass that day here. The returned schedule is then filtered
             to that day, and an empty schedule means that day has no slots, which you must state plainly.
@@ -681,41 +740,42 @@ def get_store_install_availability_tool(
     candidates = list(dict.fromkeys(candidates))
     if not candidates:
         return _error_response(None, "invalid_input", "shop_id_list is empty")
-    try:
-        safe_qty = max(1, int(ord_qty or 1))
-    except (TypeError, ValueError):
-        safe_qty = 1
-    body = StoreInstallAvailabilityRequest(
-        shop_ids=candidates,
-        goods_no=str(goods_no).strip() if goods_no else None,
-        qty=safe_qty,
-    )
+    normalized_items, validation_error = _normalize_availability_goods_items(goods_no, ord_qty, goods_items)
+    if validation_error:
+        return _error_response(None, "invalid_input", validation_error)
     logger.debug(
         "[TOOL][get_store_install_availability_tool] Called with shop_id_list=%s goods_no=%s ord_qty=%s "
-        "requested_cal_day=%s",
+        "goods_items=%s requested_cal_day=%s",
         candidates,
         goods_no,
-        safe_qty,
+        ord_qty,
+        normalized_items if goods_items is not None else None,
         requested_cal_day,
     )
 
     try:
-        response = get_store_install_availability(client=get_client(), body=body)
-        if response.parsed is None:
-            return _error_response(
-                response.status_code,
-                f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get store install availability",
+        results = [
+            _get_store_install_availability_result(
+                candidates=candidates,
+                goods_no=item["goods_no"],
+                ord_qty=item["ord_qty"],
+                requested_cal_day=requested_cal_day,
             )
-        data = _to_dict(response.parsed)
-        data["inventory"] = _availability_inventory_payload(data)
-        data["logistics"] = {"has_logistics_stock": _availability_has_logistics(data)}
-        data["schedule"] = _availability_schedule_payload(
-            data,
-            candidate_shop_ids=candidates,
-            requested_cal_day=requested_cal_day,
+            for item in normalized_items
+        ]
+        failed = next((result for result in results if result.get("status") != "success"), None)
+        if failed is not None:
+            return failed
+        if len(results) == 1:
+            return results[0]
+        return _success_response(
+            200,
+            combine_install_availability(
+                results=results,
+                candidate_shop_ids=candidates,
+                requested_cal_day=requested_cal_day,
+            ),
         )
-        return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][get_store_install_availability_tool] Failed")
         return _error_response(None, str(e), "Failed to get store install availability")

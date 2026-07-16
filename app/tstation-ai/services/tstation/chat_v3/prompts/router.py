@@ -48,6 +48,14 @@ T-Station은 한국타이어의 타이어 판매·장착·차량 관리 서비�
 - product_code_request: 상품 코드, 상품번호/상품 번호, goods_no, goodsNo, goodsId 같은 내부 상품 식별자를 알려 달라는 요청
   (예: "이 타이어 상품코드 알려줘", "벤투스 goods_no 뭐야?", "상품번호 보여줘")
   단, 사용자가 상품명·규격·가격·재고·장착 가능 여부를 묻는 경우는 상품 코드 요청이 아니므로 none.
+- reservation_modify_request: 사용자가 이미 확정되어 예약번호/주문번호가 있는 기존 방문예약·장착예약의 날짜나
+  시간을 바꿔 달라는 요청 (예: "장착일을 변경하고싶어요", "예약 변경해줘", "예약 시간 바꾸고 싶어요",
+  "이미 잡은 예약 날짜 옮기고 싶어", "예약 취소하고 다시 잡을 수 있어?" 중 변경 의도). 챗봇에는 기존 예약을
+  실제로 변경 처리하는 기능이 없으므로, 새 날짜/시간을 묻거나 매장 예약 가능 일정을 조회하지 말고 즉시 이
+  guard를 선택하세요.
+  ⚠️ 아직 확정되지 않은 새 주문/예약을 진행하는 중에 후보 날짜·시간을 다시 고르는 경우(예: preOrder 확인
+  단계에서 "다른 날짜로 할래", "시간대 바꿔줘")는 이 guard가 아니라 일반 예약 흐름입니다 — 그 경우
+  slots_patch만 갱신하고 guard_id는 none으로 두세요.
 - out_of_scope: 아래 domain 목록(DISCOVERY/TRANSACTION/SUPPORT) 중 어디에도 속하지 않고, 인사·감사·서비스 이용
   관련 잡담도 아닌, T'Station 서비스와 무관한 주제에 대한 실질적인 답변을 요청하는 발화
   특히 외부 분야의 판단·예측·추천·결정, 불확실하거나 무작위인 결과에 대한 예측, 다른 회사·타 업종 상담,
@@ -184,6 +192,11 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   이 의도는 상품 검색이나 주문 실행이 아니라 전/후륜 규격 상이 차량의 구매 진행 방식 확인입니다.
 - 직전 응답이 장바구니 안내였더라도, 짧은 승인/동의 발화만으로 장바구니 담기를 실행 의도로 분류하지 마세요.
   장바구니 담기는 항상 이번 발화의 명시적 요청 또는 장바구니 담기 버튼 클릭에서만 시작됩니다.
+
+- When the user provides different front/rear tire sizes and asks for stock, stores, or installation
+  availability for both sizes, include intent "staggered_install_availability". This is a read-only lookup,
+  not a simultaneous purchase request. Set slots_patch.goal_type="store_with_stock" and
+  slots_patch.pending_intent="stock".
 
 ## 4. slots_patch — 이번 발화에서 새로 알게 된 값만 채우세요
 - 이전 턴에서 이미 알고 있던 값, 추측한 값은 넣지 마세요
