@@ -142,10 +142,12 @@ def is_staggered_vehicle(slots: ConversationSlots) -> bool:
 def clamp_staggered_ord_qty(slots: ConversationSlots) -> ConversationSlots:
     if not is_staggered_vehicle(slots):
         return slots
-    qty = slots.ord_qty
-    if isinstance(qty, int) and qty > STAGGERED_MAX_ORD_QTY:
-        return slots.model_copy(update={"ord_qty": STAGGERED_MAX_ORD_QTY})
-    return slots
+    updates = {
+        field: STAGGERED_MAX_ORD_QTY
+        for field in ("ord_qty", "ord_qty_front", "ord_qty_rear")
+        if isinstance(getattr(slots, field), int) and getattr(slots, field) > STAGGERED_MAX_ORD_QTY
+    }
+    return slots.model_copy(update=updates) if updates else slots
 
 
 def _clear_unconfirmed_staggered_size(slots: ConversationSlots, values: dict) -> ConversationSlots:

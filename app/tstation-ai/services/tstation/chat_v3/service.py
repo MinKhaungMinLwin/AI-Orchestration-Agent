@@ -282,8 +282,20 @@ def _is_staggered_install_availability_lookup(
     decision: RouteDecision | None,
     slots: ConversationSlots,
 ) -> bool:
-    """Identify the router's explicit read-only lookup for both staggered sizes."""
-    if decision is None or _STAGGERED_INSTALL_AVAILABILITY_INTENT not in decision.intents:
+    """Identify an active read-only lookup for both staggered sizes."""
+    purchase_turn = bool(
+        decision
+        and (
+            _PLACE_ORDER_INTENT in decision.intents
+            or _ADD_TO_CART_INTENT in decision.intents
+            or _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS.intersection(decision.intents)
+        )
+    )
+    if purchase_turn:
+        return False
+    current_turn_lookup = bool(decision and _STAGGERED_INSTALL_AVAILABILITY_INTENT in decision.intents)
+    pending_lookup = slots.goal_type == "store_with_stock" and slots.pending_intent == "stock"
+    if not current_turn_lookup and not pending_lookup:
         return False
     front_size, rear_size = _staggered_sizes(slots)
     selected_size = str(slots.tire_size or "").strip()
@@ -296,11 +308,20 @@ def _discard_inferred_staggered_quantity(
     patched: ConversationSlots,
 ) -> ConversationSlots:
     """Reject a router quantity that lacks explicit current-turn evidence."""
-    if decision is None or _STAGGERED_INSTALL_AVAILABILITY_INTENT not in decision.intents:
+    if decision is None or not _is_staggered_install_availability_lookup(decision, patched):
         return patched
-    if decision.quantity_explicitly_provided or existing.ord_qty is not None:
+    if decision.quantity_explicitly_provided:
         return patched
-    return patched.model_copy(update={"ord_qty": None})
+    quantity_fields = ("ord_qty", "ord_qty_front", "ord_qty_rear")
+    return patched.model_copy(update={field: getattr(existing, field) for field in quantity_fields})
+
+
+def _has_staggered_availability_quantity(slots: ConversationSlots) -> bool:
+    """Return whether both staggered products have a confirmed lookup quantity."""
+    axle_quantities = (slots.ord_qty_front, slots.ord_qty_rear)
+    if any(quantity is not None for quantity in axle_quantities):
+        return all(isinstance(quantity, int) and quantity > 0 for quantity in axle_quantities)
+    return isinstance(slots.ord_qty, int) and slots.ord_qty > 0
 
 
 def _staggered_simultaneous_purchase_event(
@@ -412,7 +433,7 @@ def _transaction_tool_guard(
     selected_size = str(slots.tire_size or "").strip()
     has_selected_size = selected_size in {front_size, rear_size}
     must_select_size = bool(front_size and rear_size and front_size != rear_size and not has_selected_size)
-    missing_combined_quantity = bool(must_select_size and slots.ord_qty is None)
+    missing_combined_quantity = bool(must_select_size and not _has_staggered_availability_quantity(slots))
 
     def guard(call: dict) -> str | None:
         name = str(call.get("name") or "")

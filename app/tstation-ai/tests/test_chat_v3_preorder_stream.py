@@ -726,6 +726,23 @@ def test_staggered_ord_qty_within_limit_is_kept() -> None:
     assert clamp_staggered_ord_qty(slots).ord_qty == 1
 
 
+def test_staggered_per_axle_quantities_are_kept_separately() -> None:
+    slots = ConversationSlots(
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+        ord_qty_front=2,
+        ord_qty_rear=1,
+    )
+
+    clamped = clamp_staggered_ord_qty(slots)
+
+    assert clamped.ord_qty is None
+    assert clamped.ord_qty_front == 2
+    assert clamped.ord_qty_rear == 1
+    assert service.templates._has_confirmed_quantity(clamped) is True
+    assert service.templates._has_confirmed_quantity(clamped.model_copy(update={"tire_size": "225/40R19"})) is False
+
+
 def test_same_size_vehicle_ord_qty_is_not_clamped() -> None:
     slots = ConversationSlots(tire_size_front="225/45R17", tire_size_rear="225/45R17", ord_qty=4)
 
@@ -797,6 +814,43 @@ def test_direct_staggered_availability_patch_preserves_both_sizes_without_select
     assert service._is_staggered_install_availability_lookup(decision, slots) is True
 
 
+def test_staggered_quantity_followup_continues_pending_availability_lookup() -> None:
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["quantity_confirmation"],
+        quantity_explicitly_provided=True,
+        slots_patch=SlotsPatch(ord_qty_front=2, ord_qty_rear=1),
+    )
+    existing = ConversationSlots(
+        tire_size_front="245/40R19",
+        tire_size_rear="275/35R19",
+        goal_type="store_with_stock",
+        pending_intent="stock",
+    )
+
+    slots = apply_patch(existing, decision.slots_patch)
+
+    assert slots.ord_qty is None
+    assert slots.ord_qty_front == 2
+    assert slots.ord_qty_rear == 1
+    assert service._is_staggered_install_availability_lookup(decision, slots) is True
+
+
+def test_staggered_purchase_request_overrides_pending_availability_lookup() -> None:
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["staggered_simultaneous_purchase_inquiry"],
+    )
+    slots = ConversationSlots(
+        tire_size_front="245/40R19",
+        tire_size_rear="275/35R19",
+        goal_type="store_with_stock",
+        pending_intent="stock",
+    )
+
+    assert service._is_staggered_install_availability_lookup(decision, slots) is False
+
+
 def test_direct_staggered_availability_discards_quantity_without_explicit_evidence() -> None:
     inferred = RouteDecision(
         domain=Domain.TRANSACTION,
@@ -806,6 +860,18 @@ def test_direct_staggered_availability_discards_quantity_without_explicit_eviden
     patched = apply_patch(ConversationSlots(), inferred.slots_patch)
 
     assert service._discard_inferred_staggered_quantity(inferred, ConversationSlots(), patched).ord_qty is None
+
+    inferred_per_axle = inferred.model_copy(
+        update={"slots_patch": SlotsPatch(tire_size_front="245/40R19", tire_size_rear="275/35R19", ord_qty_front=2, ord_qty_rear=1)}
+    )
+    patched_per_axle = apply_patch(ConversationSlots(), inferred_per_axle.slots_patch)
+    discarded = service._discard_inferred_staggered_quantity(
+        inferred_per_axle,
+        ConversationSlots(),
+        patched_per_axle,
+    )
+    assert discarded.ord_qty_front is None
+    assert discarded.ord_qty_rear is None
 
     explicit = inferred.model_copy(update={"quantity_explicitly_provided": True})
     assert service._discard_inferred_staggered_quantity(explicit, ConversationSlots(), patched).ord_qty == 2
@@ -924,6 +990,27 @@ def test_transaction_tool_guard_allows_combined_availability_after_quantity_conf
     assert guard({
         "name": "get_store_install_availability_tool",
         "args": {"goods_items": [{"goods_no": "G1", "ord_qty": 2}, {"goods_no": "G2", "ord_qty": 2}]},
+    }) is None
+
+
+def test_transaction_tool_guard_allows_different_front_and_rear_quantities() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2 front and 1 rear"}], stream=True, user_id="u", session_id="s"
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["quantity_confirmation"])
+    slots = ConversationSlots(
+        tire_size_front="245/40R19",
+        tire_size_rear="275/35R19",
+        ord_qty_front=2,
+        ord_qty_rear=1,
+        goal_type="store_with_stock",
+        pending_intent="stock",
+    )
+    guard = service._transaction_tool_guard(decision, request, slots)
+
+    assert guard({
+        "name": "get_store_install_availability_tool",
+        "args": {"goods_items": [{"goods_no": "G1", "ord_qty": 2}, {"goods_no": "G2", "ord_qty": 1}]},
     }) is None
 
 

@@ -116,10 +116,11 @@ def test_install_availability_tool_uses_all_goods_items(monkeypatch: pytest.Monk
         "shop_id_list": ["S1"],
         "goods_items": [
             {"goods_no": "G-FRONT", "ord_qty": 2},
-            {"goods_no": "G-REAR", "ord_qty": 2},
+            {"goods_no": "G-REAR", "ord_qty": 1},
         ],
     })
 
     assert [call["goods_no"] for call in calls] == ["G-FRONT", "G-REAR"]
+    assert [call["ord_qty"] for call in calls] == [2, 1]
     assert result["data"]["combined"]["common_shop_ids"] == ["S1"]
     assert result["data"]["combined"]["first_available_slot"] == {"cal_day": "20260717", "tm": "09"}
