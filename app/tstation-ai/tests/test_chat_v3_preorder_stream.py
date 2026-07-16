@@ -776,6 +776,28 @@ def test_staggered_vehicle_size_guard_survives_router_car_no_patch(monkeypatch: 
     )
 
 
+def test_direct_staggered_size_patch_blocks_tools_and_requests_size_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asyncio.run(
+        _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
+            monkeypatch,
+            slots=ConversationSlots(),
+            decision=RouteDecision(
+                domain=Domain.TRANSACTION,
+                intents=["store_with_stock"],
+                slots_patch=SlotsPatch(
+                    tire_size_front="245 40 r19",
+                    tire_size_rear="275 35 r19",
+                    region="Dongtan",
+                ),
+            ),
+            expected_front_size="245/40R19",
+            expected_rear_size="275/35R19",
+        )
+    )
+
+
 def test_staggered_vehicle_card_click_guard_blocks_recommendation_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_staggered_vehicle_card_click_guard_blocks_recommendation_flow(monkeypatch))
 
@@ -855,6 +877,35 @@ def test_cart_write_guard_allows_explicit_intent_or_cart_button() -> None:
     )
     no_intent = RouteDecision(domain=Domain.TRANSACTION, intents=[])
     assert service._cart_write_guard(no_intent, button_request)({"name": "save_to_cart_tool", "args": {}}) is None
+
+
+def test_transaction_tool_guard_blocks_order_tools_until_staggered_size_is_selected() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "continue"}], stream=True, user_id="u", session_id="s"
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+    slots = ConversationSlots(tire_size_front="245/40R19", tire_size_rear="275/35R19")
+    guard = service._transaction_tool_guard(decision, request, slots)
+
+    for tool_name in ("present_order_preview_tool", "quick_order_tool", "save_to_cart_tool"):
+        assert guard({"name": tool_name, "args": {}}) is not None
+    assert guard({"name": "get_store_install_availability_tool", "args": {}}) is None
+
+
+def test_transaction_tool_guard_allows_order_after_staggered_size_selection() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "continue"}], stream=True, user_id="u", session_id="s"
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+    slots = ConversationSlots(
+        tire_size="245/40R19",
+        tire_size_front="245/40R19",
+        tire_size_rear="275/35R19",
+    )
+    guard = service._transaction_tool_guard(decision, request, slots)
+
+    assert guard({"name": "present_order_preview_tool", "args": {}}) is None
+    assert guard({"name": "quick_order_tool", "args": {}}) is None
 
 
 def test_executor_guard_blocks_tool_invocation() -> None:
