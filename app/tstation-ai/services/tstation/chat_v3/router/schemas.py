@@ -2,7 +2,7 @@
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from services.tstation.chat_v3.slots.schemas import SlotsPatch
 
@@ -105,10 +105,19 @@ class RouteDecision(BaseModel):
         default_factory=list,
         description="이번 턴의 세부 의도 키워드 (자유 서술, 1~3개)",
     )
+    # Required on purpose (no default): fields with defaults are absent from the
+    # function-calling schema's `required` list and the mini model simply skips
+    # them
     tool_profile: ToolProfile = Field(
-        default=ToolProfile.FULL,
-        description="이번 턴의 단일 흐름이 명확할 때만 좁은 프로필, 애매하면 full (프롬프트 6번 규칙 참고)",
+        description="이번 턴의 단일 흐름이 명확할 때만 좁은 프로필, 애매하면 full (프롬프트 6번 규칙 참고). 항상 출력하세요.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_tool_profile(cls, data: object) -> object:
+        if isinstance(data, dict) and not data.get("tool_profile"):
+            data["tool_profile"] = ToolProfile.FULL.value
+        return data
     slots_patch: SlotsPatch = Field(
         default_factory=SlotsPatch,
         description="이번 사용자 발화에서 새로 알 수 있게 된 슬롯 값만",

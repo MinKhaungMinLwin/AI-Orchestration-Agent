@@ -59,7 +59,13 @@ from services.tstation.chat_v3.router.route import (  # noqa: E402
     _decide_reservation_date_guard,
     _move_static_faq_guard_to_intent,
 )
-from services.tstation.chat_v3.router.schemas import BrandContext, Domain, GuardId, RouteDecision  # noqa: E402
+from services.tstation.chat_v3.router.schemas import (  # noqa: E402
+    BrandContext,
+    Domain,
+    GuardId,
+    RouteDecision,
+    ToolProfile,
+)
 from services.tstation.chat_v3.slots.derive import reset_for_supported_brand_switch  # noqa: E402
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
 
@@ -507,3 +513,23 @@ def test_delivery_policy_guard_responses_match_v2_policy_texts() -> None:
     assert "온라인 판매가와 매장 현장 판매가" in online_store_guard.text
     assert regional_price_guard is not None
     assert "지역, 장착점, 행사, 쿠폰, 재고, 배송 조건" in regional_price_guard.text
+
+
+def test_tool_profile_is_required_in_router_schema() -> None:
+    # Optional fields are absent from the function-calling schema's `required`
+    # list and the mini model skips them — measured ~0% tool_profile emission
+    # before it was made required (the Pydantic default masked the omission).
+    assert "tool_profile" in (RouteDecision.model_json_schema().get("required") or [])
+
+
+def test_tool_profile_omitted_by_model_still_defaults_to_full() -> None:
+    # Required in the schema, but parsing must never fail when the model
+    # omits it anyway — the before-validator fills "full".
+    decision = RouteDecision.model_validate({"domain": "DISCOVERY"})
+    assert decision.tool_profile is ToolProfile.FULL
+    assert RouteDecision().tool_profile is ToolProfile.FULL
+
+
+def test_tool_profile_parses_narrow_value() -> None:
+    decision = RouteDecision.model_validate({"tool_profile": "transaction_coupon"})
+    assert decision.tool_profile is ToolProfile.TRANSACTION_COUPON
