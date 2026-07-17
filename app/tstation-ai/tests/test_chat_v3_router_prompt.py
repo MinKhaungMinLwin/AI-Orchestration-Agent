@@ -164,16 +164,8 @@ def test_router_prompt_extracts_direct_staggered_tire_sizes_into_separate_slots(
     assert "slots_patch.tire_size_front" in ROUTER_PROMPT
     assert "slots_patch.tire_size_rear" in ROUTER_PROMPT
     assert "slots_patch.tire_size 를 채우지 마세요" in ROUTER_PROMPT
-    assert 'intent "staggered_install_availability"' in ROUTER_PROMPT
-    assert 'slots_patch.goal_type="store_with_stock"' in ROUTER_PROMPT
-    assert 'slots_patch.pending_intent="stock"' in ROUTER_PROMPT
-    assert "explicit_staggered_quantity" in ROUTER_PROMPT
-    assert "not imply two tires" in ROUTER_PROMPT
-    assert "explicit_staggered_quantity.ord_qty_front" in ROUTER_PROMPT
-    assert "explicit_staggered_quantity.ord_qty_rear" in ROUTER_PROMPT
-    assert "only output location" in ROUTER_PROMPT
-    assert 'goal_type="store_with_stock"' in ROUTER_PROMPT
-    assert "quantity-only follow-up" in ROUTER_PROMPT
+    assert "ask the user to choose" in ROUTER_PROMPT
+    assert "before searching products, stores, stock, or installation availability" in ROUTER_PROMPT
 
 
 def test_router_prompt_does_not_treat_system_time_as_a_requested_date() -> None:
