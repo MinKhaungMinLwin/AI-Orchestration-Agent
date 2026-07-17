@@ -402,6 +402,12 @@ def test_service_text_musangjeomgeom_does_not_false_positive(store_source) -> No
     assert verify_draft(draft, store_source) == []
 
 
+def test_store_type_teukwhajeom_does_not_false_positive(store_source) -> None:
+    """"수입차 특화점" is a store-type label, not a store-name claim."""
+    draft = "이 매장은 수입차 특화점으로 운영되고 있어요."
+    assert verify_draft(draft, store_source) == []
+
+
 def test_store_name_check_skipped_when_source_empty() -> None:
     source = [("get_faq_tool", {"data": {"faqs": []}})]
     assert verify_draft("티스테이션 아무말점에서 확인해 보세요.", source) == []
