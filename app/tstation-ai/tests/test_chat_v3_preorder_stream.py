@@ -841,8 +841,8 @@ def test_staggered_simultaneous_purchase_inquiry_recovers_candidate_sizes(monkey
     )
 
 
-def test_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(monkeypatch: pytest.MonkeyPatch) -> None:
-    asyncio.run(_assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(monkeypatch))
+def test_staggered_size_chip_selection_requests_quantity_before_tools(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_staggered_size_chip_selection_requests_quantity_before_tools(monkeypatch))
 
 
 def test_staggered_region_followup_bypasses_simultaneous_purchase_guard(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1077,7 +1077,7 @@ async def _assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(
     assert persisted_domains == ["DISCOVERY", "DISCOVERY"]
 
 
-async def _assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_guard(
+async def _assert_staggered_size_chip_selection_requests_quantity_before_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     slots = ConversationSlots(
@@ -1086,13 +1086,9 @@ async def _assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_g
         tire_size_rear="255/35R19",
     )
 
-    class FakeExecutor:
+    class ForbiddenExecutor:
         def __init__(self, *args, **kwargs) -> None:
-            self.final_text = "225/40R19 기준으로 추천해드릴게요."
-            self.tool_calls = []
-
-        async def stream(self):
-            yield service.sse.token("225/40R19 기준으로 추천해드릴게요.")
+            raise AssertionError("quantity must be selected before product or availability tools run")
 
     async def fake_route_request(*args, **kwargs):
         return RouteDecision(domain=Domain.DISCOVERY, intents=["staggered_simultaneous_purchase_inquiry"])
@@ -1100,19 +1096,13 @@ async def _assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_g
     async def fake_load_slots(session_id):
         return slots
 
-    async def fake_verify_answer(answer, tool_calls, trace_config):
-        return answer
-
     async def fake_noop(*args, **kwargs):
         return None
 
     monkeypatch.setattr(service, "route_request", fake_route_request)
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
-    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
-    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
     monkeypatch.setattr(service, "save_slots", fake_noop)
-    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
 
@@ -1139,12 +1129,13 @@ async def _assert_staggered_size_chip_selection_bypasses_simultaneous_purchase_g
         if event:
             events.append(event)
 
-    messages = [event["content"] for event in events if event.get("type") == "message"]
-    assert messages == ["225/40R19 기준으로 추천해드릴게요."]
     data_events = [event for event in events if event.get("type") == "data"]
     assert data_events
-    assert "한 번에 함께 구매 가능한지는" not in data_events[0]["data"]["assistantResponse"]
-    assert "225/40R19 기준으로 추천해드릴게요." in data_events[0]["data"]["assistantResponse"]
+    assert data_events[0]["data"]["assistantResponse"] == (
+        "225/40R19 기준으로 확인하겠습니다. 필요한 타이어 수량을 선택해 주세요."
+    )
+    assert [chip["label"] for chip in data_events[0]["data"]["quickReplies"]] == ["1개", "2개"]
+    assert [chip["metadata"]["slots"]["ord_qty"] for chip in data_events[0]["data"]["quickReplies"]] == [1, 2]
 
 
 async def _assert_staggered_region_followup_bypasses_simultaneous_purchase_guard(

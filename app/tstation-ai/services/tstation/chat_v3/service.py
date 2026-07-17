@@ -195,6 +195,42 @@ def _staggered_tire_size_choice_event(slots: ConversationSlots) -> dict | None:
     }
 
 
+def _staggered_tire_quantity_choice_event(slots: ConversationSlots) -> dict | None:
+    """Request quantity before tools run for the selected staggered tire size."""
+    front_size = str(slots.tire_size_front or "").strip()
+    rear_size = str(slots.tire_size_rear or "").strip()
+    selected_size = str(slots.tire_size or "").strip()
+    if (
+        not front_size
+        or not rear_size
+        or front_size == rear_size
+        or selected_size not in {front_size, rear_size}
+        or (isinstance(slots.ord_qty, int) and slots.ord_qty > 0)
+    ):
+        return None
+
+    answer = f"{selected_size} 기준으로 확인하겠습니다. 필요한 타이어 수량을 선택해 주세요."
+    chips = [
+        {
+            "label": f"{quantity}개",
+            "domain": "TRANSACTION",
+            "metadata": {"slots": {"ord_qty": quantity}},
+        }
+        for quantity in range(1, STAGGERED_MAX_ORD_QTY + 1)
+    ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": answer,
+            "quickReplies": chips,
+            "predictedDomains": ["TRANSACTION"],
+        },
+        "source_domain": "TRANSACTION",
+        "assistant_response_source": "code_chat_v3_staggered_tire_quantity_choice",
+    }
+
+
 def _staggered_sizes(slots: ConversationSlots) -> tuple[str, str]:
     front_size = str(slots.tire_size_front or "").strip()
     rear_size = str(slots.tire_size_rear or "").strip()
@@ -862,6 +898,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         if _fills_transaction_slot(decision)
         else recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
     )
+    if staggered_size_event is None:
+        staggered_size_event = _staggered_tire_quantity_choice_event(slots)
     if staggered_size_event:
         answer = str(staggered_size_event["data"]["assistantResponse"])
         chips = staggered_size_event["data"]["quickReplies"]
