@@ -72,8 +72,6 @@ _INSTALLATION_SCHEDULE_CHANGE_INTENT = "installation_schedule_change"
 _SAVE_TO_CART_TOOL = "save_to_cart_tool"
 _PRESENT_ORDER_PREVIEW_TOOL = "present_order_preview_tool"
 _QUICK_ORDER_TOOL = "quick_order_tool"
-_INSTALL_AVAILABILITY_TOOL = "get_store_install_availability_tool"
-_STAGGERED_INSTALL_AVAILABILITY_INTENT = "staggered_install_availability"
 _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS = {
     "simultaneous_purchase_inquiry",
     "staggered_simultaneous_purchase_inquiry",
@@ -278,65 +276,6 @@ def _fills_transaction_slot(decision: RouteDecision | None) -> bool:
     return bool(_TRANSACTION_SLOT_FILL_FIELDS.intersection(decision.slots_patch.non_empty()))
 
 
-def _is_staggered_install_availability_lookup(
-    decision: RouteDecision | None,
-    slots: ConversationSlots,
-) -> bool:
-    """Identify an active read-only lookup for both staggered sizes."""
-    purchase_turn = bool(
-        decision
-        and (
-            _PLACE_ORDER_INTENT in decision.intents
-            or _ADD_TO_CART_INTENT in decision.intents
-            or _STAGGERED_SIMULTANEOUS_PURCHASE_INTENTS.intersection(decision.intents)
-        )
-    )
-    if purchase_turn:
-        return False
-    current_turn_lookup = bool(decision and _STAGGERED_INSTALL_AVAILABILITY_INTENT in decision.intents)
-    pending_lookup = slots.goal_type == "store_with_stock" and slots.pending_intent == "stock"
-    if not current_turn_lookup and not pending_lookup:
-        return False
-    front_size, rear_size = _staggered_sizes(slots)
-    selected_size = str(slots.tire_size or "").strip()
-    return bool(front_size and rear_size and front_size != rear_size and not selected_size)
-
-
-def _apply_explicit_staggered_quantity(
-    decision: RouteDecision | None,
-    existing: ConversationSlots,
-    patched: ConversationSlots,
-) -> ConversationSlots:
-    """Apply only the router's typed, current-turn staggered quantity selection."""
-    if decision is None or not _is_staggered_install_availability_lookup(decision, patched):
-        return patched
-    quantity_fields = ("ord_qty", "ord_qty_front", "ord_qty_rear")
-    restored = patched.model_copy(update={field: getattr(existing, field) for field in quantity_fields})
-    explicit = decision.explicit_staggered_quantity
-    if explicit is None:
-        return restored
-    values = explicit.model_dump(exclude_none=True)
-    if not values:
-        return restored
-    if "ord_qty" in values:
-        return restored.model_copy(update={"ord_qty": values["ord_qty"], "ord_qty_front": None, "ord_qty_rear": None})
-    existing_front = existing.ord_qty_front if existing.ord_qty_front is not None else existing.ord_qty
-    existing_rear = existing.ord_qty_rear if existing.ord_qty_rear is not None else existing.ord_qty
-    return restored.model_copy(update={
-        "ord_qty": None,
-        "ord_qty_front": values.get("ord_qty_front", existing_front),
-        "ord_qty_rear": values.get("ord_qty_rear", existing_rear),
-    })
-
-
-def _has_staggered_availability_quantity(slots: ConversationSlots) -> bool:
-    """Return whether both staggered products have a confirmed lookup quantity."""
-    axle_quantities = (slots.ord_qty_front, slots.ord_qty_rear)
-    if any(quantity is not None for quantity in axle_quantities):
-        return all(isinstance(quantity, int) and quantity > 0 for quantity in axle_quantities)
-    return isinstance(slots.ord_qty, int) and slots.ord_qty > 0
-
-
 def _staggered_simultaneous_purchase_event(
     decision: RouteDecision | None,
     slots: ConversationSlots,
@@ -446,16 +385,9 @@ def _transaction_tool_guard(
     selected_size = str(slots.tire_size or "").strip()
     has_selected_size = selected_size in {front_size, rear_size}
     must_select_size = bool(front_size and rear_size and front_size != rear_size and not has_selected_size)
-    missing_combined_quantity = bool(must_select_size and not _has_staggered_availability_quantity(slots))
 
     def guard(call: dict) -> str | None:
         name = str(call.get("name") or "")
-        args = call.get("args") if isinstance(call.get("args"), dict) else {}
-        if missing_combined_quantity and name == _INSTALL_AVAILABILITY_TOOL and args.get("goods_items"):
-            return (
-                "The user did not provide a tire quantity. Do not infer quantity from front/rear axle labels. "
-                "Ask how many tires to check for each size before calling installation availability."
-            )
         if must_select_size and name in _UNSELECTED_STAGGERED_ORDER_TOOLS:
             return (
                 "The front and rear tire sizes differ, but no single size has been selected for this order. "
@@ -832,9 +764,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     domains = decision.all_domains() if decision else ["LEADING"]
     domain = domains[0]
     recovered_staggered_size_event = _staggered_tire_size_choice_event(slots)
-    slots_before_router_patch = slots
     slots = apply_patch(slots, decision.slots_patch if decision else None)
-    slots = _apply_explicit_staggered_quantity(decision, slots_before_router_patch, slots)
     # Staggered vehicles: even a typed quantity is capped at 2.
     slots = clamp_staggered_ord_qty(slots)
     slots = _normalize_transaction_goal_slots(decision, slots)
@@ -882,14 +812,11 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             yield event
         return
 
-    staggered_install_availability_lookup = _is_staggered_install_availability_lookup(decision, slots)
-    staggered_simultaneous_purchase_event = None
-    if not staggered_install_availability_lookup:
-        staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
-            decision,
-            slots,
-            size_selected_from_ui=_request_has_selected_tire_size(request),
-        )
+    staggered_simultaneous_purchase_event = _staggered_simultaneous_purchase_event(
+        decision,
+        slots,
+        size_selected_from_ui=_request_has_selected_tire_size(request),
+    )
     if staggered_simultaneous_purchase_event:
         answer = str(staggered_simultaneous_purchase_event["data"]["assistantResponse"])
         chips = staggered_simultaneous_purchase_event["data"]["quickReplies"]
@@ -930,13 +857,11 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         )
         return
 
-    staggered_size_event = None
-    if not staggered_install_availability_lookup:
-        staggered_size_event = (
-            _staggered_tire_size_choice_event(slots)
-            if _fills_transaction_slot(decision)
-            else recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
-        )
+    staggered_size_event = (
+        _staggered_tire_size_choice_event(slots)
+        if _fills_transaction_slot(decision)
+        else recovered_staggered_size_event or _staggered_tire_size_choice_event(slots)
+    )
     if staggered_size_event:
         answer = str(staggered_size_event["data"]["assistantResponse"])
         chips = staggered_size_event["data"]["quickReplies"]
@@ -1012,9 +937,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
 
     def stop_for_staggered_vehicle(tool_calls: list[dict]) -> bool:
         derived = derive_slots_from_tool_calls(vehicle_policy_state["slots"], tool_calls)
-        if staggered_install_availability_lookup:
-            vehicle_policy_state["slots"] = derived
-            return False
         promoted = promote_selected_vehicle(
             derived,
             tool_calls,
@@ -1103,8 +1025,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     # have their required args even when a later turn no longer re-calls the tools.
     slots_before_harvest = slots.model_copy()
     slots = templates.harvest_order_slots(slots, executor.tool_calls)
-    if staggered_install_availability_lookup:
-        slots = slots.model_copy(update={"goods_no": None, "tire_size": None})
     slots = clamp_staggered_ord_qty(slots)
 
     answer = executor.final_text.strip() or ERROR_RESPONSE
@@ -1164,7 +1084,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     preorder_event = templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
-        if preorder_event or current_events_event or staggered_install_availability_lookup
+        if preorder_event or current_events_event
         else await templates.build_rich_data_event(
             answer,
             executor.tool_calls,

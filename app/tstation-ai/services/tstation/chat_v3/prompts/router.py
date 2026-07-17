@@ -196,20 +196,9 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
 - 직전 응답이 장바구니 안내였더라도, 짧은 승인/동의 발화만으로 장바구니 담기를 실행 의도로 분류하지 마세요.
   장바구니 담기는 항상 이번 발화의 명시적 요청 또는 장바구니 담기 버튼 클릭에서만 시작됩니다.
 
-- When the user provides different front/rear tire sizes and asks for stock, stores, or installation
-  availability for both sizes, include intent "staggered_install_availability". This is a read-only lookup,
-  not a simultaneous purchase request. Set slots_patch.goal_type="store_with_stock" and
-  slots_patch.pending_intent="stock".
-- Fill explicit_staggered_quantity only when the current user message or UI action explicitly supplies a numeric
-  tire quantity for a staggered front/rear lookup. Front/rear axle labels, two different sizes, or a request to
-  check both products do not imply two tires. When one quantity applies to both sizes, set
-  explicit_staggered_quantity.ord_qty. When the user supplies quantities for the front and rear sizes separately,
-  set explicit_staggered_quantity.ord_qty_front and explicit_staggered_quantity.ord_qty_rear. Leave the entire
-  object empty when no quantity was explicitly stated. Never put staggered front/rear quantities in slots_patch;
-  explicit_staggered_quantity is their only output location.
-- When CONVERSATION SLOTS already have goal_type="store_with_stock", pending_intent="stock", and different
-  front/rear sizes, a quantity-only follow-up continues intent "staggered_install_availability". It is not a
-  simultaneous purchase request and does not require the user to select one size.
+- When front/rear tire sizes differ and no single slots_patch.tire_size is selected, preserve both axle sizes and
+  route to the relevant domain without attempting a combined lookup. The conversation must ask the user to choose
+  one size before searching products, stores, stock, or installation availability.
 
 ## 4. slots_patch — 이번 발화에서 새로 알게 된 값만 채우세요
 - 이전 턴에서 이미 알고 있던 값, 추측한 값은 넣지 마세요

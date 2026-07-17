@@ -81,14 +81,11 @@ def test_store_flow_prompt_uses_unified_install_availability_tool():
     assert "get_store_schedule_tool" not in STORE_SEARCH_FLOW_GUIDANCE
 
 
-def test_store_flow_prompt_uses_combined_availability_for_staggered_sizes() -> None:
-    assert "MULTI-PRODUCT INSTALL AVAILABILITY" in STORE_SEARCH_FLOW_GUIDANCE
-    assert "goods_items" in STORE_SEARCH_FLOW_GUIDANCE
-    assert "Never infer quantity from front/rear axle labels" in STORE_SEARCH_FLOW_GUIDANCE
-    assert "ord_qty_front" in STORE_SEARCH_FLOW_GUIDANCE
-    assert "ord_qty_rear" in STORE_SEARCH_FLOW_GUIDANCE
-    assert "combined.first_available_slot" in STORE_SEARCH_FLOW_GUIDANCE
-    assert "Do not offer a combined preOrder card" in STORE_SEARCH_FLOW_GUIDANCE
+def test_store_flow_prompt_requires_staggered_size_selection_before_lookup() -> None:
+    assert "STAGGERED SIZE SELECTION" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "do not search products, stores, stock" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "choose the front or rear size first" in STORE_SEARCH_FLOW_GUIDANCE
+    assert "normal single-product flow" in STORE_SEARCH_FLOW_GUIDANCE
 
 
 def test_store_flow_prompt_maps_imported_vehicle_experience_to_imported_specialty_search():

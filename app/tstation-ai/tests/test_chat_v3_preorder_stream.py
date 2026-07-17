@@ -56,11 +56,7 @@ os.environ["REDIS_URL"] = "redis://localhost:6379/2"
 
 from api.tstation import chat_message as chat_message_module  # noqa: E402
 from services.tstation.chat_v3 import service  # noqa: E402
-from services.tstation.chat_v3.router.schemas import (  # noqa: E402
-    Domain,
-    ExplicitStaggeredQuantity,
-    RouteDecision,
-)
+from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
 from services.tstation.chat_v3.slots.derive import (  # noqa: E402
     apply_fe_slots,
     apply_text_vehicle_selection,
@@ -69,7 +65,7 @@ from services.tstation.chat_v3.slots.derive import (  # noqa: E402
     promote_selected_vehicle,
 )
 from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
-from services.tstation.chat_v3.slots.store import apply_patch, slots_context_block  # noqa: E402
+from services.tstation.chat_v3.slots.store import slots_context_block  # noqa: E402
 from services.tstation.common.cta_urls import CTAUrls  # noqa: E402
 
 
@@ -730,23 +726,6 @@ def test_staggered_ord_qty_within_limit_is_kept() -> None:
     assert clamp_staggered_ord_qty(slots).ord_qty == 1
 
 
-def test_staggered_per_axle_quantities_are_kept_separately() -> None:
-    slots = ConversationSlots(
-        tire_size_front="225/40R19",
-        tire_size_rear="255/35R19",
-        ord_qty_front=2,
-        ord_qty_rear=1,
-    )
-
-    clamped = clamp_staggered_ord_qty(slots)
-
-    assert clamped.ord_qty is None
-    assert clamped.ord_qty_front == 2
-    assert clamped.ord_qty_rear == 1
-    assert service.templates._has_confirmed_quantity(clamped) is True
-    assert service.templates._has_confirmed_quantity(clamped.model_copy(update={"tire_size": "225/40R19"})) is False
-
-
 def test_same_size_vehicle_ord_qty_is_not_clamped() -> None:
     slots = ConversationSlots(tire_size_front="225/45R17", tire_size_rear="225/45R17", ord_qty=4)
 
@@ -797,88 +776,25 @@ def test_staggered_vehicle_size_guard_survives_router_car_no_patch(monkeypatch: 
     )
 
 
-def test_direct_staggered_availability_patch_preserves_both_sizes_without_selecting_one() -> None:
-    decision = RouteDecision(
-        domain=Domain.TRANSACTION,
-        intents=["staggered_install_availability"],
-        slots_patch=SlotsPatch(
-            tire_size_front="245 40 r19",
-            tire_size_rear="275 35 r19",
-            region="Dongtan",
-            goal_type="store_with_stock",
-            pending_intent="stock",
-        ),
+def test_direct_staggered_availability_requests_size_selection(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(
+        _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
+            monkeypatch,
+            slots=ConversationSlots(),
+            decision=RouteDecision(
+                domain=Domain.TRANSACTION,
+                intents=["store_with_stock"],
+                slots_patch=SlotsPatch(
+                    tire_size_front="245 40 r19",
+                    tire_size_rear="275 35 r19",
+                    tire_model="Ventus S2 AS",
+                    region="Dongtan",
+                ),
+            ),
+            expected_front_size="245/40R19",
+            expected_rear_size="275/35R19",
+        )
     )
-
-    slots = apply_patch(ConversationSlots(), decision.slots_patch)
-
-    assert slots.tire_size is None
-    assert slots.tire_size_front == "245/40R19"
-    assert slots.tire_size_rear == "275/35R19"
-    assert service._is_staggered_install_availability_lookup(decision, slots) is True
-
-
-def test_staggered_quantity_followup_continues_pending_availability_lookup() -> None:
-    decision = RouteDecision(
-        domain=Domain.TRANSACTION,
-        intents=["quantity_confirmation"],
-        explicit_staggered_quantity=ExplicitStaggeredQuantity(ord_qty_front=2, ord_qty_rear=2),
-    )
-    existing = ConversationSlots(
-        tire_size_front="245/40R19",
-        tire_size_rear="275/35R19",
-        goal_type="store_with_stock",
-        pending_intent="stock",
-    )
-
-    patched = apply_patch(existing, decision.slots_patch)
-    slots = service._apply_explicit_staggered_quantity(decision, existing, patched)
-
-    assert slots.ord_qty is None
-    assert slots.ord_qty_front == 2
-    assert slots.ord_qty_rear == 2
-    assert service._is_staggered_install_availability_lookup(decision, slots) is True
-
-
-def test_staggered_purchase_request_overrides_pending_availability_lookup() -> None:
-    decision = RouteDecision(
-        domain=Domain.TRANSACTION,
-        intents=["staggered_simultaneous_purchase_inquiry"],
-    )
-    slots = ConversationSlots(
-        tire_size_front="245/40R19",
-        tire_size_rear="275/35R19",
-        goal_type="store_with_stock",
-        pending_intent="stock",
-    )
-
-    assert service._is_staggered_install_availability_lookup(decision, slots) is False
-
-
-def test_staggered_availability_uses_only_typed_explicit_quantity() -> None:
-    inferred = RouteDecision(
-        domain=Domain.TRANSACTION,
-        intents=["staggered_install_availability"],
-        slots_patch=SlotsPatch(tire_size_front="245/40R19", tire_size_rear="275/35R19", ord_qty=2),
-    )
-    patched = apply_patch(ConversationSlots(), inferred.slots_patch)
-
-    assert service._apply_explicit_staggered_quantity(inferred, ConversationSlots(), patched).ord_qty is None
-
-    explicit = inferred.model_copy(
-        update={"explicit_staggered_quantity": ExplicitStaggeredQuantity(ord_qty=2)}
-    )
-    confirmed = service._apply_explicit_staggered_quantity(explicit, ConversationSlots(), patched)
-    assert confirmed.ord_qty == 2
-
-
-def test_staggered_per_axle_quantities_have_only_one_router_schema_location() -> None:
-    assert "ord_qty_front" not in SlotsPatch.model_fields
-    assert "ord_qty_rear" not in SlotsPatch.model_fields
-
-
-def test_direct_staggered_availability_enters_tool_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    asyncio.run(_assert_direct_staggered_availability_enters_tool_loop(monkeypatch))
 
 
 def test_staggered_vehicle_card_click_guard_blocks_recommendation_flow(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -973,45 +889,6 @@ def test_transaction_tool_guard_blocks_order_tools_until_staggered_size_is_selec
     for tool_name in ("present_order_preview_tool", "quick_order_tool", "save_to_cart_tool"):
         assert guard({"name": tool_name, "args": {}}) is not None
     assert guard({"name": "get_store_install_availability_tool", "args": {}}) is None
-    assert guard({
-        "name": "get_store_install_availability_tool",
-        "args": {"goods_items": [{"goods_no": "G1", "ord_qty": 2}, {"goods_no": "G2", "ord_qty": 2}]},
-    }) is not None
-
-
-def test_transaction_tool_guard_allows_combined_availability_after_quantity_confirmation() -> None:
-    request = TStationChatRequest(
-        messages=[{"role": "user", "content": "2 each"}], stream=True, user_id="u", session_id="s"
-    )
-    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["staggered_install_availability"])
-    slots = ConversationSlots(tire_size_front="245/40R19", tire_size_rear="275/35R19", ord_qty=2)
-    guard = service._transaction_tool_guard(decision, request, slots)
-
-    assert guard({
-        "name": "get_store_install_availability_tool",
-        "args": {"goods_items": [{"goods_no": "G1", "ord_qty": 2}, {"goods_no": "G2", "ord_qty": 2}]},
-    }) is None
-
-
-def test_transaction_tool_guard_allows_different_front_and_rear_quantities() -> None:
-    request = TStationChatRequest(
-        messages=[{"role": "user", "content": "2 front and 1 rear"}], stream=True, user_id="u", session_id="s"
-    )
-    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["quantity_confirmation"])
-    slots = ConversationSlots(
-        tire_size_front="245/40R19",
-        tire_size_rear="275/35R19",
-        ord_qty_front=2,
-        ord_qty_rear=1,
-        goal_type="store_with_stock",
-        pending_intent="stock",
-    )
-    guard = service._transaction_tool_guard(decision, request, slots)
-
-    assert guard({
-        "name": "get_store_install_availability_tool",
-        "args": {"goods_items": [{"goods_no": "G1", "ord_qty": 2}, {"goods_no": "G2", "ord_qty": 1}]},
-    }) is None
 
 
 def test_transaction_tool_guard_allows_order_after_staggered_size_selection() -> None:
@@ -1133,87 +1010,6 @@ async def _assert_staggered_vehicle_size_guard_blocks_purchase_flow(
     assert data_events[0]["data"]["quickReplies"][1]["metadata"]["slots"]["tire_size"] == expected_rear_size
     assert saved_slots[0].tire_size is None
     assert persisted_domains == ["DISCOVERY", "DISCOVERY"]
-
-
-async def _assert_direct_staggered_availability_enters_tool_loop(monkeypatch: pytest.MonkeyPatch) -> None:
-    saved_slots = []
-    executor_started = False
-
-    class FakeExecutor:
-        def __init__(self, *args, **kwargs) -> None:
-            nonlocal executor_started
-            executor_started = True
-            self.final_text = "How many tires should I check for each size?"
-            self.tool_calls = []
-
-        async def stream(self):
-            yield service.sse.token(self.final_text)
-
-    async def fake_route_request(*args, **kwargs):
-        return RouteDecision(
-            domain=Domain.TRANSACTION,
-            extra_domains=[Domain.DISCOVERY],
-            intents=["staggered_install_availability"],
-            slots_patch=SlotsPatch(
-                tire_size_front="245 40 r19",
-                tire_size_rear="275 35 r19",
-                tire_model="Ventus S2 AS",
-                region="Dongtan",
-                goal_type="store_with_stock",
-                pending_intent="stock",
-            ),
-        )
-
-    async def fake_save_slots(session_id, slots, user_id=None):
-        saved_slots.append(slots)
-
-    async def fake_load_slots(session_id):
-        return ConversationSlots()
-
-    async def fake_noop(*args, **kwargs):
-        return None
-
-    async def fake_verify_answer(answer, tool_calls, trace_config):
-        return answer
-
-    async def fake_chips(*args, **kwargs):
-        return []
-
-    async def forbidden_rich_event(*args, **kwargs):
-        raise AssertionError("read-only combined availability must not render datepick or another rich template")
-
-    monkeypatch.setattr(service, "route_request", fake_route_request)
-    monkeypatch.setattr(service, "load_slots", fake_load_slots)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains: [])
-    monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
-    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
-    monkeypatch.setattr(service, "save_slots", fake_save_slots)
-    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
-    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
-    monkeypatch.setattr(service.templates, "build_rich_data_event", forbidden_rich_event)
-    monkeypatch.setattr(service.composer, "suggest_quick_replies", fake_chips)
-    monkeypatch.setattr(service, "_flush_trace", lambda: None)
-
-    request = TStationChatRequest(
-        messages=[{"role": "user", "content": "Check both staggered sizes near Dongtan."}],
-        stream=True,
-        user_id="test-user",
-        session_id="staggered-availability-test",
-    )
-
-    events = []
-    async for line in service._run_turn(request, {}):
-        event = _parse_sse_event(line)
-        if event:
-            events.append(event)
-
-    assert executor_started is True
-    data_events = [event for event in events if event.get("type") == "data"]
-    assert [event.get("template") for event in data_events] == ["quickReply"]
-    assert [chip["label"] for chip in data_events[0]["data"]["quickReplies"]] == ["1개", "2개"]
-    assert saved_slots[0].tire_size is None
-    assert saved_slots[0].tire_size_front == "245/40R19"
-    assert saved_slots[0].tire_size_rear == "275/35R19"
 
 
 async def _assert_staggered_simultaneous_purchase_inquiry_does_not_run_tools(

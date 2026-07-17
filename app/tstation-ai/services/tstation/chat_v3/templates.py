@@ -1516,10 +1516,6 @@ def compact_answer_spacing(answer: str) -> str:
 def _has_confirmed_quantity(slots: ConversationSlots | None) -> bool:
     if slots is None:
         return False
-    if is_staggered_vehicle(slots) and not slots.tire_size:
-        axle_quantities = (slots.ord_qty_front, slots.ord_qty_rear)
-        if any(qty is not None for qty in axle_quantities):
-            return all(isinstance(qty, int) and qty > 0 for qty in axle_quantities)
     qty = slots.ord_qty
     return isinstance(qty, int) and qty > 0
 
@@ -1529,8 +1525,6 @@ def _is_quantity_required_flow(slots: ConversationSlots | None, decision: RouteD
         return False
     pending_intent = str(slots.pending_intent or "").strip()
     goal_type = str(slots.goal_type or "").strip()
-    if is_staggered_vehicle(slots) and (pending_intent == "stock" or goal_type == "store_with_stock"):
-        return True
     if not slots.goods_no:
         return False
     if pending_intent in {"order", "reservation", "cart"}:
