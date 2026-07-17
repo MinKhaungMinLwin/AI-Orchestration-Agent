@@ -67,6 +67,19 @@ class Domain(str, Enum):
     SUPPORT = "SUPPORT"
 
 
+class ToolProfile(str, Enum):
+    """Narrow toolset for a clear single-flow turn; FULL binds the whole domain."""
+
+    FULL = "full"
+    TRANSACTION_STORE = "transaction_store"
+    TRANSACTION_ORDER = "transaction_order"
+    TRANSACTION_COUPON = "transaction_coupon"
+    TRANSACTION_PRICE_STOCK = "transaction_price_stock"
+    DISCOVERY_SEARCH = "discovery_search"
+    DISCOVERY_RECOMMENDATION = "discovery_recommendation"
+    DISCOVERY_EVENT_CONTENT = "discovery_event_content"
+
+
 class RouteDecision(BaseModel):
     guard_id: GuardId = Field(
         default=GuardId.NONE,
@@ -91,6 +104,10 @@ class RouteDecision(BaseModel):
     intents: list[str] = Field(
         default_factory=list,
         description="이번 턴의 세부 의도 키워드 (자유 서술, 1~3개)",
+    )
+    tool_profile: ToolProfile = Field(
+        default=ToolProfile.FULL,
+        description="이번 턴의 단일 흐름이 명확할 때만 좁은 프로필, 애매하면 full (프롬프트 6번 규칙 참고)",
     )
     slots_patch: SlotsPatch = Field(
         default_factory=SlotsPatch,
