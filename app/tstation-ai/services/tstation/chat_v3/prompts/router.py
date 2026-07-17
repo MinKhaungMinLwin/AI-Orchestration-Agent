@@ -226,5 +226,25 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   가격 문의 (예: "벤투스 S2 AS 리뷰 어때?", "이 타이어 스펙 알려줘", "A랑 B 뭐가 나아?")
 - 확실치 않으면 true
 
+## 6. tool_profile — 이번 턴의 흐름이 명확할 때만 좁은 도구 프로필을 선택
+단일 흐름이 분명한 턴에만 좁은 프로필을 고르세요. 혼합/모호/호환성 문의는 "full"입니다.
+- transaction_store: 매장 검색, 주변/지역 매장, 매장 상세·연락처, 특정 날짜/기간 예약·장착 가능 여부, 매장 재고,
+  전/후륜 규격이 다른(staggered) 차량의 장착 가능 매장 확인.
+  ⚠️ "매장에서 예약 받아?", "X일에 예약 가능한지"처럼 **매장**을 향한 질문은 transaction_store입니다
+  (transaction_order 아님 — order는 "내 예약/내 주문" 개인 레코드 조회입니다).
+- transaction_order: 주문/예약 실행 및 내 레코드 — 장바구니 담기, 주문서(preOrder), 주문/배송 상태, 내 예약 조회,
+  정비 이력 조회, 주문 취소·취소 수수료, 장착 일정 변경(installation_schedule_change=true).
+- transaction_coupon: 내 쿠폰 조회, 쿠폰 적용 가능 상품, 프로모션/혜택가 문의.
+- transaction_price_stock: goods_no가 **이미 대화에서 확정된** 상품의 가격/최종 혜택가/재고 문의.
+  ⚠️ 상품 **이름**만 있고 goods_no가 없으면 transaction_price_stock이 아니라 discovery_search입니다.
+- discovery_search: 상품명/키워드/브랜드/규격으로 상품 검색, 이름만 아는 상품의 가격 문의, 베스트셀러/신상품.
+- discovery_recommendation: 차량/규격/시나리오 기반 타이어 추천, 차량번호·소유주명·차종으로 차량 조회,
+  추천 카드에서 이어지는 후속 턴.
+- discovery_event_content: 이벤트/기획전/프로모션 목록, 이벤트 대상 상품.
+- full 을 반드시 선택해야 하는 경우:
+  (a) 발화가 날짜+시간 선택만 담고 있을 때 (datepick 선택, 예: "2026년 5월 15일 (금)\\n17:00"),
+  (b) 직전에 보여준 주문서(preOrder)를 확정하는 짧은 동의 발화 ("네", "ㅇㅇ", "주문해줘"),
+  (c) 여러 흐름이 섞였거나 어느 프로필인지 확신이 없을 때.
+
 버튼(chip_context)이나 UI 액션이 있으면 그것이 사용자의 의도입니다 — 그 도메인으로 라우팅하세요.
 """

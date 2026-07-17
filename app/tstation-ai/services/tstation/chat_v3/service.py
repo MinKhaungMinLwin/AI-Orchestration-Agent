@@ -584,6 +584,7 @@ def _update_trace_monitoring(
     user_text: str | None = None,
     message_id: str | None = None,
     route_intents: list[str] | None = None,
+    route_profile: str = "",
     fallback_used: bool = False,
     qc_corrected: bool = False,
     qc_failed: bool = False,
@@ -613,6 +614,9 @@ def _update_trace_monitoring(
     if route_intents:
         trace_update["metadata"]["route_intents"] = route_intents
         trace_update["tags"].extend(f"intent:{monitoring._slug(intent)}" for intent in route_intents)
+    if route_profile:
+        trace_update["metadata"]["route_profile"] = route_profile
+        trace_update["tags"].append(f"profile:{monitoring._slug(route_profile)}")
     if trace_observation is not None:
         safe_trace_update(trace_observation, trace=True, **trace_update)
     if trace_id:
@@ -986,9 +990,10 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         vehicle_policy_state["slots"] = promoted if staggered_event else derived
         return bool(staggered_event)
 
+    route_profile = decision.tool_profile.value if decision else ""
     executor = ToolLoopExecutor(
         messages,
-        tools_for_domains(domains),
+        tools_for_domains(domains, tool_profile=route_profile),
         _tool_display_names(),
         stream_tokens=_tokens_enabled(),
         trace_config=_trace_config(
@@ -1038,6 +1043,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             user_text=user_text,
             message_id=message_id,
             route_intents=list(decision.intents if decision else []),
+            route_profile=route_profile,
             fallback_used=True,
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
@@ -1217,6 +1223,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         user_text=user_text,
         message_id=message_id,
         route_intents=list(decision.intents if decision else []),
+        route_profile=route_profile,
         fallback_used=fallback_used,
         qc_corrected=qc_corrected,
         qc_failed=qc_failed,
