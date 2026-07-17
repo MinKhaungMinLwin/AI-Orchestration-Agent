@@ -1103,7 +1103,6 @@ async def _assert_staggered_size_chip_selection_requests_quantity_before_tools(
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
     monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
     monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None: [])
-    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
     monkeypatch.setattr(service, "save_slots", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
