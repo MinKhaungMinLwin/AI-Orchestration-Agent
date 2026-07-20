@@ -304,6 +304,23 @@ def _booking_datetime(snapshot: dict[str, Any]) -> str | None:
     return f"{day[:4]}년 {day[4:6]}월 {day[6:8]}일 {hour}:00"
 
 
+def _car_info(snapshot: dict[str, Any]) -> str | None:
+    """Vehicle label for the preOrder card — car name + plate, matching V2.
+
+    The name is harvested into the ``car_model`` slot when the user picks a car
+    from the my-cars list (see slots/derive.py: car_nm/carName/carModel/
+    car_model_det all map to car_model). Reading only ``car_no`` here rendered a
+    bare plate, or "—" when no plate was set, which is the reported bug.
+    """
+    car_no = str(snapshot.get("car_no") or "").strip()
+    car_name = str(
+        snapshot.get("car_nm") or snapshot.get("car_name") or snapshot.get("car_model") or ""
+    ).strip()
+    if car_name and car_no:
+        return f"{car_name} ({car_no})"
+    return car_name or car_no or None
+
+
 def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: str) -> dict | None:
     goods_no = str(snapshot.get("goods_no") or "").strip()
     ord_qty = _as_int(snapshot.get("ord_qty"))
@@ -314,7 +331,7 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
 
     payload = PreOrderTemplate(
         orderInfo={
-            "carInfo": str(snapshot.get("car_no") or "").strip() or None,
+            "carInfo": _car_info(snapshot),
             "product": _product_label(snapshot),
             "quantity": ord_qty,
             "storeName": str(snapshot.get("shop_name") or "").strip() or None,

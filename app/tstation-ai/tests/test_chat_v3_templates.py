@@ -1925,3 +1925,44 @@ def test_get_store_schedule_tool_builds_datepick_without_llm(monkeypatch):
     assert event["data"]["selectedDate"] == 0
     assert event["data"]["metadata"]["slots"]["shop_id"] == "F00721"
     assert event["data"]["metadata"]["ui_action"]["fills_slot"] == "requested_cal_day,rsv_hour"
+
+
+def test_preorder_card_shows_car_name_from_my_cars_selection():
+    # Reported bug: 차량정보 rendered "—" (or a bare plate) because the builder read
+    # only car_no. The name picked from the my-cars list lands in the car_model slot
+    # (slots/derive.py maps car_nm/carName/carModel/car_model_det -> car_model).
+    event = templates.build_preorder_data_event(
+        "주문 정보를 확인해 주세요.",
+        {
+            "goods_no": "G000000332840",
+            "ord_qty": 4,
+            "car_no": "14다5499",
+            "car_model": "뉴 투싼 iX",
+            "shop_name": "티스테이션 판교점",
+        },
+        source="test",
+    )
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["carInfo"] == "뉴 투싼 iX (14다5499)"
+
+
+def test_preorder_car_info_falls_back_across_name_and_plate():
+    def car_info(**snapshot):
+        event = templates.build_preorder_data_event(
+            "주문 정보를 확인해 주세요.",
+            {"goods_no": "G1", "ord_qty": 1, **snapshot},
+            source="test",
+        )
+        assert event is not None
+        # None is dropped from the serialized payload, so an absent key is the
+        # "unknown vehicle" case the FE renders as "—".
+        return event["data"]["orderInfo"].get("carInfo")
+
+    # Tool-output key spellings still resolve to the name.
+    assert car_info(car_nm="쏘나타", car_no="12가3456") == "쏘나타 (12가3456)"
+    # Name only / plate only still render something useful.
+    assert car_info(car_model="뉴 투싼 iX") == "뉴 투싼 iX"
+    assert car_info(car_no="14다5499") == "14다5499"
+    # Nothing known -> None, so the FE renders its "—" placeholder.
+    assert car_info() is None
