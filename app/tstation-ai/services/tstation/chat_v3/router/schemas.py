@@ -136,6 +136,14 @@ class RouteDecision(BaseModel):
             "preOrder/order confirmation. Do not set this for questions about why an order attempt failed."
         ),
     )
+    runflat_mixed_install_policy: bool = Field(
+        default=False,
+        description=(
+            "True when the current turn asks whether a runflat-tire vehicle may switch to (or mix in) "
+            "regular tires, including replacing only 2 of the 4 tires. See ROUTER_PROMPT's static FAQ "
+            "policy-key section for the exact criteria."
+        ),
+    )
     needs_selection_card: bool = Field(
         default=True,
         description=(

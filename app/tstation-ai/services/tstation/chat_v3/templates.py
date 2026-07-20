@@ -8,7 +8,6 @@ None and the turn falls back to the plain quickReply event.
 
 import json
 import logging
-import re
 from typing import Any
 
 from pydantic import BaseModel, Field, create_model
@@ -509,18 +508,61 @@ def _should_skip_product_source(
     )
 
 
-def _answer_requests_store_selection(answer: str) -> bool:
-    text = str(answer or "").replace(" ", "")
-    if not any(anchor in text for anchor in ("장착매장", "매장", "지역", "장소", "근처", "지점")):
-        return False
-    return any(action in text for action in ("알려", "선택", "골라", "말씀", "입력", "정해"))
+class _AnswerUiSignals(BaseModel):
+    requests_store_selection: bool = Field(
+        description="이 챗봇 답변이 사용자에게 장착 매장 또는 지역을 선택하거나 알려달라고 요청하고 있는지 여부"
+    )
+    requests_datepick: bool = Field(
+        description="이 챗봇 답변이 사용자에게 설치 희망 날짜 또는 시간을 선택하거나 알려달라고 요청하고 있는지 여부"
+    )
+    asks_quantity: bool = Field(
+        description="이 챗봇 답변이 사용자에게 주문/구매 수량을 선택하거나 알려달라고 요청하고 있는지 여부"
+    )
+    states_staggered_max_two: bool = Field(
+        description="이 챗봇 답변이 앞/뒤(전/후륜) 규격이 다른 차량은 축당 최대 2개까지만 주문 가능하다고 안내하고 있는지 여부"
+    )
 
 
-def _answer_requests_datepick(answer: str) -> bool:
-    text = str(answer or "").replace(" ", "")
-    if not any(anchor in text for anchor in ("날짜", "시간", "일정", "방문")):
-        return False
-    return any(action in text for action in ("알려", "선택", "골라", "말씀", "입력", "정해"))
+_FALLBACK_ANSWER_UI_SIGNALS = _AnswerUiSignals(
+    requests_store_selection=False,
+    requests_datepick=False,
+    asks_quantity=False,
+    states_staggered_max_two=False,
+)
+
+
+class AnswerUiIntentCache:
+    def __init__(self, answer: str, trace_config: dict | None = None):
+        self._answer = answer
+        self._trace_config = trace_config
+        self._signals: _AnswerUiSignals | None = None
+
+    async def _load(self) -> _AnswerUiSignals:
+        if self._signals is not None:
+            return self._signals
+        llm = get_router_llm().with_structured_output(_AnswerUiSignals, method="function_calling")
+        messages = [("user", f"## 챗봇 답변\n{str(self._answer or '')[:1000]}")]
+        try:
+            result = (
+                await llm.ainvoke(messages, config=self._trace_config)
+                if self._trace_config
+                else await llm.ainvoke(messages)
+            )
+            self._signals = _AnswerUiSignals.model_validate(result, from_attributes=True)
+        except Exception:
+            logger.exception("[CHAT_V3] answer UI-intent classification failed")
+            self._signals = _FALLBACK_ANSWER_UI_SIGNALS
+        return self._signals
+
+    async def requests_store_selection(self) -> bool:
+        return bool((await self._load()).requests_store_selection)
+
+    async def requests_datepick(self) -> bool:
+        return bool((await self._load()).requests_datepick)
+
+    async def quantity_signals(self) -> tuple[bool, bool]:
+        signals = await self._load()
+        return bool(signals.asks_quantity), bool(signals.states_staggered_max_two)
 
 
 def _has_product_size_quantity(slots: ConversationSlots | None) -> bool:
@@ -891,11 +933,13 @@ _DATEPICK_CONTEXT_TOOLS = frozenset({
 _MAX_CONTEXT_FALLBACK_ITEMS = 3
 
 
-def build_datepick_fallback(
+async def build_datepick_fallback(
     answer: str,
     slots: ConversationSlots | None,
     tool_calls: list[dict],
     context_items: list[dict],
+    trace_config: dict | None = None,
+    answer_ui_intent: AnswerUiIntentCache | None = None,
 ) -> dict | None:
     """Datepick built from PREVIOUS-turn tool context when this turn reused it.
 
@@ -906,9 +950,10 @@ def build_datepick_fallback(
     """
     if any((call.get("name") or "") in _DATEPICK_CONTEXT_TOOLS for call in tool_calls):
         return None  # fresh data this turn — the normal rich-template path owns it
-    if not _answer_requests_datepick(answer):
-        return None
     if slots is None or not (slots.shop_id or slots.shop_name):
+        return None
+    ui_intent = answer_ui_intent or AnswerUiIntentCache(answer, trace_config)
+    if not await ui_intent.requests_datepick():
         return None
     for item in context_items[:_MAX_CONTEXT_FALLBACK_ITEMS]:
         tool = str(item.get("tool") or "")
@@ -1666,34 +1711,22 @@ def ensure_quantity_options(answer: str, slots: ConversationSlots | None, decisi
 # 답변이 수량 입력을 요청하는데 slot 기반 booking_flow_hint 가 매장/지역 chip 을
 # 지시하면 answer 와 chip 이 어긋난다 (예: "수량이 필요해요" + 매장 후보 chip).
 # 사용자에게 보이는 answer 텍스트를 기준으로 수량 chip 을 결정적으로 강제한다.
-_QTY_QUESTION_RE = re.compile(
-    r"주문\s*수량"
-    r"|몇\s*개\s*(?:주문|구매|확인|예약|받|살|쓸|장바구니|결제|보내|들여|선택|필요)"
-    r"|수량(?:을\s*(?:알려|선택|입력|말씀)|이\s*(?:어떻|필요)|은\s*몇)"
-    r"|수량\s*[:：]"
-    r"|\d\s*개로\s*(?:장바구니에\s*)?(?:담아|주문|진행)[^.\n]{0,12}까요"
-)
-# 앞/뒤 규격이 다른 차량은 축당 최대 2개까지만 담을 수 있다.
-_STAGGERED_MAX_TWO_RE = re.compile(
-    r"(?:앞/뒤|전/후륜|전륜.*후륜|앞.*뒤|규격.*달라|사이즈.*달라).{0,80}최대\s*2\s*개"
-    r"|최대\s*2\s*개.{0,80}(?:앞/뒤|전/후륜|전륜.*후륜|앞.*뒤|규격.*달라|사이즈.*달라)",
-    re.DOTALL,
-)
-
-
-def enforce_quantity_chips(
+async def enforce_quantity_chips(
     answer: str,
     chips: list[dict],
     slots: ConversationSlots | None = None,
+    trace_config: dict | None = None,
+    answer_ui_intent: AnswerUiIntentCache | None = None,
 ) -> list[dict]:
     """answer 가 수량을 묻고 있으면 차량 적합 상태에 맞는 수량 chip 으로 교체."""
     if _has_confirmed_quantity(slots):
         return chips
-    text = str(answer or "")
-    if not _QTY_QUESTION_RE.search(text):
+    ui_intent = answer_ui_intent or AnswerUiIntentCache(answer, trace_config)
+    asks_quantity, states_staggered_max_two = await ui_intent.quantity_signals()
+    if not asks_quantity:
         return chips
     staggered = bool(slots is not None and is_staggered_vehicle(slots))
-    limit = STAGGERED_MAX_ORD_QTY if staggered or _STAGGERED_MAX_TWO_RE.search(text) else 4
+    limit = STAGGERED_MAX_ORD_QTY if staggered or states_staggered_max_two else 4
     return [dict(chip) for chip in _QUANTITY_QUICK_REPLIES[:limit]]
 
 
@@ -2008,6 +2041,7 @@ async def build_rich_data_event(
     previous_slots: ConversationSlots | None = None,
     allow_selection_cards: bool = True,
     user_text: str = "",
+    answer_ui_intent: AnswerUiIntentCache | None = None,
 ) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
     static_faq_event = _static_faq_policy_event(tool_calls)
@@ -2057,7 +2091,7 @@ async def build_rich_data_event(
         template_name == "product"
         and _is_booking_location_context(slots)
         and not slots.shop_id
-        and _answer_requests_store_selection(answer)
+        and await (answer_ui_intent or AnswerUiIntentCache(answer, trace_config)).requests_store_selection()
     ):
         logger.info("[CHAT_V3] product template skipped — answer is asking for store/location selection")
         return None
