@@ -84,8 +84,3 @@ async def persist_turn_context(
         )
     except Exception:
         logger.exception("[CHAT_V3] failed to persist turn context for %s", session_id)
-
-
-async def load_tool_context_block(session_id: str) -> str | None:
-    items = await load_tool_context(session_id)
-    return tool_context_block(items)

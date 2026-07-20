@@ -971,7 +971,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     slots_block = slots_context_block(slots)
     if slots_block:
         extra_context.append(slots_block)
-    tool_ctx_block = await memory.load_tool_context_block(request.session_id)
+    tool_ctx_items = await memory.load_tool_context(request.session_id) or []
+    tool_ctx_block = memory.tool_context_block(tool_ctx_items)
     if tool_ctx_block:
         extra_context.append(tool_ctx_block)
     messages = context.build_messages(request, system_prompt=SYSTEM_PROMPT, extra_context=extra_context)
@@ -1148,6 +1149,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             user_text=user_text,
         )
     )
+    if rich_event is None and preorder_event is None and current_events_event is None:
+        rich_event = templates.build_datepick_fallback(answer, slots, executor.tool_calls, tool_ctx_items)
     quantity_chips = [] if rich_event or preorder_event else templates.quantity_quick_replies(slots, decision)
     if quantity_chips:
         answer = templates.ensure_quantity_options(answer, slots, decision)

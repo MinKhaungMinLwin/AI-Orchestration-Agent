@@ -516,6 +516,13 @@ def _answer_requests_store_selection(answer: str) -> bool:
     return any(action in text for action in ("알려", "선택", "골라", "말씀", "입력", "정해"))
 
 
+def _answer_requests_datepick(answer: str) -> bool:
+    text = str(answer or "").replace(" ", "")
+    if not any(anchor in text for anchor in ("날짜", "시간", "일정", "방문")):
+        return False
+    return any(action in text for action in ("알려", "선택", "골라", "말씀", "입력", "정해"))
+
+
 def _has_product_size_quantity(slots: ConversationSlots | None) -> bool:
     if slots is None:
         return False
@@ -791,6 +798,25 @@ def _get_store_schedule_datepick_event(answer: str, call: dict, slots: Conversat
     }
 
 
+def _match_availability_store(stores: list, slots: ConversationSlots | None) -> dict | None:
+    """Store the user actually selected (by slot shop_id/shop_name), else the first with slots."""
+    with_slots = [store for store in stores if isinstance(store, dict) and store.get("slots")]
+    if not with_slots:
+        return None
+    shop_id = str(getattr(slots, "shop_id", "") or "")
+    if shop_id:
+        for store in with_slots:
+            if _get_str(store, "shop_id", "shopId") == shop_id:
+                return store
+    shop_name = str(getattr(slots, "shop_name", "") or "").replace(" ", "")
+    if shop_name:
+        for store in with_slots:
+            name = _get_str(store, "shop_nm", "shopName", "storeName").replace(" ", "")
+            if name and (shop_name in name or name in shop_name):
+                return store
+    return with_slots[0]
+
+
 def _get_install_availability_datepick_event(
     answer: str,
     call: dict,
@@ -805,7 +831,7 @@ def _get_install_availability_datepick_event(
             for item in payload.get("items", [])
             if isinstance(item, dict) and isinstance(item.get("slots"), list) and item.get("slots")
         ]
-    first_store = next((store for store in stores if isinstance(store, dict) and store.get("slots")), None)
+    first_store = _match_availability_store(stores, slots)
     if not first_store:
         return None
 
@@ -854,6 +880,50 @@ def _get_install_availability_datepick_event(
         "source_tool": call["name"],
         "assistant_response_source": "code_chat_v3_install_availability",
     }
+
+
+_DATEPICK_CONTEXT_TOOLS = frozenset({
+    "get_store_install_availability_tool",
+    "get_store_schedule_tool",
+})
+# Keep in sync with memory._MAX_INJECT_ITEMS — only the items the model actually
+# saw in its prompt can be the source of a reused-schedule answer.
+_MAX_CONTEXT_FALLBACK_ITEMS = 3
+
+
+def build_datepick_fallback(
+    answer: str,
+    slots: ConversationSlots | None,
+    tool_calls: list[dict],
+    context_items: list[dict],
+) -> dict | None:
+    """Datepick built from PREVIOUS-turn tool context when this turn reused it.
+
+    The tool loop may answer a store-selection turn straight from the injected
+    previous-turn availability data (0 tool calls), but rich templates only read
+    this turn's tool_calls — without this fallback the schedule text ships as a
+    plain quickReply and the user has nothing to tap.
+    """
+    if any((call.get("name") or "") in _DATEPICK_CONTEXT_TOOLS for call in tool_calls):
+        return None  # fresh data this turn — the normal rich-template path owns it
+    if not _answer_requests_datepick(answer):
+        return None
+    if slots is None or not (slots.shop_id or slots.shop_name):
+        return None
+    for item in context_items[:_MAX_CONTEXT_FALLBACK_ITEMS]:
+        tool = str(item.get("tool") or "")
+        data = item.get("data")
+        if tool not in _DATEPICK_CONTEXT_TOOLS or not isinstance(data, dict):
+            continue
+        call = {"name": tool, "args": item.get("input") or {}, "output": data}
+        if tool == "get_store_schedule_tool":
+            event = _get_store_schedule_datepick_event(answer, call, slots)
+        else:
+            event = _get_install_availability_datepick_event(answer, call, slots)
+        if event is not None:
+            event["assistant_response_source"] = "chat_v3_tool_ctx_fallback_datepick"
+            return event
+    return None
 
 
 def _latest_tool_output(tool_calls: list[dict], tool_name: str) -> dict[str, Any]:

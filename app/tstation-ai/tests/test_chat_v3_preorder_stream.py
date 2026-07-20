@@ -1190,7 +1190,7 @@ async def _assert_staggered_region_followup_bypasses_simultaneous_purchase_guard
     monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
     monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
     monkeypatch.setattr(service, "save_slots", fake_save_slots)
-    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service.templates, "build_rich_data_event", fake_noop)
     monkeypatch.setattr(service.composer, "suggest_quick_replies", fake_chips)
@@ -1326,7 +1326,7 @@ async def _assert_cart_turn_goes_through_executor(
     monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None: [])
     monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
     monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
-    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
 
@@ -1397,7 +1397,7 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
     monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
     monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
     monkeypatch.setattr(service, "save_slots", fake_noop)
-    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
 

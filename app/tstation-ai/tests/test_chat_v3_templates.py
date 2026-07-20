@@ -1408,7 +1408,6 @@ def test_ready_preorder_takes_priority_over_generic_price_template(monkeypatch):
     monkeypatch.setattr(service.templates, "build_rich_data_event", fake_build_rich_data_event)
     monkeypatch.setattr(service, "save_slots", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
-    monkeypatch.setattr(service.memory, "load_tool_context_block", fake_noop)
     monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
 
