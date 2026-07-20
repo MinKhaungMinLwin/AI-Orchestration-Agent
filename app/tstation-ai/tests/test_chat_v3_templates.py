@@ -1966,3 +1966,26 @@ def test_preorder_car_info_falls_back_across_name_and_plate():
     assert car_info(car_no="14다5499") == "14다5499"
     # Nothing known -> None, so the FE renders its "—" placeholder.
     assert car_info() is None
+
+
+def test_preorder_car_info_never_renders_a_product_code_as_the_vehicle():
+    # Some snapshots carry goods_no in car_no. The plate must be dropped so a
+    # product code never surfaces as 차량정보 (guard from PR #457), while the
+    # car name still renders.
+    event = templates.build_preorder_data_event(
+        "주문 정보를 확인해 주세요.",
+        {
+            "goods_no": "G000000332840",
+            "ord_qty": 4,
+            "car_no": "G000000332840",
+            "car_model": "뉴 투싼 iX",
+        },
+        source="test",
+    )
+
+    assert event is not None
+    order_info = event["data"]["orderInfo"]
+    assert order_info["carInfo"] == "뉴 투싼 iX"
+    assert "G000000332840" not in str(order_info["carInfo"])
+    # metadata.carNo is sanitized by the same guard.
+    assert event["data"]["metadata"].get("carNo") is None
