@@ -315,10 +315,13 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
         return None
 
     tire_size = str(snapshot.get("tire_size") or "").strip() or None
+    car_no = str(snapshot.get("car_no") or "").strip() or None
+    if car_no == goods_no:
+        car_no = None
 
     payload = PreOrderTemplate(
         orderInfo={
-            "carInfo": str(snapshot.get("car_no") or "").strip() or None,
+            "carInfo": car_no,
             "product": _product_label(snapshot),
             "quantity": ord_qty,
             "storeName": str(snapshot.get("shop_name") or "").strip() or None,
@@ -346,7 +349,7 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
             "requested_cal_day": str(snapshot.get("requested_cal_day") or "").strip() or None,
             "rsvHour": str(snapshot.get("rsv_hour") or "").strip() or None,
             "rsv_hour": str(snapshot.get("rsv_hour") or "").strip() or None,
-            "carNo": str(snapshot.get("car_no") or "").strip() or None,
+            "carNo": car_no,
             "carLncCd": str(snapshot.get("car_lnc_cd") or "").strip() or None,
             "source": source,
         },
