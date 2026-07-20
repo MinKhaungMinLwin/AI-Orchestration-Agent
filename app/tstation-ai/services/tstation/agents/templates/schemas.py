@@ -481,7 +481,7 @@ class OrderInfo(BaseModel):
     # LLM이 cart-save 단계에서 null을 emit해 schema validation 실패 → silent
     # terminator(\n\n) + fallback chips만 사용자에게 보여 cart 진행이 막힌다.
     carInfo: str | None = None
-    product: str = Field(..., min_length=1)
+    product: str | None = None
     quantity: int = Field(..., ge=0)
     storeName: str | None = None
     bookingDateTime: str | None = None

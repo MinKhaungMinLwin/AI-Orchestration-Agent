@@ -183,6 +183,7 @@ def _set_if_present(slots: ConversationSlots, field: str, value: Any) -> None:
 
 
 _PRICE_STALE_FIELDS = ("payment_amount", "price_basis", "price_source_tool", "price_facts", "coupon_facts")
+_PRODUCT_LABEL_STALE_FIELDS = ("tire_model", "pending_product_name")
 
 
 def _set_product_slot(slots: ConversationSlots, field: str, value: Any) -> None:
@@ -194,6 +195,9 @@ def _set_product_slot(slots: ConversationSlots, field: str, value: Any) -> None:
     if changed:
         for stale_field in _PRICE_STALE_FIELDS:
             setattr(slots, stale_field, None)
+        if field == "goods_no":
+            for stale_field in _PRODUCT_LABEL_STALE_FIELDS:
+                setattr(slots, stale_field, None)
 
 
 def _single_product(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -274,7 +278,7 @@ def _extract_payment_amount(data: dict[str, Any], ord_qty: int | None) -> int | 
     return (unit + wage) * ord_qty
 
 
-def _product_label(snapshot: dict[str, Any]) -> str:
+def _product_label(snapshot: dict[str, Any]) -> str | None:
     product = ""
     for field in _PRODUCT_FIELDS:
         text = str(snapshot.get(field) or "").strip()
@@ -284,7 +288,7 @@ def _product_label(snapshot: dict[str, Any]) -> str:
     tire_size = str(snapshot.get("tire_size") or "").strip()
     if product and tire_size and tire_size not in product:
         return f"{product} {tire_size}"
-    return product or tire_size or str(snapshot.get("goods_no") or "").strip()
+    return product or tire_size or None
 
 
 def _with_slot_fallback(snapshot: dict[str, Any], slots: ConversationSlots | None) -> dict[str, Any]:
@@ -327,7 +331,9 @@ def build_preorder_data_event(answer: str, snapshot: dict[str, Any], *, source: 
             "goodsId": goods_no,
             "goodsNo": goods_no,
             "goods_no": goods_no,
-            "productName": str(snapshot.get("product_name") or snapshot.get("pending_product_name") or "").strip() or None,
+            "productName": str(
+                snapshot.get("product_name") or snapshot.get("pending_product_name") or snapshot.get("tire_model") or ""
+            ).strip() or None,
             "tireSize": tire_size,
             "tire_size": tire_size,
             "quantity": ord_qty,
@@ -436,6 +442,13 @@ def harvest_order_slots(slots: ConversationSlots, tool_calls: list[dict]) -> Con
                 _set_if_present(slots, "tire_model", item.get("goods_nm"))
                 _set_if_present(slots, "pending_product_name", item.get("goods_nm"))
                 _set_product_slot(slots, "tire_size", normalize_tire_size(str(item.get("tire_size_1") or "")))
+
+        if name == "get_product_description_tool":
+            detail = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+            if str(detail.get("goods_no") or "").strip() == str(slots.goods_no or "").strip():
+                _set_if_present(slots, "tire_model", detail.get("goods_nm"))
+                _set_if_present(slots, "pending_product_name", detail.get("goods_nm"))
+                _set_product_slot(slots, "tire_size", normalize_tire_size(str(detail.get("tire_size_1") or "")))
 
         if name in _STORE_SEARCH_TOOLS:
             store = _single_store(parsed)
@@ -1359,6 +1372,8 @@ def _normalize_product_selection_payload(payload: BaseModel, slots: Conversation
             continue
         goods_no = str(meta.goodsId or meta.goodsNo or meta.goods_no or "").strip()
         product_name = str(getattr(product, "titleProductName", None) or getattr(product, "title", None) or "").strip()
+        if product_name == goods_no:
+            product_name = ""
         tire_size = str(getattr(product, "titleTires", None) or getattr(product, "tires", None) or "").strip()
         slots_payload = {"goods_no": goods_no}
         if product_name:

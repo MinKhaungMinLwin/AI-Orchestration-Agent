@@ -2533,6 +2533,8 @@ def present_order_preview_tool(
     주문(place_order): goods_no·수량·매장·희망일정·결제금액이 모두 확정된 뒤에만 호출.
     장바구니(add_to_cart): goods_no·수량만 확정되면 호출하고 is_ready_to_add_to_cart=True 로 설정.
     값은 이전 도구 결과/대화에서 확정된 것만 넣고 지어내지 말 것.
+    product_name·tire_size 는 이전 도구 결과에 있으면 반드시 함께 전달하라 — 카드의 구매상품 표시에
+    사용되며, 없으면 상품명 없이 카드가 노출된다 (내부 상품코드 goods_no 는 절대 표시되지 않는다).
     """
     return {
         "status": "ok",
