@@ -39,20 +39,7 @@ _STATIC_FAQ_GUARD_INTENTS: dict[GuardId, str] = {
     GuardId.REGIONAL_PRICE_POLICY: "regional_price_policy",
 }
 _PICKUP_FAQ_INTENTS = {"pickup_status", "pickup_info"}
-_RUNFLAT_TERMS = ("런플랫", "런 플랫", "runflat", "run flat", "run-flat")
-_RUNFLAT_MIXED_INSTALL_TERMS = (
-    "일반 타이어",
-    "일반타이어",
-    "앞바퀴",
-    "뒷바퀴",
-    "2짝",
-    "두짝",
-    "2개",
-    "두 개",
-    "혼용",
-    "바꿔도",
-    "교체",
-)
+_RUNFLAT_MIXED_INSTALL_INTENT = "runflat_mixed_install_policy"
 
 
 def _router_input(request: TStationChatRequest, known_slots: ConversationSlots | None = None) -> str:
@@ -262,20 +249,21 @@ def _move_static_faq_guard_to_intent(decision: RouteDecision) -> RouteDecision:
     return decision
 
 
-def _apply_runflat_mixed_install_policy(decision: RouteDecision, request: TStationChatRequest) -> RouteDecision:
-    text = _last_user_text(request).lower()
-    has_runflat = any(term in text for term in _RUNFLAT_TERMS)
-    has_mixed_install = any(term in text for term in _RUNFLAT_MIXED_INSTALL_TERMS)
-    if not has_runflat or not has_mixed_install:
+def _apply_runflat_mixed_install_policy(decision: RouteDecision) -> RouteDecision:
+    """Normalize routing when the router flagged this turn as the runflat mixed-install
+    FAQ (RouteDecision.runflat_mixed_install_policy — set by the model itself in the
+    same call, per ROUTER_PROMPT's static FAQ policy-key section). No independent
+    keyword detection needed here.
+    """
+    if not decision.runflat_mixed_install_policy:
         return decision
-    policy_key = "runflat_mixed_install_policy"
-    if policy_key not in decision.intents:
+    if _RUNFLAT_MIXED_INSTALL_INTENT not in decision.intents:
         logger.info(
             "[CHAT_V3] applied runflat mixed-install static FAQ policy over guard=%s intents=%s",
             decision.guard_id.value,
             decision.intents,
         )
-        decision.intents.insert(0, policy_key)
+        decision.intents.insert(0, _RUNFLAT_MIXED_INSTALL_INTENT)
     decision.guard_id = GuardId.NONE
     decision.domain = Domain.SUPPORT
     decision.extra_domains = []
@@ -315,7 +303,7 @@ async def route_request(
         decision = _decide_reservation_date_guard(decision, request)
         decision = _clear_non_target_unsupported_brand_guard(decision)
         decision = _move_static_faq_guard_to_intent(decision)
-        decision = _apply_runflat_mixed_install_policy(decision, request)
+        decision = _apply_runflat_mixed_install_policy(decision)
         decision = _apply_late_night_store_hours_policy(decision, request)
         decision = _apply_pickup_service_policy(decision, request)
         decision = _apply_delivery_policy_guard(decision, request)

@@ -1128,6 +1128,20 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         token_events = []
 
     chips: list[dict] = []
+    # Shared across the 3 calls below: a turn that cascades through several template
+    # fallbacks (product skip → datepick fallback → quickReply) asks the model this
+    # at most once, not once per fallback stage.
+    answer_ui_intent = templates.AnswerUiIntentCache(
+        answer,
+        trace_config=_trace_config(
+            request,
+            run_name="chat_v3_answer_ui_intent",
+            prompt_name="chat_v3_answer_ui_intent",
+            tags=["template"],
+            parent_span_id=parent_span_id,
+            usage_tracker=usage_tracker,
+        ),
+    )
     preorder_event = templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
@@ -1147,10 +1161,17 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             previous_slots=slots_before_harvest,
             allow_selection_cards=_allow_selection_cards(decision),
             user_text=user_text,
+            answer_ui_intent=answer_ui_intent,
         )
     )
     if rich_event is None and preorder_event is None and current_events_event is None:
-        rich_event = templates.build_datepick_fallback(answer, slots, executor.tool_calls, tool_ctx_items)
+        rich_event = await templates.build_datepick_fallback(
+            answer,
+            slots,
+            executor.tool_calls,
+            tool_ctx_items,
+            answer_ui_intent=answer_ui_intent,
+        )
     quantity_chips = [] if rich_event or preorder_event else templates.quantity_quick_replies(slots, decision)
     if quantity_chips:
         answer = templates.ensure_quantity_options(answer, slots, decision)
@@ -1190,7 +1211,12 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             )
         # booking_flow_hint 는 slot 기준이라 answer 가 수량을 묻는 turn 에서도 매장
         # chip 을 지시할 수 있다 — answer 텍스트 기준으로 수량 chip 을 강제한다.
-        chips = templates.enforce_quantity_chips(answer, chips, slots)
+        chips = await templates.enforce_quantity_chips(
+            answer,
+            chips,
+            slots,
+            answer_ui_intent=answer_ui_intent,
+        )
         quick_reply_event = {
             "type": "data",
             "template": "quickReply",

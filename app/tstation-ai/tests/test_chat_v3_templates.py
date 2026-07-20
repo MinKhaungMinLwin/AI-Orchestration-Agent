@@ -224,6 +224,29 @@ class _PoisonRouterLLM:
         raise AssertionError("get_router_llm() should not be called for the deterministic product path")
 
 
+class _FakeQuantitySignalLLM:
+    def __init__(self, asks_quantity: bool, states_staggered_max_two: bool = False):
+        self._asks_quantity = asks_quantity
+        self._states_staggered_max_two = states_staggered_max_two
+
+    async def ainvoke(self, messages):
+        return templates._AnswerUiSignals(  # noqa: SLF001
+            requests_store_selection=False,
+            requests_datepick=False,
+            asks_quantity=self._asks_quantity,
+            states_staggered_max_two=self._states_staggered_max_two,
+        )
+
+
+class _FakeQuantitySignalRouterLLM:
+    def __init__(self, asks_quantity: bool, states_staggered_max_two: bool = False):
+        self._asks_quantity = asks_quantity
+        self._states_staggered_max_two = states_staggered_max_two
+
+    def with_structured_output(self, model, method):
+        return _FakeQuantitySignalLLM(self._asks_quantity, self._states_staggered_max_two)
+
+
 def test_plain_store_search_does_not_emit_location_template(monkeypatch):
     monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
     tool_output = {
@@ -1100,7 +1123,8 @@ def test_staggered_vehicle_quantity_options_text_lists_one_and_two():
     assert "3개" not in answer
 
 
-def test_enforce_quantity_chips_replaces_off_topic_chips_when_answer_asks_quantity():
+def test_enforce_quantity_chips_replaces_off_topic_chips_when_answer_asks_quantity(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeQuantitySignalRouterLLM(asks_quantity=True))
     answer = (
         "확인했습니다. **벤투스 S2 AS 245/45R18** 상품이 있습니다.\n"
         "장바구니에 담으려면 수량이 필요해요.\n"
@@ -1111,21 +1135,29 @@ def test_enforce_quantity_chips_replaces_off_topic_chips_when_answer_asks_quanti
         {"label": "부산 해운대점", "domain": "TRANSACTION"},
     ]
 
-    chips = templates.enforce_quantity_chips(answer, store_chips)
+    chips = asyncio.run(templates.enforce_quantity_chips(answer, store_chips))
 
     assert [chip["label"] for chip in chips] == ["1개", "2개", "3개", "4개"]
 
 
-def test_enforce_quantity_chips_keeps_chips_when_answer_is_not_asking_quantity():
+def test_enforce_quantity_chips_keeps_chips_when_answer_is_not_asking_quantity(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeQuantitySignalRouterLLM(asks_quantity=False))
     chips = [{"label": "장바구니 확인", "domain": "TRANSACTION"}]
 
-    assert templates.enforce_quantity_chips("이미 장바구니에 담겨있는 상품이에요.", chips) is chips
+    assert asyncio.run(templates.enforce_quantity_chips("이미 장바구니에 담겨있는 상품이에요.", chips)) is chips
     assert (
-        templates.enforce_quantity_chips("수량 4개로 확정했어요. 이제 장착할 매장을 알려주세요.", chips) is chips
+        asyncio.run(
+            templates.enforce_quantity_chips("수량 4개로 확정했어요. 이제 장착할 매장을 알려주세요.", chips)
+        )
+        is chips
     )
 
 
-def test_enforce_quantity_chips_keeps_region_chips_when_quantity_is_confirmed():
+def test_enforce_quantity_chips_keeps_region_chips_when_quantity_is_confirmed(monkeypatch):
+    def fail_if_llm_used():
+        raise AssertionError("enforce_quantity_chips should not call the LLM once quantity is already confirmed")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_if_llm_used)
     slots = ConversationSlots(
         goods_no="G000000317719",
         tire_size="255/35R19",
@@ -1141,20 +1173,30 @@ def test_enforce_quantity_chips_keeps_region_chips_when_quantity_is_confirmed():
     ]
     answer = "- 수량: 2개\n장착 예약까지 진행하시려면 원하시는 지역이나 매장명을 알려주세요."
 
-    chips = templates.enforce_quantity_chips(answer, region_chips, slots)
+    chips = asyncio.run(templates.enforce_quantity_chips(answer, region_chips, slots))
 
     assert chips is region_chips
 
 
-def test_enforce_quantity_chips_limits_to_two_for_staggered_fitment():
+def test_enforce_quantity_chips_limits_to_two_for_staggered_fitment(monkeypatch):
+    monkeypatch.setattr(
+        templates,
+        "get_router_llm",
+        lambda: _FakeQuantitySignalRouterLLM(asks_quantity=True, states_staggered_max_two=True),
+    )
     answer = "앞/뒤 규격이 달라 축당 최대 2개까지 가능해요. 몇 개 주문하시겠어요?"
 
-    chips = templates.enforce_quantity_chips(answer, [])
+    chips = asyncio.run(templates.enforce_quantity_chips(answer, []))
 
     assert [chip["label"] for chip in chips] == ["1개", "2개"]
 
 
-def test_enforce_quantity_chips_uses_staggered_slots_when_answer_omits_limit():
+def test_enforce_quantity_chips_uses_staggered_slots_when_answer_omits_limit(monkeypatch):
+    monkeypatch.setattr(
+        templates,
+        "get_router_llm",
+        lambda: _FakeQuantitySignalRouterLLM(asks_quantity=True, states_staggered_max_two=False),
+    )
     slots = ConversationSlots(
         goods_no="G000000319580",
         tire_size="255/35R19",
@@ -1169,7 +1211,7 @@ def test_enforce_quantity_chips_uses_staggered_slots_when_answer_omits_limit():
         {"label": "4개", "domain": "TRANSACTION"},
     ]
 
-    chips = templates.enforce_quantity_chips(answer, composer_chips, slots)
+    chips = asyncio.run(templates.enforce_quantity_chips(answer, composer_chips, slots))
 
     assert [chip["label"] for chip in chips] == ["1개", "2개"]
 
@@ -1472,10 +1514,22 @@ def test_transaction_preview_source_maps_to_location_not_preorder():
 
 
 def test_product_template_is_skipped_when_answer_asks_for_store_selection(monkeypatch):
-    def fail_get_router_llm():
-        raise AssertionError("product relevance LLM should not run when answer asks for store selection")
+    class _FakeStoreSelectionSignalLLM:
+        async def ainvoke(self, messages):
+            return templates._AnswerUiSignals(  # noqa: SLF001
+                requests_store_selection=True,
+                requests_datepick=False,
+                asks_quantity=False,
+                states_staggered_max_two=False,
+            )
 
-    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    class _FakeStoreSelectionSignalRouterLLM:
+        def with_structured_output(self, model, method):
+            if model is templates._AnswerUiSignals:  # noqa: SLF001
+                return _FakeStoreSelectionSignalLLM()
+            raise AssertionError("product relevance LLM should not run when answer asks for store selection")
+
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeStoreSelectionSignalRouterLLM())
     slots = ConversationSlots(goods_no="G0001", ord_qty=2, pending_intent="order", goal_type="place_order")
     previous_slots = ConversationSlots(pending_intent="order", goal_type="place_order")
     tool_calls = [{

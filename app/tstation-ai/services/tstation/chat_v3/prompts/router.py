@@ -141,7 +141,8 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
 - vehicle_type_compatibility: SUV에 승용차/세단용 타이어를 장착해도 되는지 묻는 질문
   단, "런플랫" 차량/타이어에서 일반 타이어로 바꿔도 되는지, 앞/뒤 2짝만 일반 타이어로 교체해도 되는지 묻는 경우는
   vehicle_type_compatibility가 아니라 runflat_mixed_install_policy 입니다.
-- runflat_mixed_install_policy: 기존 런플랫 타이어 차량에서 일반 타이어로 교체/혼용해도 되는지, 앞바퀴/뒷바퀴 2짝만 일반 타이어로 바꿔도 되는지 묻는 문의
+- runflat_mixed_install_policy: 기존 런플랫 타이어 차량에서 일반 타이어로 교체/혼용해도 되는지, 앞바퀴/뒷바퀴 2짝만 일반 타이어로 바꿔도 되는지 묻는 문의.
+  이 경우 intents 뿐 아니라 runflat_mixed_install_policy=true 도 함께 설정하세요.
 - late_night_store_hours_policy: 심야 영업, 야간 영업, 밤늦게 문 여는 매장, 저녁 7시/19시 이후 영업 매장 문의.
   공식 평일 영업시간은 09:00 ~ 19:00이며 매장별 영업시간은 상이할 수 있다는 고정 안내로 처리합니다.
   이 의도는 "19시 이후 예약 가능한 매장", "밤늦게 장착 가능한 곳"처럼 예약/장착 표현이 있어도

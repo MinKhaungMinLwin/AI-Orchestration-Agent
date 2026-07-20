@@ -332,16 +332,29 @@ def test_runflat_mixed_install_policy_overrides_vehicle_type_compatibility() -> 
         domain=Domain.SUPPORT,
         intents=["vehicle_type_compatibility"],
         needs_selection_card=True,
+        runflat_mixed_install_policy=True,
     )
-    request = _request(messages=[{"role": "user", "content": "원래 런플랫 타이어인데 앞바퀴 2짝만 일반 타이어로 바꿔도 돼?"}])
 
-    result = _apply_runflat_mixed_install_policy(decision, request)
+    result = _apply_runflat_mixed_install_policy(decision)
 
     assert result.guard_id == GuardId.NONE
     assert result.domain == Domain.SUPPORT
     assert result.extra_domains == []
     assert result.needs_selection_card is False
     assert result.intents[0] == "runflat_mixed_install_policy"
+
+
+def test_runflat_mixed_install_policy_noop_when_router_did_not_flag_it() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.SUPPORT,
+        intents=["vehicle_type_compatibility"],
+        needs_selection_card=True,
+    )
+
+    result = _apply_runflat_mixed_install_policy(decision)
+
+    assert result.intents == ["vehicle_type_compatibility"]
 
 
 def test_late_night_store_hours_policy_overrides_time_filtered_store_search() -> None:
