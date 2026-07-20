@@ -84,6 +84,7 @@ chat_v3/
 │
 ├── slots/
 │   ├── schemas.py       # SlotsPatch — the subset of fields the LLM can extract from user text
+│   ├── enrich.py        # backfill product label (goods_nm/tire_size_1) from goods_no via product-detail API
 │   └── store.py         # load/merge/save via ChatHistoryService + ConversationSlots.merge()
 │
 └── tools/
@@ -140,6 +141,9 @@ Guard text is **pure data** (Korean, ported verbatim from V2). To add a guard: a
 - **Merge**: reuses V2's `ConversationSlots.merge()` — dependency resets included (changing cars resets the old size...).
 - **Persistence**: reuses `ChatHistoryService.get_slots/save_slots_async` (Redis, encrypted) — same place V2 stores them.
 - Fields the LLM fills with out-of-vocabulary values (unknown goal_type...) are dropped via Pydantic ValidationError; the turn survives.
+- **Label backfill** (`slots/enrich.py`): after tool harvesting, if `goods_no` is set but no product label
+  (`tire_model`/`pending_product_name`), the label is resolved from the product-detail endpoint. Order cards never
+  render the internal goods_no code — `OrderInfo.product` is optional and a missing label renders as "—" in the FE.
 - Current slots are injected into the system prompt as a `## CONVERSATION SLOTS` block so the LLM keeps context.
 
 ### 4.3. Tools + Executor

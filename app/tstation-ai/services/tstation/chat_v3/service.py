@@ -51,6 +51,7 @@ from services.tstation.chat_v3.slots.derive import (
     reset_for_supported_brand_switch,
     track_guard_repeat,
 )
+from services.tstation.chat_v3.slots.enrich import backfill_product_label
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
 from services.tstation.chat_v3.tools import tools_for_domains
 from services.tstation.common.cta_urls import CTAUrls
@@ -1070,6 +1071,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     slots_before_harvest = slots.model_copy()
     slots = templates.harvest_order_slots(slots, executor.tool_calls)
     slots = clamp_staggered_ord_qty(slots)
+    slots = await backfill_product_label(slots)
 
     answer = executor.final_text.strip() or ERROR_RESPONSE
     qc_result = await qc.verify_answer(
