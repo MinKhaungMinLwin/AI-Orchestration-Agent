@@ -9,7 +9,6 @@ from services.tstation.agents.b_discovery_agent.tools import (
     get_benefit_event_deal_list_tool,
     get_best_selling_products_tool,
     get_car_trims_tool,
-    get_cheapest_price_tool,
     get_deals_tool,
     get_event_applicable_products_tool,
     get_events_tool,
@@ -47,6 +46,5 @@ DISCOVERY_TOOLS = [
     get_event_applicable_products_tool,
     get_product_applicable_events_tool,
     compare_discount_tool,
-    get_cheapest_price_tool,
     get_final_price_tool,
 ]

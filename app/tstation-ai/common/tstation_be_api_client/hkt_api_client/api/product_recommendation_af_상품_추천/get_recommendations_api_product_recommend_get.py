@@ -192,7 +192,7 @@ def sync_detailed(
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
     `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
-    포함합니다. 이후 회원 쿠폰 최저가(`cheapest_final_prc`) 계산이 성공하면 해당 후보 안에서 다시 0~max 기준으로 필터링하고 최저가 내림차순으로 반환합니다.
+    포함합니다. 회원별 쿠폰 가격 재계산 없이 이 일반 혜택가 기준 결과 순서와 범위를 유지합니다.
 
     **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
     - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
@@ -306,7 +306,7 @@ def sync(
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
     `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
-    포함합니다. 이후 회원 쿠폰 최저가(`cheapest_final_prc`) 계산이 성공하면 해당 후보 안에서 다시 0~max 기준으로 필터링하고 최저가 내림차순으로 반환합니다.
+    포함합니다. 회원별 쿠폰 가격 재계산 없이 이 일반 혜택가 기준 결과 순서와 범위를 유지합니다.
 
     **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
     - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
@@ -415,7 +415,7 @@ async def asyncio_detailed(
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
     `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
-    포함합니다. 이후 회원 쿠폰 최저가(`cheapest_final_prc`) 계산이 성공하면 해당 후보 안에서 다시 0~max 기준으로 필터링하고 최저가 내림차순으로 반환합니다.
+    포함합니다. 회원별 쿠폰 가격 재계산 없이 이 일반 혜택가 기준 결과 순서와 범위를 유지합니다.
 
     **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
     - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
@@ -527,7 +527,7 @@ async def asyncio(
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
     - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
     `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
-    포함합니다. 이후 회원 쿠폰 최저가(`cheapest_final_prc`) 계산이 성공하면 해당 후보 안에서 다시 0~max 기준으로 필터링하고 최저가 내림차순으로 반환합니다.
+    포함합니다. 회원별 쿠폰 가격 재계산 없이 이 일반 혜택가 기준 결과 순서와 범위를 유지합니다.
 
     **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
     - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는

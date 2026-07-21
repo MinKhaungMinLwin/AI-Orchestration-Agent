@@ -2,6 +2,10 @@
 
 > **Status:** Phases 0–8 implemented (2026-07-07) · **Flag:** `AI_CHAT_V3_PURE_LLM_ENABLED` · **V2 stays untouched.**
 
+> **Price policy update (2026-07-21):** V3 uses `extra_fvr_sale_prc` as the user-visible product price and does not
+> bind `get_cheapest_price_tool`. Member-held-coupon `cheapest_*` fields may remain in BE responses but are removed
+> from V3 model/tool-context inputs and are not used for product cards or preorder payment amounts.
+
 ## Implementation status
 
 The entire `services/tstation/chat_v3/` package has been written (24 files, ~1,266 lines total, largest file 196 lines).
@@ -130,7 +134,7 @@ request
 - **Success:** user states their plate number once, the bot still remembers next turn; changing cars resets dependent slots correctly.
 
 ### Phase 4 — Read-only tools (Discovery first — safest) — ✅ DONE
-- [x] `tools/discovery.py`: 21 tools registered (search, recommendations, compatibility, vehicles, events, prices)
+- [x] `tools/discovery.py`: 20 tools registered (search, recommendations, compatibility, vehicles, events, prices)
 - [x] `executor.py`: binds tools per `RouteDecision.domain`, native tool-calling loop (max 4 rounds), the LLM **decides** which tool to call — no dispatch rules
 - [x] `sse.py`: emits `status: tool_start` (+ display name from `TOOL_DISPLAY_NAMES`), `tool`, `agent_flow` like V2 so the FE shows progress
 - [x] BE token set via `set_tstation_be_token(request.access_token)` before the executor runs

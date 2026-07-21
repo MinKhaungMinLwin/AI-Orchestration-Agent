@@ -43,7 +43,7 @@ POST /chat (api/tstation/chat_message.py — unchanged)
             │     checks the answer against tool output, corrects factual errors (gate: AI_QC_ENABLED)
             │
             ├─ ⑥  templates.build_rich_data_event()       [LLM: AI_MODEL_MINI]
-            │     tool output → card payload (product/location/listCar/cheapestProduct)
+            │     tool output → card payload (product/location/listCar)
             │     └─ no matching template → composer.suggest_quick_replies() → chips
             │
             ├─ ⑦  emit: message + data event (rich template OR quickReply) → DONE
@@ -89,7 +89,7 @@ chat_v3/
 │
 └── tools/
     ├── __init__.py      # tools_for_domain(domain) — registry, lazy imports
-    ├── discovery.py     # 21 tools from agents/b_discovery_agent/tools.py
+    ├── discovery.py     # 20 tools from agents/b_discovery_agent/tools.py
     ├── transaction.py   # 24 tools from agents/c_transaction_agent (READ 21 + WRITE 3)
     └── support.py       # 8 tools from agents/e_support_agent/tools.py
 ```
@@ -148,7 +148,7 @@ Guard text is **pure data** (Korean, ported verbatim from V2). To add a guard: a
 
 ### 4.3. Tools + Executor
 
-- `tools_for_domain(domain)`: LEADING → `[]` (pure chat), DISCOVERY → 21, TRANSACTION → 24, SUPPORT → 8.
+- `tools_for_domain(domain)`: LEADING → `[]` (pure chat), DISCOVERY → 20, TRANSACTION → 24, SUPPORT → 8.
 - Tools are **re-exported** from the V2 agents, never rewritten — any fix to V2 tools applies to V3 automatically.
 - `ToolLoopExecutor`: bind tools → select with `AI_MODEL_TOOL_SELECTOR` → validate against the bound tool set,
   runtime guard, and tool input schema → execute. A rejected selection is retried once with `AI_MODEL_FALLBACK`.
@@ -166,7 +166,6 @@ Whatever tool ran determines what card can be rendered (data availability, not r
 | `product` | search_product, recommendations, best_selling, newest, benefit/event/coupon products... |
 | `location` | search_stores, nearby_stores, store_list, stores_with_time_filter... |
 | `listCar` | get_user_vehicles, get_my_cars |
-| `cheapestProduct` | get_cheapest_price |
 
 The mini model reads raw tool output → fills the Pydantic model from **`agents/templates/schemas.py`** (the FE's single source of truth — V3 never redefines schemas). Build failure / no data → fallback to `quickReply`. When a rich template is emitted, the composer chips call is **skipped** (like V2: cards carry no chips).
 

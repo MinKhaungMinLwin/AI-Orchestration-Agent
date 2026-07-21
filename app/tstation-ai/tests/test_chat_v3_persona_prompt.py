@@ -46,11 +46,10 @@ def test_system_prompt_still_declines_store_attributes_with_no_rating_proxy():
 
 
 def test_system_prompt_locks_user_facing_price_labels():
-    assert "'기본가', '일반 혜택가', '보유쿠폰 적용 혜택가'" in SYSTEM_PROMPT
-    assert "구분해 세 가격을 모두 안내" in SYSTEM_PROMPT
-    assert "sale_prc는 '기본가'" in SYSTEM_PROMPT
-    assert "extra_fvr_sale_prc는 '일반 혜택가'" in SYSTEM_PROMPT
-    assert "cheapest_final_prc는 '보유쿠폰 적용 혜택가'" in SYSTEM_PROMPT
+    assert "extra_fvr_sale_prc를 '일반 혜택가'로 우선 안내" in SYSTEM_PROMPT
+    assert "값이 없을 때만 sale_prc를 '기본가'" in SYSTEM_PROMPT
+    assert "개인화 가격은 별도 가격으로 안내하지 마세요" in SYSTEM_PROMPT
+    assert "cheapest_final_prc" not in SYSTEM_PROMPT
     assert "extra_fvr_sale_prc를 '보유쿠폰 적용 혜택가'라고 설명하지 말고" in SYSTEM_PROMPT
     assert "'안내가', '예시 혜택가', '보유 쿠폰 적용 시 예시 혜택가'" in SYSTEM_PROMPT
     assert "임의 라벨은 사용하지 마세요" in SYSTEM_PROMPT

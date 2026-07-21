@@ -60,7 +60,7 @@ from services.tstation.chat_v3.executor import (  # noqa: E402
     _normalize_business_failure,
     _output_flow_status,
 )
-from services.tstation.chat_v3.price_notice import COUPON_PRICE_NOTICE, apply_coupon_price_notice  # noqa: E402
+from services.tstation.chat_v3.memory import context_items_from_tool_calls, tool_context_block  # noqa: E402
 from services.tstation.chat_v3.tools.discovery import DISCOVERY_TOOLS  # noqa: E402
 from services.tstation.chat_v3.tools import tools_for_domain  # noqa: E402
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools  # noqa: E402
@@ -132,13 +132,23 @@ def test_discovery_success_response_removes_origin_from_all_nested_data() -> Non
         {
             "goods_nm": "벤투스 에어 S",
             "orpl_nm": "한국",
-            "variants": [{"goods_no": "G1", "ORPL_NM": "한국", "season_nm": "사계절"}],
+            "variants": [
+                {
+                    "goods_no": "G1",
+                    "ORPL_NM": "한국",
+                    "season_nm": "사계절",
+                    "cheapest_final_prc": 210_000,
+                    "cheapest_total_discount": 10_000,
+                    "cheapest_applied_coupons": [{"cpn_nm": "보유 쿠폰"}],
+                }
+            ],
         },
     )
 
     serialized = json.dumps(response, ensure_ascii=False)
 
     assert "orpl_nm" not in serialized.lower()
+    assert "cheapest_" not in serialized
     assert response["data"]["goods_nm"] == "벤투스 에어 S"
     assert response["data"]["variants"] == [{"goods_no": "G1", "season_nm": "사계절"}]
 
@@ -151,7 +161,56 @@ def test_product_item_whitelist_does_not_restore_origin() -> None:
     assert slim == {"goods_no": "G1", "goods_nm": "벤투스 S2 AS", "season_nm": "사계절"}
 
 
-def test_recommendation_output_compacts_all_product_price_contracts_before_truncation() -> None:
+def test_price_filter_uses_general_benefit_price_before_personalized_price() -> None:
+    item = {
+        "sale_prc": 300_000,
+        "extra_fvr_sale_prc": 220_000,
+        "cheapest_final_prc": 280_000,
+    }
+
+    assert discovery_tools._price_filter_basis(item) == 220_000
+
+
+def test_tool_memory_removes_personalized_prices_for_new_and_legacy_context() -> None:
+    tool_calls = [
+        {
+            "name": "get_final_price_tool",
+            "args": {"goods_no": "G1"},
+            "output": json.dumps(
+                {
+                    "data": {
+                        "extra_fvr_sale_prc": 220_000,
+                        "cheapest_final_prc": 280_000,
+                        "cheapest_applied_coupons": [{"cpn_nm": "보유 쿠폰"}],
+                    }
+                }
+            ),
+        }
+    ]
+
+    items = context_items_from_tool_calls(tool_calls)
+    new_context = json.dumps(items, ensure_ascii=False)
+    legacy_context = tool_context_block(
+        [
+            {
+                "tool": "get_final_price_tool",
+                "input": {"goods_no": "G1"},
+                "data": {
+                    "extra_fvr_sale_prc": 220_000,
+                    "cheapest_final_prc": 280_000,
+                },
+            }
+        ]
+    )
+
+    assert "extra_fvr_sale_prc" in new_context
+    assert "cheapest_" not in new_context
+    assert legacy_context is not None
+    assert "extra_fvr_sale_prc" in legacy_context
+    assert "cheapest_" not in legacy_context
+
+
+def test_recommendation_output_uses_general_benefit_price_contract_before_truncation() -> None:
     items = []
     for index in range(3):
         items.append(
@@ -176,13 +235,13 @@ def test_recommendation_output_compacts_all_product_price_contracts_before_trunc
     parsed = json.loads(visible)
 
     assert len(visible) < 4000
-    assert [item["cheapest_final_prc"] for item in parsed["data"]["items"]] == [351100, 351101, 351102]
+    assert [item["extra_fvr_sale_prc"] for item in parsed["data"]["items"]] == [277400, 277401, 277402]
+    assert all("cheapest_final_prc" not in item for item in parsed["data"]["items"])
+    assert all("cheapest_applied_coupons" not in item for item in parsed["data"]["items"])
     assert parsed["data"]["price_contract"] == {
         "sale_prc": "기본가",
         "extra_fvr_sale_prc": "일반 혜택가",
-        "cheapest_final_prc": "보유쿠폰 적용 혜택가",
-        "instruction": "각 상품에서 존재하는 세 가격을 서로 대체하지 말고 라벨별로 모두 표시",
-        "coupon_price_notice": "보유 쿠폰 기준 가격이며, 상품 상세 페이지에서 미 다운로드 쿠폰 적용 시 추가 할인 받으실 수 있습니다.",
+        "instruction": "상품 가격은 일반 혜택가를 우선하고, 없으면 기본가를 표시",
     }
     assert "pc_prod_remark_desc" not in visible
     assert "pc_prod_tech_desc" not in visible
@@ -225,70 +284,26 @@ def test_recommendation_output_keeps_the_relaxed_vehicle_type_warning() -> None:
     assert json.loads(visible)["data"]["recommendation_fallback"] == fallback
 
 
-def test_coupon_price_notice_appends_for_structured_cheapest_final_price() -> None:
-    answer = "가격을 확인했어요."
-    tool_calls = [
+def test_final_price_output_hides_personalized_price_fields_from_model() -> None:
+    output = json.dumps(
         {
-            "name": "get_final_price_tool",
-            "output": json.dumps({"status": "success", "data": {"cheapest_final_prc": 155_500}}, ensure_ascii=False),
-        }
-    ]
+            "status": "success",
+            "data": {
+                "sale_prc": 200_000,
+                "extra_fvr_sale_prc": 179_700,
+                "cheapest_final_prc": 195_000,
+                "cheapest_total_discount": 5_000,
+                "cheapest_applied_coupons": [{"cpn_nm": "보유 쿠폰"}],
+                "cheapest_goods_no": "G1",
+            },
+        },
+        ensure_ascii=False,
+    )
 
-    updated = apply_coupon_price_notice(answer, tool_calls)
+    visible = _model_visible_tool_output("get_final_price_tool", output)
 
-    assert updated == f"{answer}\n\n{COUPON_PRICE_NOTICE}"
-
-
-def test_coupon_price_notice_appends_for_recommendation_coupon_list() -> None:
-    answer = "추천 상품을 확인했어요."
-    tool_calls = [
-        {
-            "name": "get_products_recommendations_tool",
-            "output": json.dumps(
-                {
-                    "status": "success",
-                    "data": {
-                        "items": [
-                            {
-                                "goods_nm": "Ventus",
-                                "extra_fvr_sale_prc": 179_700,
-                                "cheapest_applied_coupons": [{"stage": "payment", "discount_amt": 24_200}],
-                            }
-                        ]
-                    },
-                },
-                ensure_ascii=False,
-            ),
-        }
-    ]
-
-    updated = apply_coupon_price_notice(answer, tool_calls)
-
-    assert updated.endswith(COUPON_PRICE_NOTICE)
-
-
-def test_coupon_price_notice_does_not_append_for_regular_benefit_price() -> None:
-    answer = "일반 혜택가를 확인했어요."
-    tool_calls = [
-        {
-            "name": "get_final_price_tool",
-            "output": json.dumps({"status": "success", "data": {"extra_fvr_sale_prc": 179_700}}, ensure_ascii=False),
-        }
-    ]
-
-    assert apply_coupon_price_notice(answer, tool_calls) == answer
-
-
-def test_coupon_price_notice_does_not_duplicate_existing_notice() -> None:
-    answer = f"가격을 확인했어요.\n\n{COUPON_PRICE_NOTICE}"
-    tool_calls = [
-        {
-            "name": "get_final_price_tool",
-            "output": json.dumps({"status": "success", "data": {"cheapest_final_prc": 155_500}}, ensure_ascii=False),
-        }
-    ]
-
-    assert apply_coupon_price_notice(answer, tool_calls) == answer
+    assert "extra_fvr_sale_prc" in visible
+    assert "cheapest_" not in visible
 
 
 def test_cart_result_false_is_normalized_to_error() -> None:

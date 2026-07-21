@@ -105,9 +105,9 @@ class _FakeToolLoopExecutor:
         self.final_text = "Ready to confirm this order."
         self.tool_calls = [
             {
-                "name": "get_cheapest_price_tool",
+                "name": "get_final_price_tool",
                 "args": {},
-                "output": json.dumps({"status": "success", "data": {"cheapest_final_prc": 77050}}),
+                "output": json.dumps({"status": "success", "data": {"extra_fvr_sale_prc": 77050}}),
             }
         ]
 
@@ -569,7 +569,7 @@ def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
     assert product["oeBadgeYn"] == "Y"
 
 
-def test_product_card_discount_rate_uses_selected_cheapest_price_basis():
+def test_product_card_uses_general_benefit_price_when_personalized_price_is_higher():
     product = templates._product_item_from_row(
         {
             "goods_no": "G000000320103",
@@ -582,10 +582,10 @@ def test_product_card_discount_rate_uses_selected_cheapest_price_basis():
         }
     )
 
-    assert product.price == 281100
+    assert product.price == 222100
     assert product.originalPrice == 295900
-    assert product.discountAmount == 14800
-    assert product.discountRate == 5.0
+    assert product.discountAmount == 73800
+    assert product.discountRate == 24.9
 
 
 def test_product_card_discount_rate_keeps_extra_benefit_fallback_consistent():
@@ -1293,6 +1293,7 @@ def test_get_final_price_tool_builds_preorder_without_llm(monkeypatch):
         "status": "success",
         "data": {
             "cheapest_final_prc": 150000,
+            "extra_fvr_sale_prc": 180000,
             "wage_prc": 4100,
             "sale_prc": 200000,
         },
@@ -1317,7 +1318,7 @@ def test_get_final_price_tool_builds_preorder_without_llm(monkeypatch):
     assert event["data"]["metadata"]["source"] == "chat_v3_final_price_preorder"
     assert event["data"]["metadata"]["goodsId"] == "G000000309783"
     assert event["data"]["metadata"]["tireSize"] == "245/45R19"
-    assert event["data"]["orderInfo"]["paymentAmount"] == 308200
+    assert event["data"]["orderInfo"]["paymentAmount"] == 368200
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
 
 
@@ -1384,7 +1385,7 @@ def test_get_final_price_tool_does_not_build_preorder_without_schedule():
         pending_intent="order",
         goal_type="place_order",
     )
-    price_output = {"status": "success", "data": {"cheapest_final_prc": 150000, "wage_prc": 4100}}
+    price_output = {"status": "success", "data": {"extra_fvr_sale_prc": 180000, "wage_prc": 4100}}
 
     event = templates.build_final_price_preorder_event(
         "아래 내용으로 구매 진행해도 될까요?",

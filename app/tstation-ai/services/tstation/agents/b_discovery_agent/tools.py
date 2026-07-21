@@ -70,7 +70,16 @@ current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = co
 
 _RECOMMENDATION_LIMIT_CAP = 10
 _THREE_PMSF_DESCRIPTION = "3PMSF 인증으로 눈길 성능 기준을 충족해 올웨더 주행 신뢰도를 높인 타이어입니다."
-_AGENT_EXCLUDED_FIELDS = frozenset({"orpl_nm"})
+_AGENT_EXCLUDED_FIELDS = frozenset(
+    {
+        "orpl_nm",
+        "cheapest_final_prc",
+        "cheapest_total_discount",
+        "cheapest_applied_coupons",
+        "cheapest_goods_no",
+        "cheapest_price",
+    }
+)
 
 
 def _sanitize_agent_tool_data(value: Any) -> Any:
@@ -319,10 +328,6 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "rr",
     "wage_prc", "wage_today_prc",
     "free_guarantee_yn",
-    # 회원 보유 쿠폰 기반 최저가 (BE 측 enrich, tstation-backend@622ad6a 이후).
-    # LLM 이 "쿠폰 적용하면 OO원" / "최저 OO원" 인용할 때 사용. null 인 회원이면
-    # 자동으로 dict 에서 빠짐 (BE 응답에 null 값으로 들어와도 sale_prc 만 인용).
-    "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
     # Size-less product summary endpoint fields.
     "goods_no_count", "smrt_pay_yn", "warranty", "slogan", "pc_prod_remark_desc", "pc_prod_tech_desc",
 })
@@ -400,8 +405,8 @@ def _filter_by_price(
     Items with no price information are excluded when a price filter is active —
     we cannot verify they are within budget.
 
-    The product card displays cheapest_final_prc first, then falls back to
-    extra_fvr_sale_prc, so filtering must use the same visible price basis.
+    Product cards use extra_fvr_sale_prc as the visible price, so filtering
+    must use the same basis.
     """
     if not min_price and not max_price:
         return items
@@ -435,7 +440,7 @@ def _normalize_search_price_args(
 
 def _price_filter_basis(item: dict) -> int:
     """Visible price basis for min_price/max_price filters."""
-    for key in ("cheapest_final_prc", "extra_fvr_sale_prc"):
+    for key in ("extra_fvr_sale_prc", "sale_prc"):
         value = item.get(key)
         if value in (None, "", 0):
             continue
@@ -1197,21 +1202,13 @@ def get_product_description_tool(goods_no: str):
           t_snow, t_ice, t_dryroad_brk
         - EU 라벨: rr, wet, label_pndb
         - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn, t_rlx_isn_yn
-        - 가격 / 회원 쿠폰 최저가:
-            * sale_prc — 정가
-            * cheapest_final_prc — 회원 보유 쿠폰을 상품→결제→플러스 그리디 적용한
-              최저가 (회원이 미사용 쿠폰을 보유한 경우만 채워짐, 없으면 null)
-            * cheapest_total_discount — sale_prc - cheapest_final_prc
-            * cheapest_applied_coupons[] — 단계별 적용 쿠폰 {stage, cpn_no, cpn_nm,
-              discount_amt}. 자연어 답변에 cpn_nm 인용 권장 (예: "한국타이어 18% 상품
-              할인쿠폰 적용 시 …").
+        - 가격: sale_prc (기본가), extra_fvr_sale_prc (사이트 일반 노출 혜택가)
 
-    Price/coupon fields are reference facts, not a default narration target.
-    Use `sale_prc` / `cheapest_final_prc` / coupon names only when the current
-    turn explicitly asks for price, discount, or coupon applicability, or when
-    a downstream price flow requested those values. For normal product
-    explanation turns, prefer feature / review / rating summary and leave
-    price handling to price tools.
+    Price fields are reference facts, not a default narration target. Use
+    `extra_fvr_sale_prc` and `sale_prc` only when the current turn explicitly
+    asks for price or when a downstream price flow requested those values.
+    For normal product explanation turns, prefer feature / review / rating
+    summary and leave price handling to price tools.
 
     Args:
         goods_no (str): Product number.
@@ -1393,17 +1390,9 @@ def get_products_recommendations_tool(
         - 추가 성능: t_high_perform, t_handling, t_dryroad_brk
         - EU 라벨: rr (회전저항), wet, label_pndb (소음 dB)
         - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn
-        - 회원 쿠폰 최저가 (BE 측 enrich):
-            * cheapest_final_prc — 회원 보유 쿠폰 3-stage 그리디 적용 후 최저가
-              (null 이면 회원이 미사용 쿠폰을 보유하지 않은 상태이므로 sale_prc 만 사용)
-            * cheapest_total_discount — sale_prc - cheapest_final_prc
-            * cheapest_applied_coupons[] — {stage, cpn_no, cpn_nm, discount_amt}.
-              자연어 답변에 cpn_nm 인용 권장 (예: "한국타이어 18% 상품 할인쿠폰
-              적용 시 최종 {final:,}원").
-        Tip: 사용자에게 가격을 안내할 때 cheapest_final_prc 가 채워진 상품은 그것을,
-        없으면 sale_prc 를 인용한다. extra_fvr_sale_prc 는 사이트 노출가(모든 쿠폰
-        적용 가정) 이고 회원이 실제 적용 가능한 가격이 아닐 수 있으므로, 회원 컨텍스트
-        에서는 cheapest_final_prc 를 우선한다.
+        - 가격: extra_fvr_sale_prc (사이트 일반 노출 혜택가), sale_prc (기본가)
+        Tip: 사용자에게 가격을 안내할 때 extra_fvr_sale_prc 를 우선하고,
+        값이 없을 때만 sale_prc 를 인용한다.
     """
     # Deterministic guard: if the user named a car_no in this turn and it
     # does not match any registered car, short-circuit before issuing the
@@ -1847,9 +1836,9 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     """Compare discount prices across multiple products.
 
     Use when user asks to compare prices, "가장 저렴한/싼" product, or "비교".
-    Returns: sale_prc, product_discount, coupon_discount, final_unit_price, final_price,
-    cheapest_final_prc, cheapest_total_discount, cheapest_applied_coupons, cheapest_goods_no.
-    Use cheapest_final_prc as the user-facing final benefit price when present.
+    Returns: sale_prc, product_discount, coupon_discount, final_unit_price,
+    and final_price. Use the returned general benefit price rather than
+    member-held-coupon personalized fields.
 
     Args:
         goods_no_list (list[str]): 2+ product numbers to compare.

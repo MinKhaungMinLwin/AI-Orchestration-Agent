@@ -9,6 +9,7 @@ import json
 import logging
 
 from services.tstation.chat_history_service import get_chat_history_service
+from services.tstation.chat_v3.price_policy import remove_personalized_price_fields
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +37,13 @@ def tool_context_block(items: list[dict]) -> str | None:
     ]
     used = 0
     for item in items[:_MAX_INJECT_ITEMS]:
+        safe_item = remove_personalized_price_fields(item)
         entry = json.dumps(
-            {"tool": item.get("tool", ""), "input": item.get("input", {}), "data": item.get("data")},
+            {
+                "tool": safe_item.get("tool", ""),
+                "input": safe_item.get("input", {}),
+                "data": safe_item.get("data"),
+            },
             ensure_ascii=False,
             default=str,
         )
@@ -60,7 +66,11 @@ def context_items_from_tool_calls(tool_calls: list[dict]) -> list[dict]:
             data = json.loads(output[:_MAX_ITEM_OUTPUT_CHARS * 4])
         except (ValueError, TypeError):
             data = output[:_MAX_ITEM_OUTPUT_CHARS]
-        items.append({"tool": call["name"], "input": call.get("args") or {}, "data": data})
+        items.append(
+            remove_personalized_price_fields(
+                {"tool": call["name"], "input": call.get("args") or {}, "data": data}
+            )
+        )
     return items
 
 

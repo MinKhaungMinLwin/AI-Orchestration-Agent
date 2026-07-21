@@ -59,7 +59,6 @@ V3_TOOL_TO_CUSTOMER_AF: dict[str, str] = {
     # Price AF
     "get_final_price_tool": "Price AF",
     "compare_discount_tool": "Price AF",
-    "get_cheapest_price_tool": "Price AF",
     "get_my_coupons_tool": "Price AF",
     "get_coupon_applicable_products_tool": "Price AF",
     "get_product_promotions_tool": "Price AF",

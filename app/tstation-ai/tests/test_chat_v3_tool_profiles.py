@@ -74,6 +74,13 @@ def test_price_stock_profile_can_resolve_a_product() -> None:
     assert "get_final_price_tool" in bound
 
 
+def test_v3_does_not_bind_member_coupon_cheapest_price_tool() -> None:
+    full_discovery = {tool.name for tool in tools_for_domains(["DISCOVERY"], None)}
+
+    assert "get_cheapest_price_tool" not in full_discovery
+    assert all("get_cheapest_price_tool" not in names for names in PROFILE_TOOL_NAMES.values())
+
+
 # `transaction_order` has the same shape of gap — get_final_price_tool, save_to_cart_tool
 # and quick_order_tool all need a goods_no it cannot look up — but no customer report
 # points at it yet, and an order turn usually inherits goods_no from an earlier

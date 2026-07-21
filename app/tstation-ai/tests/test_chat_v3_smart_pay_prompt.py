@@ -50,7 +50,7 @@ def test_quantity_slots_never_drive_the_smart_pay_calculation() -> None:
     guidance = _guidance()
     assert "ord_qty" in guidance
     assert "payment_amount" in guidance
-    assert "cheapest_final_prc" in guidance
+    assert "cheapest_final_prc" not in guidance
 
 
 def test_only_twelve_and_twenty_four_month_plans() -> None:

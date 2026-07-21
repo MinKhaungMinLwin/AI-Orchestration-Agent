@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from services.tstation.chat_v3 import sse
 from services.tstation.chat_v3.llm import get_composer_llm, get_fallback_llm, get_tool_selector_llm
+from services.tstation.chat_v3.price_policy import redact_personalized_price_output
 from services.tstation.policies.inventory_response_policy import redact_inventory_output_for_model
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,6 @@ _RECOMMENDATION_LLM_FIELDS = (
     "sale_prc",
     "extra_fvr_sale_prc",
     "extra_fvr_sale_per",
-    "cheapest_final_prc",
-    "cheapest_total_discount",
     "season_nm",
     # 차종 분류명 (전기차 / SUV / 승용 / 화물·승합). Without it the model cannot tell an
     # EV-only or van-only tire from a passenger one, and recommends iON for a petrol car.
@@ -54,8 +53,10 @@ def _tool_output_text(output: object) -> str:
 
 def _model_visible_tool_output(name: str, output_text: str) -> str:
     if name == _RECOMMENDATION_TOOL:
-        return _compact_recommendation_output(output_text)
-    return redact_inventory_output_for_model(name, output_text)
+        visible_output = _compact_recommendation_output(output_text)
+    else:
+        visible_output = redact_inventory_output_for_model(name, output_text)
+    return str(redact_personalized_price_output(visible_output))
 
 
 def _compact_recommendation_output(output_text: str) -> str:
@@ -76,17 +77,6 @@ def _compact_recommendation_output(output_text: str) -> str:
         if not isinstance(item, dict):
             continue
         compact = {key: item[key] for key in _RECOMMENDATION_LLM_FIELDS if item.get(key) is not None}
-        coupons = item.get("cheapest_applied_coupons")
-        if isinstance(coupons, list):
-            compact["cheapest_applied_coupons"] = [
-                {
-                    key: coupon[key]
-                    for key in ("stage", "cpn_nm", "discount_amt")
-                    if isinstance(coupon, dict) and coupon.get(key) is not None
-                }
-                for coupon in coupons
-                if isinstance(coupon, dict)
-            ]
         compact_items.append(compact)
 
     compact_data: dict[str, object] = {
@@ -95,9 +85,7 @@ def _compact_recommendation_output(output_text: str) -> str:
         "price_contract": {
             "sale_prc": "기본가",
             "extra_fvr_sale_prc": "일반 혜택가",
-            "cheapest_final_prc": "보유쿠폰 적용 혜택가",
-            "instruction": "각 상품에서 존재하는 세 가격을 서로 대체하지 말고 라벨별로 모두 표시",
-            "coupon_price_notice": "보유 쿠폰 기준 가격이며, 상품 상세 페이지에서 미 다운로드 쿠폰 적용 시 추가 할인 받으실 수 있습니다.",
+            "instruction": "상품 가격은 일반 혜택가를 우선하고, 없으면 기본가를 표시",
         },
     }
     # The tool silently drops the vehicle_type filter when it would return nothing, and says so

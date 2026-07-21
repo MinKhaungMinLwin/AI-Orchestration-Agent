@@ -63,7 +63,6 @@ PROFILE_TOOL_NAMES: dict[str, frozenset[str]] = {
         "get_best_selling_products_tool",
         "get_product_description_tool",
         "compare_discount_tool",
-        "get_cheapest_price_tool",
         "get_final_price_tool",
     }),
     "discovery_recommendation": frozenset({

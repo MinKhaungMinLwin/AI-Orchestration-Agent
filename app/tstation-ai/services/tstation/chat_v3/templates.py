@@ -16,7 +16,6 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.templates.schemas import (
     CarItem,
     CarMeta,
-    CheapestProductTemplate,
     DatepickTemplate,
     ListCarTemplate,
     LocationItem,
@@ -117,7 +116,6 @@ _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "get_stores_with_time_filter_tool": ("location", LocationTemplate),
     "get_user_vehicles_tool": ("listCar", ListCarTemplate),
     "get_my_cars_tool": ("listCar", ListCarTemplate),
-    "get_cheapest_price_tool": ("cheapestProduct", CheapestProductTemplate),
     "get_final_price_tool": ("preOrder", PreOrderTemplate),
     "get_store_schedule_tool": ("datepick", DatepickTemplate),
     "get_multi_store_schedule_tool": ("datepick", DatepickTemplate),
@@ -266,9 +264,7 @@ def _extract_payment_amount(data: dict[str, Any], ord_qty: int | None) -> int | 
     payload = data.get("data") if isinstance(data.get("data"), dict) else data
     if not isinstance(payload, dict):
         return None
-    unit = _as_int(payload.get("cheapest_final_prc"))
-    if unit is None:
-        unit = _as_int(payload.get("extra_fvr_sale_prc"))
+    unit = _as_int(payload.get("extra_fvr_sale_prc"))
     if unit is None:
         unit = _as_int(payload.get("sale_prc"))
     wage = _as_int(payload.get("wage_prc")) or 0
@@ -1377,7 +1373,7 @@ def _product_tags_from_row(row: dict[str, Any]) -> list[ProductTag]:
 
 
 def _product_price(row: dict[str, Any]) -> int | None:
-    price = _get_num(row, "cheapest_final_prc", "extra_fvr_sale_prc", "final_unit_price", "final_prc", "price")
+    price = _get_num(row, "extra_fvr_sale_prc", "sale_prc", "price")
     return int(price) if price else None
 
 
