@@ -38,7 +38,7 @@ from services.tstation.chat_v3.prompts.persona import (
 )
 from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
-from services.tstation.chat_v3.router.schemas import Domain, RouteDecision
+from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision
 from services.tstation.chat_v3.slots.derive import (
     STAGGERED_MAX_ORD_QTY,
     apply_fe_slots,
@@ -524,6 +524,30 @@ def _static_faq_policy_event(decision: RouteDecision | None) -> dict | None:
             "metadata": {"policyKey": policy_key},
         },
     }
+
+
+def _tool_call_succeeded(call: dict) -> bool:
+    output = str(call.get("output") or "").strip()
+    if not output or output.startswith("Tool error"):
+        return False
+    try:
+        parsed = json.loads(output)
+    except (TypeError, ValueError):
+        return True
+    return not (isinstance(parsed, dict) and parsed.get("status") == "error")
+
+
+def _has_successful_support_tool_call(tool_calls: list[dict]) -> bool:
+    support_tool_names = {tool.name for tool in tools_for_domains([Domain.SUPPORT.value])}
+    return any(str(call.get("name") or "") in support_tool_names and _tool_call_succeeded(call) for call in tool_calls)
+
+
+def _support_answer_is_ungrounded(decision: RouteDecision | None, tool_calls: list[dict]) -> bool:
+    if decision is None or Domain.SUPPORT.value not in decision.all_domains():
+        return False
+    if decision.support_needs_clarification:
+        return False
+    return not _has_successful_support_tool_call(tool_calls)
 
 
 def _trace_config(
@@ -1035,6 +1059,50 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             continue
         yield event
     t_tools = time.perf_counter()
+
+    if _support_answer_is_ungrounded(decision, executor.tool_calls):
+        guard = get_guard(GuardId.OUT_OF_SCOPE)
+        if guard:
+            logger.info("[CHAT_V3] blocked ungrounded SUPPORT answer for session=%s", request.session_id)
+            guard_text = templates.compact_answer_spacing(guard.text)
+            result["answer"] = guard_text
+            if _tokens_enabled():
+                yield sse.token(guard_text)
+            yield sse.message(guard_text)
+            yield sse.data_event(
+                "quickReply",
+                {
+                    "assistantResponse": guard_text,
+                    "quickReplies": guard.chips,
+                    "predictedDomains": guard.predicted_domains,
+                },
+                assistant_response_source=f"llm_guard_{guard.id}",
+            )
+            _update_trace_monitoring(
+                route_domains=domains,
+                tool_calls=executor.tool_calls,
+                final_template="quickReply",
+                trace_id=request.tracing_id,
+                parent_span_id=parent_span_id,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                answer=guard_text,
+                user_text=user_text,
+                message_id=message_id,
+                route_intents=list(decision.intents if decision else []),
+                route_profile=route_profile,
+                fallback_used=False,
+                latency_ms=int((time.perf_counter() - t0) * 1000),
+                trace_observation=parent_span,
+            )
+            if parent_span is not None:
+                parent_span.end()
+            _flush_trace()
+            await _record_real_usage(request, usage_tracker)
+            await save_slots(request.session_id, slots, user_id=request.user_id)
+            for event in sse.done():
+                yield event
+            return
 
     slots = vehicle_policy_state["slots"]
     post_tool_staggered_event = _staggered_tire_size_choice_event(slots)

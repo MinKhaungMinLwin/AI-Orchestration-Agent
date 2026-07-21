@@ -43,8 +43,20 @@ _RUNFLAT_MIXED_INSTALL_INTENT = "runflat_mixed_install_policy"
 
 
 def _router_input(request: TStationChatRequest, known_slots: ConversationSlots | None = None) -> str:
-    lines = [f"오늘 날짜/시간: {get_current_time()}", "## 최근 대화"]
-    for msg in request.messages[-_HISTORY_TURNS:]:
+    last_user_text = _last_user_text(request)
+    lines = [f"오늘 날짜/시간: {get_current_time()}", "## 현재 사용자 발화", f"사용자: {last_user_text[:_MAX_CHARS_PER_MESSAGE]}"]
+    previous_messages: list[dict] = []
+    skipped_last_user = False
+    for msg in reversed(request.messages):
+        if msg.get("role") == "user" and not skipped_last_user:
+            skipped_last_user = True
+            continue
+        previous_messages.append(msg)
+        if len(previous_messages) >= _HISTORY_TURNS:
+            break
+    if previous_messages:
+        lines.append("## 이전 대화 (현재 발화 해석용 보조 맥락)")
+    for msg in reversed(previous_messages):
         role = "사용자" if msg.get("role") == "user" else "챗봇"
         lines.append(f"{role}: {str(msg.get('content') or '')[:_MAX_CHARS_PER_MESSAGE]}")
     if request.chip_context:

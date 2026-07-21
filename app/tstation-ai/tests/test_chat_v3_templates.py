@@ -1451,6 +1451,83 @@ def test_repeated_guard_still_terminates_without_executor(monkeypatch):
     assert quick_reply_events[0]["assistant_response_source"] == "llm_guard_out_of_scope"
 
 
+def test_support_grounding_contract_requires_tool_or_clarification():
+    decision = RouteDecision(domain=Domain.SUPPORT, guard_id=GuardId.NONE)
+
+    assert service._support_answer_is_ungrounded(decision, []) is True  # noqa: SLF001
+
+    clarification = RouteDecision(
+        domain=Domain.SUPPORT,
+        guard_id=GuardId.NONE,
+        support_needs_clarification=True,
+    )
+    assert service._support_answer_is_ungrounded(clarification, []) is False  # noqa: SLF001
+
+    grounded = [
+        {
+            "name": "search_faq_hybrid_tool",
+            "args": {},
+            "output": json.dumps({"status": "success", "data": {"answer": "공식 FAQ 답변"}}),
+        }
+    ]
+    assert service._support_answer_is_ungrounded(decision, grounded) is False  # noqa: SLF001
+
+
+def test_ungrounded_support_answer_returns_out_of_scope_guard(monkeypatch):
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(domain=Domain.SUPPORT, guard_id=GuardId.NONE)
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots()
+
+    async def fake_save_slots(*args, **kwargs):
+        return None
+
+    async def fake_record_usage(*args, **kwargs):
+        return None
+
+    async def fake_load_tool_context(*args, **kwargs):
+        return []
+
+    class UngroundedSupportExecutor:
+        def __init__(self, *args, **kwargs):
+            self.final_text = "삼성화재 다이렉트 자동차 사고 접수 전화번호는 1588-5114입니다."
+            self.tool_calls = []
+            self.stopped_after_tool = False
+
+        async def stream(self):
+            if False:
+                yield None
+
+    async def fail_qc(*args, **kwargs):
+        raise AssertionError("ungrounded SUPPORT answers must be blocked before QC")
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", UngroundedSupportExecutor)
+    monkeypatch.setattr(service, "_record_real_usage", fake_record_usage)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_load_tool_context)
+    monkeypatch.setattr(service.qc, "verify_answer", fail_qc)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "삼성화재 다이렉트 전화번호좀 알려줘"}],
+        user_id="test-user",
+        session_id="test-ungrounded-support-guard",
+    )
+
+    events = asyncio.run(_collect_turn_events(request))
+    data_events = [_parse_sse_event(event) for event in events if event.startswith("data: {")]
+    quick_reply_events = [event for event in data_events if event.get("type") == "data"]
+
+    assert quick_reply_events
+    assert quick_reply_events[0]["template"] == "quickReply"
+    assert quick_reply_events[0]["assistant_response_source"] == "llm_guard_out_of_scope"
+    assert "삼성화재" not in quick_reply_events[0]["data"]["assistantResponse"]
+
+
 def test_ready_preorder_takes_priority_over_generic_price_template(monkeypatch):
     async def fake_route_request(*args, **kwargs):
         return RouteDecision(
