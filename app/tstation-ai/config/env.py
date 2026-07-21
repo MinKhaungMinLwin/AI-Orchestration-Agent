@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     AI_MODEL: str
     AI_MODEL_REASONING: str
     AI_MODEL_MINI: str
+    # Chat V3 model split. Empty values preserve the legacy AI_MODEL behavior.
+    AI_MODEL_TOOL_SELECTOR: str = ""
+    AI_MODEL_COMPOSER: str = ""
+    AI_MODEL_FALLBACK: str = ""
     # Per-agent model overrides
     AI_MODEL_LEADING_AGENT: str
     AI_MODEL_QC_AGENT: str

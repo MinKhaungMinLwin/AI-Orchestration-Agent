@@ -35,7 +35,7 @@ POST /chat (api/tstation/chat_message.py — unchanged)
             │
             ├─ ③  slots: load (Redis) → merge slots_patch (ConversationSlots.merge)
             │
-            ├─ ④  ToolLoopExecutor                       [LLM: AI_MODEL, streaming]
+            ├─ ④  ToolLoopExecutor                       [LLM: TOOL_SELECTOR → COMPOSER]
             │     bind the domain's tools → LLM picks tools → run → loop (max 4 rounds)
             │     streams: token / tool_start / tool / agent_flow
             │
@@ -63,7 +63,7 @@ POST /chat (api/tstation/chat_message.py — unchanged)
 chat_v3/
 ├── __init__.py          # Public API: chat(request), enabled(), TStationChatServiceV3
 ├── service.py           # The one orchestrator — the entire ①→⑧ flow above
-├── llm.py               # LLM singletons: get_chat_llm() (AI_MODEL), get_router_llm() (AI_MODEL_MINI)
+├── llm.py               # Router + V3 selector/composer/fallback model singletons
 ├── sse.py               # SSE event builders — the ONLY place stream events are formatted
 ├── context.py           # Builds the message list: history + USER CONTEXT (JWT/UI) + current_time
 ├── executor.py          # ToolLoopExecutor: native tool-calling loop, the LLM picks tools itself
@@ -150,7 +150,10 @@ Guard text is **pure data** (Korean, ported verbatim from V2). To add a guard: a
 
 - `tools_for_domain(domain)`: LEADING → `[]` (pure chat), DISCOVERY → 21, TRANSACTION → 24, SUPPORT → 8.
 - Tools are **re-exported** from the V2 agents, never rewritten — any fix to V2 tools applies to V3 automatically.
-- `ToolLoopExecutor`: bind tools → stream response → on `tool_calls`, run the tool (emitting `tool_start`/`tool`/`agent_flow`), append a `ToolMessage`, loop. Max **4 rounds**, then a forced no-tools final answer.
+- `ToolLoopExecutor`: bind tools → select with `AI_MODEL_TOOL_SELECTOR` → validate against the bound tool set,
+  runtime guard, and tool input schema → execute. A rejected selection is retried once with `AI_MODEL_FALLBACK`.
+  After tool execution, `AI_MODEL_COMPOSER` produces the grounded answer. Max **4 rounds**, then a forced
+  no-tools final answer.
 - **3 write tools** (`quick_order_tool`, `save_to_cart_tool`, `issue_coupon_tool`): the `TRANSACTION_WRITE_GUIDANCE` prompt requires the LLM to summarize the order and get explicit confirmation before calling them.
 - Note: the service calls `set_tstation_be_token()` before the executor — tools need the BE token.
 
@@ -210,7 +213,10 @@ No FE/endpoint changes needed — still `POST /chat`. The branch point is at the
 
 | Var | Used for |
 |---|---|
-| `AI_MODEL` | Main chat call (streaming) |
+| `AI_MODEL` | Backward-compatible main model when a V3-specific model is unset |
+| `AI_MODEL_TOOL_SELECTOR` | V3 fast tool-selection model; falls back to `AI_MODEL` when empty |
+| `AI_MODEL_COMPOSER` | V3 fast grounded-answer model; falls back to `AI_MODEL` when empty |
+| `AI_MODEL_FALLBACK` | V3 stronger retry after contract or deterministic-QC failure |
 | `AI_MODEL_MINI` | Router / chips / QC / template builder |
 | `AI_QC_ENABLED` | Enables fact-checking (+1 call per tool-using turn) |
 | `AI_GATEWAY_BASE_URL`, `AI_GATEWAY_API_KEY`, `AI_DEFAULT_PROVIDER` | LiteLLM gateway |

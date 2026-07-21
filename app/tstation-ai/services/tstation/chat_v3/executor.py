@@ -9,10 +9,11 @@ import json
 import logging
 from collections.abc import Callable
 
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage, ToolMessage
+from pydantic import ValidationError
 
 from services.tstation.chat_v3 import sse
-from services.tstation.chat_v3.llm import get_chat_llm
+from services.tstation.chat_v3.llm import get_composer_llm, get_fallback_llm, get_tool_selector_llm
 from services.tstation.policies.inventory_response_policy import redact_inventory_output_for_model
 
 logger = logging.getLogger(__name__)
@@ -172,16 +173,34 @@ class ToolLoopExecutor:
         self.final_text: str = ""
         self.tool_calls: list[dict] = []
         self.stopped_after_tool = False
+        self.selector_fallback_used = False
+        self.selector_fallback_reason = ""
+        self.composer_fallback_used = False
 
     async def stream(self):
-        llm = get_chat_llm()
-        if self._tools:
-            llm = llm.bind_tools(list(self._tools.values()))
+        has_tool_result = False
+        fallback_instruction = ""
+        force_answer_without_tools = False
 
         for _ in range(MAX_TOOL_ROUNDS + 1):
+            input_messages = self._messages
+            if fallback_instruction:
+                llm = get_fallback_llm()
+                input_messages = [
+                    *self._messages,
+                    SystemMessage(content=fallback_instruction),
+                ]
+                fallback_instruction = ""
+            elif has_tool_result or not self._tools:
+                llm = get_composer_llm()
+            else:
+                llm = get_tool_selector_llm()
+            if self._tools and not force_answer_without_tools:
+                llm = llm.bind_tools(list(self._tools.values()))
+
             accumulated = None
             round_text = ""
-            async for chunk in llm.astream(self._messages, config=self._trace_config):
+            async for chunk in llm.astream(input_messages, config=self._trace_config):
                 accumulated = chunk if accumulated is None else accumulated + chunk
                 text = sse.chunk_text(chunk.content)
                 if text:
@@ -195,23 +214,108 @@ class ToolLoopExecutor:
                 self.final_text = round_text
                 return
 
+            prepared_calls = [self._normalize_tool_call(call) for call in tool_calls]
+            denials = [(call, denial) for call in prepared_calls if (denial := self._tool_call_denial(call))]
+            if denials and not self.selector_fallback_used:
+                self.selector_fallback_used = True
+                self.selector_fallback_reason = denials[0][1]
+                rejected = ", ".join(str(call.get("name") or "unknown") for call, _ in denials)
+                fallback_instruction = (
+                    "The fast model proposed a tool call rejected by the runtime contract. "
+                    f"Rejected tools: {rejected}. Reason: {self.selector_fallback_reason}. "
+                    "Re-select only from the bound tools with valid required arguments. "
+                    "Do not repeat the rejected call unless you have corrected it."
+                )
+                logger.info(
+                    "[CHAT_V3] tool selection rejected; retrying once with fallback model: tools=%s reason=%s",
+                    rejected,
+                    self.selector_fallback_reason,
+                )
+                continue
+
             self._messages.append(ai_message)
-            for call in tool_calls:
+            if denials:
+                denial_by_id = {str(call.get("id") or call.get("name") or ""): denial for call, denial in denials}
+                for call in prepared_calls:
+                    key = str(call.get("id") or call.get("name") or "")
+                    denial = denial_by_id.get(key) or "batch_rejected_due_to_contract_failure"
+                    async for event in self._record_blocked_call(call, denial):
+                        yield event
+                has_tool_result = True
+                force_answer_without_tools = True
+                continue
+
+            for call in prepared_calls:
                 async for event in self._run_tool(call):
                     yield event
                 if self._stop_after_tool is not None and self._stop_after_tool(self.tool_calls):
                     self.stopped_after_tool = True
                     return
+            has_tool_result = True
 
         # Tool budget exhausted — force a final text answer without tools.
         final_text = ""
-        async for chunk in get_chat_llm().astream(self._messages, config=self._trace_config):
+        async for chunk in get_composer_llm().astream(self._messages, config=self._trace_config):
             text = sse.chunk_text(chunk.content)
             if text:
                 final_text += text
                 if self._stream_tokens:
                     yield sse.token(text)
         self.final_text = final_text
+
+    async def recompose_with_fallback(self, reason: str, trace_config: dict | None = None) -> str:
+        """Rewrite a grounded answer once when deterministic QC rejects the fast composer."""
+        instruction = SystemMessage(
+            content=(
+                "The fast composer answer failed deterministic grounding checks. "
+                f"Failure: {reason}. Rewrite the user-facing answer using only the tool results already present. "
+                "Keep product identifiers, prices, store names, inventory, and dates exactly consistent with those results."
+            )
+        )
+        text = ""
+        try:
+            async for chunk in get_fallback_llm().astream(
+                [*self._messages, instruction],
+                config=trace_config or self._trace_config,
+            ):
+                text += sse.chunk_text(chunk.content)
+        except Exception:
+            logger.exception("[CHAT_V3] composer fallback failed; keeping the original answer")
+            return ""
+        self.composer_fallback_used = True
+        return text.strip()
+
+    def _normalize_tool_call(self, call: dict) -> dict:
+        return self._tool_call_normalizer(call) if self._tool_call_normalizer is not None else call
+
+    def _tool_call_denial(self, call: dict) -> str | None:
+        name = str(call.get("name") or "")
+        tool = self._tools.get(name)
+        if tool is None:
+            return f"tool_not_allowed:{name or 'missing_name'}"
+        if self._tool_call_guard is not None:
+            denial = self._tool_call_guard(call)
+            if denial:
+                return f"policy_guard:{denial}"
+        get_input_schema = getattr(tool, "get_input_schema", None)
+        if callable(get_input_schema):
+            try:
+                get_input_schema().model_validate(call.get("args") or {})
+            except ValidationError as exc:
+                fields = ",".join(str(item.get("loc", ["args"])[-1]) for item in exc.errors()[:3])
+                return f"invalid_tool_arguments:{name}:{fields or 'args'}"
+        return None
+
+    async def _record_blocked_call(self, call: dict, denial: str):
+        name = str(call.get("name") or "")
+        args = call.get("args") or {}
+        call_id = call.get("id") or name or "blocked_tool"
+        display = self._display_names.get(name, name)
+        output_text = f"Tool error: blocked_by_contract — {denial}"
+        logger.info("[CHAT_V3] tool %s blocked by contract: %s", name, denial)
+        self.tool_calls.append({"name": name, "args": args, "output": output_text})
+        yield sse.agent_flow(display, "error")
+        self._messages.append(ToolMessage(content=output_text, tool_call_id=call_id))
 
     async def _run_tool(self, call: dict):
         if self._tool_call_normalizer is not None:

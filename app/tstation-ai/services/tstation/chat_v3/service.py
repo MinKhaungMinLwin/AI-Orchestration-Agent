@@ -602,6 +602,9 @@ def _update_trace_monitoring(
     qc_corrected: bool = False,
     qc_failed: bool = False,
     qc_reason: str = "",
+    selector_model_fallback_used: bool = False,
+    composer_model_fallback_used: bool = False,
+    selector_model_fallback_reason: str = "",
     runtime_error: bool = False,
     latency_ms: int | None = None,
 ) -> None:
@@ -616,6 +619,11 @@ def _update_trace_monitoring(
         runtime_error=runtime_error,
         latency_ms=latency_ms,
     )
+    monitoring_payload["metadata"].update({
+        "selector_model_fallback_used": selector_model_fallback_used,
+        "composer_model_fallback_used": composer_model_fallback_used,
+        "selector_model_fallback_reason": selector_model_fallback_reason,
+    })
     trace_update = dict(monitoring_payload)
     if user_text is not None:
         trace_update["input"] = truncate_for_trace(user_text)
@@ -1102,6 +1110,31 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         qc_corrected = False
         qc_failed = qc_result.failed
         qc_reason = qc_result.reason
+        recompose_with_fallback = getattr(executor, "recompose_with_fallback", None)
+        selector_fallback_used = bool(getattr(executor, "selector_fallback_used", False))
+        if qc_failed and executor.tool_calls and not selector_fallback_used and callable(recompose_with_fallback):
+            fallback_answer = await recompose_with_fallback(
+                qc_reason,
+                trace_config=_trace_config(
+                    request,
+                    run_name="chat_v3_composer_fallback",
+                    prompt_name="chat_v3_composer_fallback",
+                    tags=["composer", "fallback"],
+                    parent_span_id=parent_span_id,
+                    usage_tracker=usage_tracker,
+                ),
+            )
+            if fallback_answer:
+                fallback_qc = await qc.verify_answer(fallback_answer, executor.tool_calls)
+                fallback_failed = (
+                    fallback_qc != fallback_answer if isinstance(fallback_qc, str) else fallback_qc.failed
+                )
+                if not fallback_failed:
+                    answer = fallback_answer
+                    token_events = []
+                    qc_corrected = True
+                    qc_failed = False
+                    qc_reason = "qc_fallback_passed"
         if qc_failed:
             yield sse.sse({
                 "type": "qc_result",
@@ -1264,6 +1297,9 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         qc_corrected=qc_corrected,
         qc_failed=qc_failed,
         qc_reason=qc_reason,
+        selector_model_fallback_used=bool(getattr(executor, "selector_fallback_used", False)),
+        composer_model_fallback_used=bool(getattr(executor, "composer_fallback_used", False)),
+        selector_model_fallback_reason=str(getattr(executor, "selector_fallback_reason", "")),
         latency_ms=int((time.perf_counter() - t0) * 1000),
         trace_observation=parent_span,
     )
