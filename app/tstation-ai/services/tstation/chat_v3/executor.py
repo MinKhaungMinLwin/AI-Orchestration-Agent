@@ -84,8 +84,8 @@ def _compact_recommendation_output(output_text: str) -> str:
         "items": compact_items,
         "price_contract": {
             "sale_prc": "기본가",
-            "extra_fvr_sale_prc": "일반 혜택가",
-            "instruction": "상품 가격은 일반 혜택가를 우선하고, 없으면 기본가를 표시",
+            "extra_fvr_sale_prc": "혜택가",
+            "instruction": "상품 가격은 혜택가를 우선하고, 없으면 기본가를 표시",
         },
     }
     # The tool silently drops the vehicle_type filter when it would return nothing, and says so

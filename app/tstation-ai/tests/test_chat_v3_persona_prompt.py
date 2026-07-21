@@ -46,7 +46,7 @@ def test_system_prompt_still_declines_store_attributes_with_no_rating_proxy():
 
 
 def test_system_prompt_locks_user_facing_price_labels():
-    assert "extra_fvr_sale_prc를 '일반 혜택가'로 우선 안내" in SYSTEM_PROMPT
+    assert "extra_fvr_sale_prc를 '혜택가'로 우선 안내" in SYSTEM_PROMPT
     assert "값이 없을 때만 sale_prc를 '기본가'" in SYSTEM_PROMPT
     assert "개인화 가격은 별도 가격으로 안내하지 마세요" in SYSTEM_PROMPT
     assert "cheapest_final_prc" not in SYSTEM_PROMPT

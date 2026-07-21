@@ -20,6 +20,7 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
 from services.tstation.chat_v3 import composer, context, memory, monitoring, qc, sse, templates
 from services.tstation.chat_v3.executor import ToolLoopExecutor
+from services.tstation.chat_v3.price_notice import apply_price_notice
 from services.tstation.chat_v3.token_usage import TurnTokenUsage
 from services.tstation.quota_service import record_monthly_tokens
 from services.tstation.chat_v3.prompts.persona import (
@@ -1211,6 +1212,10 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             })
     answer = templates.format_location_answer(answer, executor.tool_calls)
     answer = templates.compact_answer_spacing(answer)
+    notice_answer = apply_price_notice(answer, executor.tool_calls)
+    if notice_answer != answer:
+        answer = notice_answer
+        token_events = []
     qna_event = templates.build_qna_complete_event(answer, executor.tool_calls)
     if qna_event:
         answer = qna_event["data"]["assistantResponse"]

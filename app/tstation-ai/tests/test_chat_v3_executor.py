@@ -240,8 +240,8 @@ def test_recommendation_output_uses_general_benefit_price_contract_before_trunca
     assert all("cheapest_applied_coupons" not in item for item in parsed["data"]["items"])
     assert parsed["data"]["price_contract"] == {
         "sale_prc": "기본가",
-        "extra_fvr_sale_prc": "일반 혜택가",
-        "instruction": "상품 가격은 일반 혜택가를 우선하고, 없으면 기본가를 표시",
+        "extra_fvr_sale_prc": "혜택가",
+        "instruction": "상품 가격은 혜택가를 우선하고, 없으면 기본가를 표시",
     }
     assert "pc_prod_remark_desc" not in visible
     assert "pc_prod_tech_desc" not in visible
