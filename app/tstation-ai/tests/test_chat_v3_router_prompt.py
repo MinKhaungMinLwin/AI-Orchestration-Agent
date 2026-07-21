@@ -85,6 +85,17 @@ def test_router_prompt_separates_maintenance_history_lookup_from_access_policy()
     assert "내 정비이력 보여줘" in static_faq_section
 
 
+def test_router_prompt_separates_tire_self_check_guidance_from_measurement_result_lookup():
+    static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
+
+    assert "tire_check_result_lookup" in static_faq_section
+    assert "이미 측정한 타이어 마모도 결과·측정 이력" in static_faq_section
+    assert '"타이어 마모도 확인 방법"' in static_faq_section
+    assert "이 key를 사용하지 마세요" in static_faq_section
+    assert 'intents=["tire_tread_self_check_guidance"]' in static_faq_section
+    assert "SUPPORT FAQ/RAG에서 답변" in static_faq_section
+
+
 def test_router_prompt_routes_pickup_questions_to_faq_not_static_policy():
     pickup_section = ROUTER_PROMPT.split("### 스마트픽업 FAQ 라우팅", maxsplit=1)[1].split(
         "### 고정 FAQ 정책 key 라우팅",

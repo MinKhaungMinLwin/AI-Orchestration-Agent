@@ -316,6 +316,22 @@ async def _assert_static_faq_policy_route_uses_registered_ctas(monkeypatch: pyte
     assert persisted_context["tool_calls"] == []
 
 
+def test_tire_self_check_guidance_does_not_short_circuit_to_result_lookup_policy() -> None:
+    self_check_decision = RouteDecision(
+        domain=Domain.SUPPORT,
+        intents=["tire_tread_self_check_guidance"],
+        needs_selection_card=False,
+    )
+    result_lookup_decision = RouteDecision(
+        domain=Domain.SUPPORT,
+        intents=["tire_check_result_lookup"],
+        needs_selection_card=False,
+    )
+
+    assert service._static_faq_policy_event(self_check_decision) is None
+    assert service._static_faq_policy_event(result_lookup_decision) is not None
+
+
 async def _assert_store_visit_schedule_selection_uses_store_detail_cta(monkeypatch: pytest.MonkeyPatch) -> None:
     persisted_context = {}
 
