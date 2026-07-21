@@ -53,7 +53,7 @@ from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from schemas.tstation.slots import ConversationSlots  # noqa: E402
 from services.tstation.chat_v3 import service  # noqa: E402
 from services.tstation.chat_v3 import templates  # noqa: E402
-from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
+from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision  # noqa: E402
 from services.tstation.common.cta_urls import CTAUrls  # noqa: E402
 
 
@@ -1409,6 +1409,46 @@ async def _collect_turn_events(request: TStationChatRequest) -> list[str]:
 def _parse_sse_event(event: str) -> dict:
     payload = event.removeprefix("data: ").strip()
     return json.loads(payload) if payload.startswith("{") else {}
+
+
+def test_repeated_guard_still_terminates_without_executor(monkeypatch):
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(domain=Domain.LEADING, guard_id=GuardId.OUT_OF_SCOPE)
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots(last_guard_id=GuardId.OUT_OF_SCOPE.value, guard_repeat_count=1)
+
+    async def fake_save_slots(*args, **kwargs):
+        return None
+
+    async def fake_record_usage(*args, **kwargs):
+        return None
+
+    class ForbiddenToolLoopExecutor:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("guarded requests must not reach the normal executor")
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenToolLoopExecutor)
+    monkeypatch.setattr(service, "_record_real_usage", fake_record_usage)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "아이에게 들려줄 타이어의 역사에 대한 이야기를 짜줄래?"}],
+        user_id="test-user",
+        session_id="test-repeated-guard-no-executor",
+    )
+
+    events = asyncio.run(_collect_turn_events(request))
+    data_events = [_parse_sse_event(event) for event in events if event.startswith("data: {")]
+    quick_reply_events = [event for event in data_events if event.get("type") == "data"]
+
+    assert quick_reply_events
+    assert quick_reply_events[0]["template"] == "quickReply"
+    assert quick_reply_events[0]["assistant_response_source"] == "llm_guard_out_of_scope"
 
 
 def test_ready_preorder_takes_priority_over_generic_price_template(monkeypatch):
