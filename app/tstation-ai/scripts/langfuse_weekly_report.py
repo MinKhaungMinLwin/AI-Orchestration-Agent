@@ -32,6 +32,7 @@ class MonitoringTrace:
     session_id: str
     user_id: str
     input_text: str
+    assistant_response: str
     final_status: str
     error_reason: str
     primary_domain: str
@@ -91,6 +92,21 @@ def _as_list(value: Any) -> list[str]:
     return []
 
 
+def _assistant_response(row: dict[str, Any], metadata: dict[str, Any], output: Any) -> str:
+    """Return the final user-visible answer from customer monitoring data."""
+    answer = metadata.get("assistant_response")
+    if isinstance(answer, str):
+        return answer
+    if isinstance(output, str):
+        return output
+    if isinstance(output, dict):
+        answer = output.get("assistant_response") or output.get("assistantResponse")
+        if isinstance(answer, str):
+            return answer
+    raw_output = row.get("output")
+    return raw_output if isinstance(raw_output, str) else ""
+
+
 def _collect_traces(start: datetime, end: datetime, *, limit: int, max_pages: int) -> list[MonitoringTrace]:
     traces: list[MonitoringTrace] = []
     for page in range(1, max_pages + 1):
@@ -107,7 +123,8 @@ def _collect_traces(start: datetime, end: datetime, *, limit: int, max_pages: in
         rows = payload.get("data") or []
         for row in rows:
             metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            output = row.get("output") if isinstance(row.get("output"), dict) else {}
+            output = row.get("output")
+            output_data = output if isinstance(output, dict) else {}
             traces.append(
                 MonitoringTrace(
                     trace_id=str(row.get("id") or ""),
@@ -115,11 +132,12 @@ def _collect_traces(start: datetime, end: datetime, *, limit: int, max_pages: in
                     session_id=str(row.get("sessionId") or metadata.get("session_id") or ""),
                     user_id=str(row.get("userId") or metadata.get("user_id") or ""),
                     input_text=str(row.get("input") or ""),
-                    final_status=str(metadata.get("final_status") or output.get("final_status") or ""),
-                    error_reason=str(metadata.get("error_reason") or output.get("error_reason") or ""),
-                    primary_domain=str(metadata.get("primary_domain") or output.get("primary_domain") or ""),
-                    primary_af=str(metadata.get("primary_af") or output.get("primary_af") or ""),
-                    final_template=str(metadata.get("final_template") or output.get("final_template") or ""),
+                    assistant_response=_assistant_response(row, metadata, output),
+                    final_status=str(metadata.get("final_status") or output_data.get("final_status") or ""),
+                    error_reason=str(metadata.get("error_reason") or output_data.get("error_reason") or ""),
+                    primary_domain=str(metadata.get("primary_domain") or output_data.get("primary_domain") or ""),
+                    primary_af=str(metadata.get("primary_af") or output_data.get("primary_af") or ""),
+                    final_template=str(metadata.get("final_template") or output_data.get("final_template") or ""),
                     latency_ms=metadata.get("latency_ms") if isinstance(metadata.get("latency_ms"), int) else None,
                     message_id=str(metadata.get("message_id") or ""),
                     route_intents=_as_list(metadata.get("route_intents")),
@@ -163,6 +181,7 @@ def _write_csv(path: str, traces: list[MonitoringTrace]) -> None:
                 "route_intents",
                 "tool_path",
                 "input_text",
+                "assistant_response",
             ],
         )
         writer.writeheader()
@@ -183,6 +202,7 @@ def _write_csv(path: str, traces: list[MonitoringTrace]) -> None:
                     "route_intents": ",".join(trace.route_intents),
                     "tool_path": ",".join(trace.tool_path),
                     "input_text": trace.input_text,
+                    "assistant_response": trace.assistant_response,
                 }
             )
 
