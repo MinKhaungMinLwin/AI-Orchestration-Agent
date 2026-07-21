@@ -153,6 +153,16 @@ def test_router_prompt_blocks_tire_themed_artifact_generation_as_out_of_scope():
     assert "타이어 재고 있어?" in guard_section
 
 
+def test_router_prompt_blocks_tire_themed_general_history_as_out_of_scope():
+    guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
+
+    assert "일반 지식·역사·에세이·산업/유통 흐름 설명" in guard_section
+    assert "T-Station 고객 업무와 직접 연결되지 않는 해설" in guard_section
+    assert "타이어 재고에 대한 역사는?" in guard_section
+    assert "타이어 산업의 발전 과정을 설명해줘" in guard_section
+    assert "타이어 관리·차량 안전·보증/장착/구매 방법" in guard_section
+
+
 def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():
     static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
 
