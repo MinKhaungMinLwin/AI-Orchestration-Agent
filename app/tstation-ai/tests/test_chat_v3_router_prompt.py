@@ -13,6 +13,8 @@ def test_router_prompt_defines_tstation_scope_boundary():
     assert "타이어 판매·장착·차량 관리 서비스" in ROUTER_PROMPT
     assert "타이어/상품/차량/매장/가격/재고/쿠폰/혜택/주문/예약/장착/보증/안심서비스/FAQ" in ROUTER_PROMPT
     assert "최종 행동 목적" in ROUTER_PROMPT
+    assert "현재 발화의 목적 기준으로 out_of_scope 여부를 다시 판단" in ROUTER_PROMPT
+    assert "현재 발화가 새로운 주된 목적이나 외부 주제로 이동" in ROUTER_PROMPT
 
 
 def test_router_routes_bare_info_to_the_domain_that_can_use_it():
@@ -161,6 +163,22 @@ def test_router_prompt_blocks_tire_themed_general_history_as_out_of_scope():
     assert "타이어 재고에 대한 역사는?" in guard_section
     assert "타이어 산업의 발전 과정을 설명해줘" in guard_section
     assert "타이어 관리·차량 안전·보증/장착/구매 방법" in guard_section
+
+
+def test_router_prompt_blocks_new_external_purposes_during_scope_drift():
+    guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
+
+    assert "외부 기관·서비스·전문 영역" in guard_section
+    assert "조언, 실행 방법, 연락처/접수 경로, 판단·의사결정" in guard_section
+    assert "글/문서 작성이면 out_of_scope" in guard_section
+    assert "예시일 뿐" in guard_section
+    assert "의료·건강 판단" in guard_section
+    assert "병원/응급 서비스" in guard_section
+    assert "교통사고 현장 조치" in guard_section
+    assert "경찰/보험사 연락" in guard_section
+    assert "보험 사고 접수·진술·청구 문서" in guard_section
+    assert "대화가 전기차·차량·타이어에서 시작되었더라도" in guard_section
+    assert "T-Station 차량 관리 FAQ로 확장하지 마세요" in guard_section
 
 
 def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():

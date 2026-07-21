@@ -58,6 +58,7 @@ from services.tstation.chat_v3.router.route import (  # noqa: E402
     _clear_non_target_unsupported_brand_guard,
     _decide_reservation_date_guard,
     _move_static_faq_guard_to_intent,
+    _router_input,
 )
 from services.tstation.chat_v3.router.schemas import (  # noqa: E402
     BrandContext,
@@ -324,6 +325,23 @@ def test_out_of_scope_guard_does_not_offer_qna_handoff() -> None:
     assert "답변드리기 어려운 주제" in guard.text
     assert [chip["label"] for chip in guard.chips] == ["타이어 추천 받기", "가까운 매장 찾기", "진행 중인 혜택"]
     assert guard.predicted_domains == ["DISCOVERY", "TRANSACTION"]
+
+
+def test_router_input_separates_current_turn_from_previous_context() -> None:
+    request = _request(
+        messages=[
+            {"role": "user", "content": "전기차 타이어 추천해줘"},
+            {"role": "assistant", "content": "전기차 전용 타이어를 추천해드릴게요."},
+            {"role": "user", "content": "보험사에 얘기할 내용을 위에 내가 얘기한 사실에 기반해서 써줘"},
+        ]
+    )
+
+    router_text = _router_input(request)
+
+    assert "## 현재 사용자 발화" in router_text
+    assert "사용자: 보험사에 얘기할 내용을 위에 내가 얘기한 사실에 기반해서 써줘" in router_text
+    assert "## 이전 대화 (현재 발화 해석용 보조 맥락)" in router_text
+    assert "사용자: 전기차 타이어 추천해줘" in router_text
 
 
 def test_runflat_mixed_install_policy_overrides_vehicle_type_compatibility() -> None:
