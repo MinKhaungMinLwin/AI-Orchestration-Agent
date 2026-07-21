@@ -150,16 +150,37 @@ def clamp_staggered_ord_qty(slots: ConversationSlots) -> ConversationSlots:
     return slots.model_copy(update=updates) if updates else slots
 
 
+# A staggered size choice is invalidated only by a payload that re-establishes which
+# vehicle (and therefore which front/rear sizes) we are talking about.
+_VEHICLE_CONTEXT_KEYS = frozenset({
+    "car_no",
+    "car_lnc_cd",
+    "mbr_car_reg_seq",
+    "tire_size_front",
+    "tire_size_rear",
+})
+
+
 def _clear_unconfirmed_staggered_size(slots: ConversationSlots, values: dict) -> ConversationSlots:
-    if (
-        "tire_size" not in values
-        and slots.tire_size
-        and slots.tire_size_front
-        and slots.tire_size_rear
-        and slots.tire_size_front != slots.tire_size_rear
-    ):
-        return slots.model_copy(update={"tire_size": None})
-    return slots
+    """Drop a staggered size selection only when the patch changes the vehicle context.
+
+    This used to clear tire_size for *any* FE payload that failed to mention it, so a
+    chip filling an unrelated slot (quantity, product, store) silently un-selected the
+    size the customer had just chosen and bounced the flow back to the size question.
+    Every such chip had to remember to re-send tire_size; two of them did not.
+
+    Clearing is now strictly narrower than before — it can only preserve a selection
+    that the old rule would have dropped, never drop one it would have kept.
+    """
+    if "tire_size" in values:
+        return slots
+    if not (slots.tire_size and slots.tire_size_front and slots.tire_size_rear):
+        return slots
+    if slots.tire_size_front == slots.tire_size_rear:
+        return slots
+    if not _VEHICLE_CONTEXT_KEYS.intersection(values):
+        return slots
+    return slots.model_copy(update={"tire_size": None})
 
 
 def _single_row(parsed: object) -> dict | None:

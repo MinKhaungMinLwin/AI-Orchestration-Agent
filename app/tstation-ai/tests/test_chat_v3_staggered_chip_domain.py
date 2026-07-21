@@ -141,13 +141,30 @@ def test_tapping_a_quantity_chip_keeps_the_size_the_customer_just_chose() -> Non
     assert _staggered_tire_size_choice_event(after_tap) is None
 
 
-def test_a_quantity_only_payload_would_still_wipe_the_size() -> None:
-    # Proves the test above detects the real defect rather than passing vacuously:
-    # this is exactly the payload the chips used to carry.
+def test_a_payload_filling_an_unrelated_slot_keeps_the_size() -> None:
+    # Defence in depth behind the chip fix above: the guard now clears a staggered
+    # selection only for payloads that re-establish the vehicle, so a chip that fills
+    # some other slot cannot un-select the size even if it forgets to resend it.
     slots = _staggered_slots(tire_size="245/45R19")
     quantity_only = {"label": "2개", "domain": "DISCOVERY", "metadata": {"slots": {"ord_qty": 2}}}
 
     after_tap = apply_fe_slots(slots, _tap(quantity_only))
+
+    assert after_tap.tire_size == "245/45R19"
+    assert _staggered_tire_size_choice_event(after_tap) is None
+
+
+def test_switching_vehicle_still_clears_the_previous_size() -> None:
+    # The case the guard exists for: a new vehicle brings new front/rear sizes, so the
+    # size picked for the old car must not survive and be reused silently.
+    slots = _staggered_slots(tire_size="245/45R19")
+    other_vehicle = {
+        "label": "다른 차량",
+        "domain": "DISCOVERY",
+        "metadata": {"slots": {"car_no": "99가9999", "tire_size_front": "225/40R19", "tire_size_rear": "255/35R19"}},
+    }
+
+    after_tap = apply_fe_slots(slots, _tap(other_vehicle))
 
     assert after_tap.tire_size is None
     assert _staggered_tire_size_choice_event(after_tap) is not None
