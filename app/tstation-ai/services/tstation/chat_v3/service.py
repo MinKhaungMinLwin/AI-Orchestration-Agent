@@ -40,7 +40,6 @@ from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
 from services.tstation.chat_v3.router.schemas import Domain, RouteDecision
 from services.tstation.chat_v3.slots.derive import (
-    GUARD_REPEAT_ESCALATION_THRESHOLD,
     STAGGERED_MAX_ORD_QTY,
     apply_fe_slots,
     apply_text_vehicle_selection,
@@ -724,14 +723,7 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         slots = reset_for_supported_brand_switch(slots)
     slots = track_guard_repeat(decision.guard_id.value if decision else "none", slots)
     guard = get_guard(decision.guard_id) if decision else None
-    # Repeated same guard → hand off to domain agent instead of repeating canned text.
-    guard_stuck = bool(guard) and (slots.guard_repeat_count or 0) >= GUARD_REPEAT_ESCALATION_THRESHOLD
-    if guard_stuck:
-        logger.info(
-            "[CHAT_V3] guard=%s repeated %s turns for session=%s — handing off to domain agent",
-            guard.id, slots.guard_repeat_count, request.session_id,
-        )
-    if guard and not guard_stuck:
+    if guard:
         logger.info("[CHAT_V3] guard=%s for session=%s", guard.id, request.session_id)
         guard_text = templates.compact_answer_spacing(guard.text)
         result["answer"] = guard_text
