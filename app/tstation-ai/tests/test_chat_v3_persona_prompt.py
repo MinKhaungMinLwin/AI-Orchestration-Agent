@@ -13,6 +13,13 @@ RESERVATION_HISTORY_GUIDANCE = _PERSONA["RESERVATION_HISTORY_GUIDANCE"]
 MAINTENANCE_HISTORY_GUIDANCE = _PERSONA["MAINTENANCE_HISTORY_GUIDANCE"]
 
 
+def test_persona_requires_faq_grounding_for_tire_self_check_guidance():
+    assert "타이어 마모도 자가 확인" in SYSTEM_PROMPT
+    assert "search_faq_hybrid_tool을 먼저 호출" in SYSTEM_PROMPT
+    assert "측정 이력의 확인 경로" in SYSTEM_PROMPT
+    assert "타이어 상태를 직접 확인하는 방법" in SYSTEM_PROMPT
+
+
 def test_system_prompt_limits_store_recommendations_to_tool_verifiable_conditions():
     assert "도구가 확인할 수 있는 조건" in SYSTEM_PROMPT
     assert "가능한 것처럼 찾아주겠다고 말하지 말고" in SYSTEM_PROMPT

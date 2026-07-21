@@ -186,7 +186,12 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
 - my_goods_review_lookup: 내가 쓴 상품 리뷰/구매후기/베스트리뷰 확인 경로 문의
 - store_service_review_write: 매장 리뷰/매장 서비스 후기/칭찬/별점 작성 경로 문의
 - keep_service_history_lookup: 보관 서비스 이력, 맡긴 타이어, 보관 중인 타이어 확인 경로 문의
-- tire_check_result_lookup: 타이어 마모도 측정 결과 확인 경로 문의
+- tire_check_result_lookup: 사용자가 이미 측정한 타이어 마모도 결과·측정 이력을 어느 화면/메뉴에서 확인하는지 묻는 문의.
+  - 예: "마모도 측정 결과 어디서 봐?", "전에 측정한 마모도 이력 확인하고 싶어"
+  - "타이어 마모도 확인 방법", "타이어가 얼마나 닳았는지 어떻게 확인해?", "마모 한계선은 어디에 있어?",
+    "트레드 깊이는 어떻게 재?"처럼 타이어 상태를 직접 확인하는 일반적인 방법을 묻는 질문에는 이 key를 사용하지 마세요.
+    이런 질문은 guard_id="none", domain=SUPPORT, intents=["tire_tread_self_check_guidance"],
+    needs_selection_card=false 로 라우팅해 SUPPORT FAQ/RAG에서 답변하도록 하세요.
 
 ### extra_domains — 한 턴에 여러 영역이 필요할 때만 채우세요
 이번 턴을 끝까지 처리하려면 다른 영역의 데이터가 먼저 필요한 경우 그 영역을 추가하세요.
