@@ -181,6 +181,15 @@ def test_router_prompt_blocks_new_external_purposes_during_scope_drift():
     assert "T-Station 차량 관리 FAQ로 확장하지 마세요" in guard_section
 
 
+def test_router_prompt_defines_support_grounding_clarification_contract():
+    assert "support_needs_clarification" in ROUTER_PROMPT
+    assert "SUPPORT 답변은 공식 도구 결과 또는 고정 정책에 근거" in ROUTER_PROMPT
+    assert "필수 정보가 부족하여" in ROUTER_PROMPT
+    assert "사용자에게 짧게 되물어야 하는 경우에만" in ROUTER_PROMPT
+    assert "외부 기관·서비스·전문 영역의 새 목적" in ROUTER_PROMPT
+    assert 'guard_id="out_of_scope"' in ROUTER_PROMPT
+
+
 def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():
     static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
 

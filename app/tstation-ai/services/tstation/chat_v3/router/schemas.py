@@ -144,6 +144,13 @@ class RouteDecision(BaseModel):
             "policy-key section for the exact criteria."
         ),
     )
+    support_needs_clarification: bool = Field(
+        default=False,
+        description=(
+            "True only when this is a T-Station SUPPORT request but the assistant must ask for missing "
+            "information before an official tool or static policy can answer it."
+        ),
+    )
     needs_selection_card: bool = Field(
         default=True,
         description=(

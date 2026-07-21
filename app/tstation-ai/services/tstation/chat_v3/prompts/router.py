@@ -238,6 +238,15 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
   route to the relevant domain without attempting a combined lookup. The conversation must ask the user to choose
   one size before searching products, stores, stock, or installation availability.
 
+## 3-A. support_needs_clarification — SUPPORT의 무근거 직접 답변 방지
+SUPPORT 답변은 공식 도구 결과 또는 고정 정책에 근거해야 합니다.
+- true: 현재 발화가 T-Station SUPPORT 업무이지만 공식 도구/고정 정책으로 답하기 전에 필수 정보가 부족하여
+  사용자에게 짧게 되물어야 하는 경우에만 설정하세요.
+- false: 공식 도구나 고정 정책으로 바로 답할 수 있는 SUPPORT 문의, 이미 out_of_scope여야 하는 외부 주제,
+  또는 SUPPORT가 아닌 도메인에서는 항상 false입니다.
+- 외부 기관·서비스·전문 영역의 새 목적을 사용자가 묻는 경우에는 clarification으로 돌리지 말고 guard_id="out_of_scope"로
+  처리하세요.
+
 ## 4. slots_patch — 이번 발화에서 새로 알게 된 값만 채우세요
 - 이전 턴에서 이미 알고 있던 값, 추측한 값은 넣지 마세요
 - 사용자가 이번 발화에서 전륜과 후륜의 서로 다른 타이어 규격을 직접 지정하면
