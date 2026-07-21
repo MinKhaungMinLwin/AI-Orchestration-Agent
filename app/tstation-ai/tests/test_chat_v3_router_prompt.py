@@ -131,6 +131,17 @@ def test_router_prompt_routes_external_prediction_or_advice_as_out_of_scope():
     assert "타이어 말고" in guard_section
 
 
+def test_router_prompt_blocks_tire_themed_artifact_generation_as_out_of_scope():
+    guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
+
+    assert "외부 산출물을 만들어 달라고 하면" in guard_section
+    assert "최종 목적은 산출물 생성" in guard_section
+    assert "타이어를 주제로 단편 소설을 써줘" in guard_section
+    assert "타이어를 활용한 팩맨게임을 코드로 짜줘" in guard_section
+    assert "타이어 재고 및 매출 관리를 위한 엑셀 VBA 코드 짜줘" in guard_section
+    assert "타이어 재고 있어?" in guard_section
+
+
 def test_router_prompt_keeps_runflat_mixed_install_out_of_vehicle_type_policy():
     static_faq_section = ROUTER_PROMPT.split("### 고정 FAQ 정책 key 라우팅", maxsplit=1)[1]
 
