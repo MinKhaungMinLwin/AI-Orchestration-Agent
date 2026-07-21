@@ -51,6 +51,9 @@ PROFILE_TOOL_NAMES: dict[str, frozenset[str]] = {
         "get_product_promotions_tool",
         "get_my_coupons_tool",
         "get_coupon_applicable_products_tool",
+        # get_final_price_tool requires goods_no; without a resolver a price question that
+        # names a product has no reachable answer and the model calls nothing at all.
+        "search_product_tool",
     }),
     "discovery_search": frozenset({
         "search_product_tool",
