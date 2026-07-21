@@ -50,8 +50,10 @@ import asyncio  # noqa: E402
 import json  # noqa: E402
 
 from langchain_core.messages import AIMessageChunk  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
 from services.tstation.chat_v3 import executor as executor_module  # noqa: E402
+from services.tstation.chat_v3 import llm as llm_module  # noqa: E402
 from services.tstation.chat_v3.executor import (  # noqa: E402
     ToolLoopExecutor,
     _model_visible_tool_output,
@@ -62,6 +64,35 @@ from services.tstation.chat_v3.price_notice import COUPON_PRICE_NOTICE, apply_co
 from services.tstation.chat_v3.tools.discovery import DISCOVERY_TOOLS  # noqa: E402
 from services.tstation.chat_v3.tools import tools_for_domain  # noqa: E402
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools  # noqa: E402
+
+
+def test_v3_model_tier_uses_specific_setting_and_legacy_fallback(monkeypatch) -> None:
+    monkeypatch.setattr(llm_module.settings, "AI_MODEL", "legacy-main")
+    monkeypatch.setattr(llm_module.settings, "AI_MODEL_TOOL_SELECTOR", "gpt-5.6-luna")
+
+    assert llm_module._configured_model("AI_MODEL_TOOL_SELECTOR") == "gpt-5.6-luna"
+
+    monkeypatch.setattr(llm_module.settings, "AI_MODEL_TOOL_SELECTOR", "")
+
+    assert llm_module._configured_model("AI_MODEL_TOOL_SELECTOR") == "legacy-main"
+
+
+def test_executor_contract_rejects_missing_required_tool_argument() -> None:
+    class SearchArgs(BaseModel):
+        query: str
+
+    class FakeSearchTool:
+        name = "search_product_tool"
+
+        @staticmethod
+        def get_input_schema():
+            return SearchArgs
+
+    executor = ToolLoopExecutor([], [FakeSearchTool()], {})
+
+    denial = executor._tool_call_denial({"name": "search_product_tool", "args": {}, "id": "missing-query"})
+
+    assert denial == "invalid_tool_arguments:search_product_tool:query"
 
 
 def test_v3_discovery_exposes_the_two_step_car_model_size_lookup() -> None:
@@ -320,7 +351,7 @@ async def _assert_executor_stops_between_vehicle_lookup_and_next_tool(monkeypatc
             executed.append(self.name)
             return {"status": "success", "data": {}}
 
-    monkeypatch.setattr(executor_module, "get_chat_llm", lambda: FakeLLM())
+    monkeypatch.setattr(executor_module, "get_tool_selector_llm", lambda: FakeLLM())
     executor = ToolLoopExecutor(
         [],
         [FakeTool("get_my_cars_tool"), FakeTool("get_products_recommendations_tool")],
@@ -334,6 +365,83 @@ async def _assert_executor_stops_between_vehicle_lookup_and_next_tool(monkeypatc
     assert executed == ["get_my_cars_tool"]
     assert [call["name"] for call in executor.tool_calls] == ["get_my_cars_tool"]
     assert executor.stopped_after_tool is True
+
+
+def test_executor_retries_rejected_tool_selection_once_with_fallback(monkeypatch) -> None:
+    asyncio.run(_assert_executor_retries_rejected_tool_selection_once_with_fallback(monkeypatch))
+
+
+async def _assert_executor_retries_rejected_tool_selection_once_with_fallback(monkeypatch) -> None:
+    invoked = []
+
+    class FakeLLM:
+        def __init__(self, chunk):
+            self.chunk = chunk
+
+        def bind_tools(self, tools):
+            return self
+
+        async def astream(self, messages, config=None):
+            yield self.chunk
+
+    class FakeTool:
+        def __init__(self, name):
+            self.name = name
+
+        async def ainvoke(self, args, config=None):
+            invoked.append((self.name, args))
+            return {"status": "success", "data": {"items": []}}
+
+    selector = FakeLLM(
+        AIMessageChunk(
+            content="",
+            tool_calls=[{"name": "save_to_cart_tool", "args": {"goods_no": "G1"}, "id": "bad"}],
+        )
+    )
+    fallback = FakeLLM(
+        AIMessageChunk(
+            content="",
+            tool_calls=[{"name": "search_product_tool", "args": {"query": "벤투스"}, "id": "good"}],
+        )
+    )
+    composer = FakeLLM(AIMessageChunk(content="검색 결과를 확인했어요."))
+    monkeypatch.setattr(executor_module, "get_tool_selector_llm", lambda: selector)
+    monkeypatch.setattr(executor_module, "get_fallback_llm", lambda: fallback)
+    monkeypatch.setattr(executor_module, "get_composer_llm", lambda: composer)
+
+    executor = ToolLoopExecutor(
+        [],
+        [FakeTool("save_to_cart_tool"), FakeTool("search_product_tool")],
+        {},
+        tool_call_guard=lambda call: "cart_write_not_confirmed" if call.get("name") == "save_to_cart_tool" else None,
+    )
+    events = [event async for event in executor.stream()]
+
+    assert events
+    assert invoked == [("search_product_tool", {"query": "벤투스"})]
+    assert executor.final_text == "검색 결과를 확인했어요."
+    assert executor.selector_fallback_used is True
+    assert executor.selector_fallback_reason == "policy_guard:cart_write_not_confirmed"
+    assert [call["name"] for call in executor.tool_calls] == ["search_product_tool"]
+
+
+def test_executor_recomposes_with_fallback_model(monkeypatch) -> None:
+    asyncio.run(_assert_executor_recomposes_with_fallback_model(monkeypatch))
+
+
+async def _assert_executor_recomposes_with_fallback_model(monkeypatch) -> None:
+    class FakeFallbackLLM:
+        async def astream(self, messages, config=None):
+            assert "failed deterministic grounding checks" in messages[-1].content
+            yield AIMessageChunk(content="도구 결과에 맞춰 수정한 답변")
+
+    monkeypatch.setattr(executor_module, "get_fallback_llm", lambda: FakeFallbackLLM())
+    executor = ToolLoopExecutor([], [], {})
+
+    answer = await executor.recompose_with_fallback("qc_det_failed:price=100")
+
+    assert answer == "도구 결과에 맞춰 수정한 답변"
+    assert executor.composer_fallback_used is True
 
 
 async def _assert_executor_records_cart_result_false_as_error() -> None:
