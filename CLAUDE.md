@@ -21,7 +21,6 @@ shared tool/schema used by V3.
 |---------|------|-------------|
 | tstation-ai | 9000 | Main AI service (FastAPI) with Chat V3 runtime, shared tools, RAG (Qdrant), Celery/Redis |
 | tstation-be | 8000 | Backend service connecting to Oracle database |
-| tstation-ui-demo | 7777 | Streamlit-based demo UI |
 
 ## Karpathy-Inspired Coding Guidelines
 

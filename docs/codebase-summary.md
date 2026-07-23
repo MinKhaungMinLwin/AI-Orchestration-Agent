@@ -12,7 +12,6 @@ Before runtime work, read `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
 |---------|------|-------------|
 | tstation-ai | 9000 | Main AI service |
 | tstation-be | 8000 | Backend service |
-| tstation-ui-demo | 7777 | Demo UI |
 
 ## Repository Structure
 
@@ -52,8 +51,7 @@ tstation-ai/
 │   │           ├── chat.py                    # API branch + legacy V2 compatibility
 │   │           └── template_mapper.py         # Legacy V2 tool → UI template mapping
 │   ├── tstation-be-openapi.json               # OpenAPI spec for BE
-│   ├── tstation-ingestion/       # FAQ ingestion into Qdrant
-│   └── tstation-ui-demo/         # Streamlit demo UI
+│   └── tstation-ingestion/       # FAQ ingestion into Qdrant
 ├── docker/
 │   └── config/llm/conf-gateway.yaml  # LiteLLM gateway model config
 ├── docs/                        # Documentation
@@ -145,9 +143,6 @@ V3 outputs structured `data` events:
 - `celery`, `redis` — Queue + conversation history
 - `langfuse` — Tracing + observability
 - `pydantic-settings` — Config management
-
-### tstation-ui-demo
-- `streamlit` — Demo UI
 
 ## API Endpoints
 

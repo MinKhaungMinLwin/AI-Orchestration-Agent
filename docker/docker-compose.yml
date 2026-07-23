@@ -40,8 +40,6 @@
     depends_on:
       tstation-ai:
         condition: service_healthy
-      tstation-ui-demo:
-        condition: service_healthy
 
   # === AI Gateway ===
   ai-gateway:
@@ -191,47 +189,6 @@
       start_period: 10s
     networks:
       - internal-net
-
-  # === APP UI ===
-  tstation-ui-demo:
-    build: ../app/tstation-ui-demo
-    expose:
-      - 3000
-    read_only: true
-    tmpfs:
-      - /tmp
-      - /tmp/uv-cache
-    environment:
-      - UV_CACHE_DIR=/tmp/uv-cache
-      - HOME=/tmp
-    env_file:
-      - ../.env
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/ || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 512M
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - internal-net
-    depends_on:
-      tstation-ai:
-        condition: service_started
 
   # === Langfuse Stack (self-hosted v3) ===
   langfuse-clickhouse:

@@ -14,7 +14,7 @@ runtime behavior, read `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
 flowchart TB
     subgraph Client
       U[User]
-      UI[tstation-ui-demo Streamlit]
+      UI[tstation Frontend]
       U --> UI
       UI --> U
     end
@@ -54,7 +54,7 @@ flowchart TB
       ING[FAQ Ingestion → Qdrant]
     end
 
-    UI -->|POST /api/tstation/chat SSE| EP
+    UI -->|POST /api/tstation/messages/chat SSE| EP
     EP -->|SSE: token/tool/data/message/DONE| UI
 
     CS --> ROUTER

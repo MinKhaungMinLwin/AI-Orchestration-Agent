@@ -10,7 +10,6 @@ STACK_NAME="tstation-agent-dev"
 
 export AGENT_AI_IMAGE="${REG}/aichatbot-agent-ai:${TAG}"
 export AGENT_INGESTION_IMAGE="${REG}/aichatbot-agent-ingestion:${TAG}"
-export AGENT_UI_IMAGE="${REG}/aichatbot-agent-ui:${TAG}"
 
 set -a
 source .env

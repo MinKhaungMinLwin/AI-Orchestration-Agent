@@ -99,13 +99,3 @@ tstation-ai = [
     # Korean morphological tokenizer for BM25 (P1 improvement)
     "kiwipiepy>=0.17.0",
 ]
-
-
-## UI Demo
-tstation-ui-demo = [
-    "httpx>=0.23",
-    "curlify>=2.2.1",
-    "streamlit>=1.14.1",
-    "streamlit-nested-layout>=0.1.4",
-    "streamlit-mermaid>=0.3.0",
-]

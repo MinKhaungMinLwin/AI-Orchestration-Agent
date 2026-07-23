@@ -41,8 +41,7 @@ tstation-ai/
 │   │   │       ├── policies/          # deterministic 정책/가드
 │   │   │       └── rag/               # RAG 검색
 │   │   └── tests/                     # AI 서비스 테스트
-│   ├── tstation-ingestion/            # RAG 데이터 적재/색인
-│   └── tstation-ui-demo/              # Streamlit 데모 UI
+│   └── tstation-ingestion/            # RAG 데이터 적재/색인
 ├── docker/                            # Docker Compose 설정
 ├── eval/                              # 평가/스모크 테스트 스크립트
 ├── example/                           # 로컬 실행용 예시 파일
@@ -130,13 +129,6 @@ AI 서비스:
 cd tstation-ai
 set -a && source .env && set +a
 uv run app/tstation-ai/main.py
-```
-
-Streamlit 데모 UI:
-
-```bash
-cd tstation-ai
-uv run streamlit run app/tstation-ui-demo/Home.py --server.port 7777
 ```
 
 ## 개발 명령

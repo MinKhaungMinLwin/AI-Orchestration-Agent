@@ -15,7 +15,6 @@ runtime behavior, read `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`.
 |---------|------|-------------|
 | tstation-ai | 9000 | Main AI service (FastAPI) |
 | tstation-be | 8000 | Backend service (Oracle DB) |
-| tstation-ui-demo | 7777 | Streamlit demo UI |
 
 ## High-Level Architecture
 

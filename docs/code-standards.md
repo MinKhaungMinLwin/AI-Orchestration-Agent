@@ -65,7 +65,6 @@ app/
 │           ├── chat.py                    # API branch + legacy V2 compatibility
 │           └── template_mapper.py         # Legacy V2 template mapper
 ├── tstation-be-openapi.json  # OpenAPI spec (generated BE client)
-└── tstation-ui-demo/         # Streamlit demo UI
 ```
 
 ---
