@@ -177,12 +177,3 @@ def test_chat_owned_coupon_legacy_helpers_delegate_to_coupon_policy() -> None:
     assert "code_coupon_channel_policy" not in helper_region
     assert "code_coupon_resolver" not in applicability_region
     assert "code_product_coupon_resolver" not in applicability_region
-
-def test_router_override_inventory_documents_remaining_phase9_deterministic_overrides() -> None:
-    inventory = _read_repo_file("docs/router-override-inventory.md")
-
-    assert "Current-turn support policy normalization" in inventory
-    assert "Cancel-fee transaction boundary" in inventory
-    assert "general_cancel_fee_policy" in inventory
-    assert "payment_error_troubleshooting" in inventory
-    assert "tire_manufacture_date_policy" in inventory

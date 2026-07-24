@@ -5,8 +5,7 @@ T-Station AI는 티스테이션 챗봇의 Agent 서비스입니다. 사용자의
 ## Agent Runtime 진입점
 
 현재 agent/runtime 진입점은 `app/tstation-ai/services/tstation/chat_v3/` (`/chat_v3`)입니다.
-Agent 라우팅, tool loop, template, QC, SSE 동작을 수정하기 전에는
-`docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`를 먼저 확인합니다.
+Agent 라우팅, tool loop, template, QC, SSE 동작은 `chat_v3/`의 현재 구현을 기준으로 확인합니다.
 
 `services/tstation/chat.py`와 `services/tstation/agents/`는 레거시 V2 호환 및 V3가 재사용하는 tool/schema 계층입니다.
 새 런타임 동작은 `chat_v3/`에서 시작하고, 공유 도구나 FE schema 변경이 필요할 때만 `agents/*/tools.py` 또는
@@ -43,7 +42,6 @@ tstation-ai/
 │   │   └── tests/                     # AI 서비스 테스트
 │   └── tstation-ingestion/            # RAG 데이터 적재/색인
 ├── docker/                            # Docker Compose 설정
-├── eval/                              # 평가/스모크 테스트 스크립트
 ├── example/                           # 로컬 실행용 예시 파일
 ├── justfile                           # 개발/실행 태스크
 ├── pyproject.toml                     # uv 의존성 정의
@@ -53,7 +51,6 @@ tstation-ai/
 ## V3 구성
 
 V3는 `app/tstation-ai/services/tstation/chat_v3/` 아래에서 router → executor → composer/template/QC 흐름으로 동작합니다.
-자세한 마이그레이션 기준과 운영 플래그는 `docs/chat-v3/MIGRATE_V2_TO_V3_EN.md`를 기준으로 합니다.
 
 `app/tstation-ai/services/tstation/agents/` 아래 prefix 폴더는 현재 V3의 root runtime이 아니라 공유 tool/schema 및
 레거시 V2 호환 계층입니다.
