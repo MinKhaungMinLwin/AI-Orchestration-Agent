@@ -355,4 +355,5 @@ secrets:
   nginx_cert:
     file: ./config/nginx/certs/server.crt
   nginx_key:
-    file: ./config/nginx/certs/server.key
+    name: tstation-agent-dev-nginx-key-20260724
+    external: true

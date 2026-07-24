@@ -121,6 +121,25 @@ just logs
 just up-service tstation-ai
 ```
 
+### Swarm Nginx TLS 개인키
+
+원격 Swarm 배포는 Nginx 개인키를 Git 파일이 아닌 외부 Docker Secret으로 주입합니다.
+배포 전에 Swarm manager에 `tstation-agent-dev-nginx-key-20260724` Secret이 존재해야 합니다.
+
+```bash
+docker secret inspect tstation-agent-dev-nginx-key-20260724
+```
+
+신규 Swarm을 구성할 때는 저장소 밖의 권한 제한 경로에 보관한 키로
+Secret을 먼저 생성합니다.
+
+```bash
+docker secret create tstation-agent-dev-nginx-key-20260724 /secure/path/server.key
+```
+
+개인키를 저장소, Docker 이미지, 빌드 산출물 또는 배포 디렉터리에 복사하지 않습니다.
+Secret은 Swarm 클러스터 단위 리소스이므로 새 클러스터를 만들 때 별도로 준비해야 합니다.
+
 ### 로컬 프로세스로 실행
 
 AI 서비스:

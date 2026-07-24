@@ -25,6 +25,7 @@ uv.lock
 !.env.example
 docker/volumes
 docker_local
+docker/config/nginx/certs/*.key
 logs
 **.pem**
 **.crt*
