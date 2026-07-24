@@ -81,6 +81,10 @@ cd tstation-ai
 cp .env.example .env
 ```
 
+`.env.example`의 빈 값은 의도적인 placeholder입니다. 대상 환경의 실제 credential과 private endpoint를
+Git에 커밋하지 말고 `.env` 또는 승인된 secret store에 설정해야 합니다. Compose는 필수 RabbitMQ/Langfuse
+credential이 비어 있으면 약한 기본값을 사용하지 않고 배포 전에 실패합니다.
+
 로컬 개발 기본 파일까지 한 번에 준비하려면:
 
 ```bash

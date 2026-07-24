@@ -29,7 +29,7 @@ services:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: tstation
-      POSTGRES_PASSWORD: tstation
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}
       POSTGRES_DB: postgres
     volumes:
       - local-postgres-data:/var/lib/postgresql/data
@@ -48,8 +48,8 @@ services:
       local-postgres:
         condition: service_healthy
     environment:
-      - LITELLM_DB_URL=postgresql://tstation:tstation@local-postgres:5432/litellm
-      - DATABASE_URL=postgresql://tstation:tstation@local-postgres:5432/litellm
+      - LITELLM_DB_URL=postgresql://tstation:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@local-postgres:5432/litellm
+      - DATABASE_URL=postgresql://tstation:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@local-postgres:5432/litellm
 
   tstation-ai:
     depends_on:
@@ -63,9 +63,9 @@ services:
       langfuse-redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
-      DIRECT_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
-      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:-langfuseredis}@langfuse-redis:6379/0
+      DATABASE_URL: postgresql://tstation:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@local-postgres:5432/langfuse
+      DIRECT_URL: postgresql://tstation:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@local-postgres:5432/langfuse
+      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}@langfuse-redis:6379/0
 
   langfuse-server:
     depends_on:
@@ -74,15 +74,15 @@ services:
       langfuse-redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
-      DIRECT_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
-      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:-langfuseredis}@langfuse-redis:6379/0
+      DATABASE_URL: postgresql://tstation:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@local-postgres:5432/langfuse
+      DIRECT_URL: postgresql://tstation:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@local-postgres:5432/langfuse
+      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}@langfuse-redis:6379/0
 
   langfuse-redis:
     image: redis:7-alpine
-    command: redis-server --requirepass ${LANGFUSE_REDIS_PASSWORD:-langfuseredis}
+    command: redis-server --requirepass ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a ${LANGFUSE_REDIS_PASSWORD:-langfuseredis} ping | grep PONG"]
+      test: ["CMD-SHELL", "redis-cli -a ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set} ping | grep PONG"]
       interval: 5s
       timeout: 5s
       retries: 10

@@ -26,6 +26,7 @@ uv.lock
 docker/volumes
 docker_local
 docker/config/nginx/certs/*.key
+repomix-output.*
 logs
 **.pem**
 **.crt*
