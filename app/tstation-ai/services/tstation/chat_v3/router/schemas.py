@@ -36,6 +36,39 @@ class BrandContext(BaseModel):
     )
 
 
+class BenefitContext(BaseModel):
+    owned_coupon_exclusion: str | None = Field(
+        description=(
+            "Exact verbatim phrase from the current user turn that excludes the user's own/held coupons. "
+            "Leave empty unless the current turn explicitly changes scope away from owned coupons."
+        ),
+    )
+    unverified_benefit_target: str | None = Field(
+        description=(
+            "Exact verbatim phrase from the current user turn naming a private, hidden, VIP, black-card, "
+            "or otherwise unverified exclusive benefit. Generic percentage coupons are not such a target."
+        ),
+    )
+    unverified_access_request: str | None = Field(
+        description=(
+            "Exact verbatim phrase from the current user turn demanding the unverified benefit's link, code, "
+            "or equivalent private access. Leave empty for ordinary existence, location, or eligibility questions."
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_evidence_fields(cls, data: object) -> object:
+        if isinstance(data, dict):
+            for field_name in (
+                "owned_coupon_exclusion",
+                "unverified_benefit_target",
+                "unverified_access_request",
+            ):
+                data.setdefault(field_name, None)
+        return data
+
+
 class GuardId(str, Enum):
     NONE = "none"
     PII = "pii"
@@ -115,8 +148,11 @@ class RouteDecision(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _default_tool_profile(cls, data: object) -> object:
-        if isinstance(data, dict) and not data.get("tool_profile"):
-            data["tool_profile"] = ToolProfile.FULL.value
+        if isinstance(data, dict):
+            if not data.get("tool_profile"):
+                data["tool_profile"] = ToolProfile.FULL.value
+            if not data.get("benefit_context"):
+                data["benefit_context"] = {}
         return data
     slots_patch: SlotsPatch = Field(
         default_factory=SlotsPatch,
@@ -127,6 +163,12 @@ class RouteDecision(BaseModel):
         description=(
             "Role of tire brands mentioned in the current user turn. Distinguish installed/current brand, "
             "desired purchase/recommendation brand, excluded brand, and a truly unsupported target brand."
+        ),
+    )
+    benefit_context: BenefitContext = Field(
+        description=(
+            "Current-turn verbatim evidence for coupon scope changes and unverified exclusive-benefit requests. "
+            "Never copy evidence from conversation history."
         ),
     )
     installation_schedule_change: bool = Field(

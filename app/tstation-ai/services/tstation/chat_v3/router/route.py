@@ -14,7 +14,7 @@ from schemas.tstation.chat import TStationChatRequest
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.chat_v3.llm import get_router_llm
 from services.tstation.chat_v3.prompts.router import ROUTER_PROMPT
-from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision
+from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision, ToolProfile
 from services.tstation.policies.delivery_policy_gate import DeliveryPolicyIntent, decide_delivery_policy_gate
 from services.tstation.policies.late_night_store_hours_gate import is_late_night_store_hours_policy_request
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
@@ -191,6 +191,66 @@ def _clear_non_target_unsupported_brand_guard(decision: RouteDecision) -> RouteD
     return decision
 
 
+def _grounded_current_turn_evidence(value: str | None, current_user_text: str) -> bool:
+    evidence = " ".join(str(value or "").split())
+    current = " ".join(current_user_text.split())
+    return bool(evidence and evidence in current)
+
+
+def _validate_nonexistent_benefit_guard(
+    decision: RouteDecision,
+    request: TStationChatRequest,
+) -> RouteDecision:
+    """Require current-turn evidence before an unverified-benefit guard can stop normal coupon flows."""
+    current_user_text = _last_user_text(request)
+    benefit_context = decision.benefit_context
+    excludes_owned_coupons = _grounded_current_turn_evidence(
+        benefit_context.owned_coupon_exclusion,
+        current_user_text,
+    )
+    if excludes_owned_coupons:
+        logger.info(
+            "[CHAT_V3] normalized owned-coupon exclusion to current benefit discovery evidence=%s",
+            benefit_context.owned_coupon_exclusion,
+        )
+        decision.guard_id = GuardId.NONE
+        decision.domain = Domain.DISCOVERY
+        decision.extra_domains = []
+        decision.intents = [
+            "benefit_event_lookup",
+            *(
+                intent
+                for intent in decision.intents
+                if intent not in {"benefit_event_lookup", "my_coupons_lookup"}
+            ),
+        ]
+        decision.tool_profile = ToolProfile.DISCOVERY_EVENT_CONTENT
+        decision.needs_selection_card = True
+        return decision
+
+    if decision.guard_id != GuardId.NONEXISTENT_BENEFIT:
+        return decision
+
+    target_is_grounded = _grounded_current_turn_evidence(
+        benefit_context.unverified_benefit_target,
+        current_user_text,
+    )
+    access_request_is_grounded = _grounded_current_turn_evidence(
+        benefit_context.unverified_access_request,
+        current_user_text,
+    )
+    if target_is_grounded and access_request_is_grounded:
+        return decision
+
+    logger.info(
+        "[CHAT_V3] cleared nonexistent_benefit guard without grounded current-turn evidence target=%s access=%s",
+        benefit_context.unverified_benefit_target,
+        benefit_context.unverified_access_request,
+    )
+    decision.guard_id = GuardId.NONE
+    return decision
+
+
 def _apply_delivery_policy_guard(decision: RouteDecision, request: TStationChatRequest) -> RouteDecision:
     policy = decide_delivery_policy_gate(
         user_text=_last_user_text(request),
@@ -314,6 +374,7 @@ async def route_request(
         decision = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
         decision = _decide_reservation_date_guard(decision, request)
         decision = _clear_non_target_unsupported_brand_guard(decision)
+        decision = _validate_nonexistent_benefit_guard(decision, request)
         decision = _move_static_faq_guard_to_intent(decision)
         decision = _apply_runflat_mixed_install_policy(decision)
         decision = _apply_late_night_store_hours_policy(decision, request)

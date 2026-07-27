@@ -59,8 +59,10 @@ from services.tstation.chat_v3.router.route import (  # noqa: E402
     _decide_reservation_date_guard,
     _move_static_faq_guard_to_intent,
     _router_input,
+    _validate_nonexistent_benefit_guard,
 )
 from services.tstation.chat_v3.router.schemas import (  # noqa: E402
+    BenefitContext,
     BrandContext,
     Domain,
     GuardId,
@@ -145,6 +147,112 @@ def test_guard_without_any_known_date_is_cleared() -> None:
     result = _decide_reservation_date_guard(decision, _request(), today=date(2026, 7, 8))
 
     assert result.guard_id == GuardId.NONE
+
+
+def test_nonexistent_benefit_guard_is_cleared_without_current_turn_evidence() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONEXISTENT_BENEFIT,
+        domain=Domain.TRANSACTION,
+        intents=["my_coupons_lookup"],
+        tool_profile=ToolProfile.TRANSACTION_COUPON,
+    )
+    request = _request(
+        messages=[
+            {"role": "user", "content": "50% 쿠폰은 없어?"},
+            {"role": "assistant", "content": "보유 쿠폰을 확인해 드렸어요."},
+            {"role": "user", "content": "아니 내 쿠폰 말고 20% 할인되는 쿠폰은 어딨어?"},
+        ]
+    )
+
+    result = _validate_nonexistent_benefit_guard(decision, request)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.TRANSACTION
+    assert result.intents == ["my_coupons_lookup"]
+
+
+def test_nonexistent_benefit_guard_ignores_evidence_copied_only_from_history() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONEXISTENT_BENEFIT,
+        domain=Domain.TRANSACTION,
+        intents=["my_coupons_lookup"],
+        tool_profile=ToolProfile.TRANSACTION_COUPON,
+        benefit_context=BenefitContext(
+            unverified_benefit_target="VIP 전용",
+            unverified_access_request="할인 링크 줘",
+        ),
+    )
+    request = _request(
+        messages=[
+            {"role": "user", "content": "VIP 전용 할인 링크 줘"},
+            {"role": "assistant", "content": "확인되지 않은 링크는 제공할 수 없어요."},
+            {"role": "user", "content": "그건 됐고 지금 받을 수 있는 할인 쿠폰 알려줘"},
+        ]
+    )
+
+    result = _validate_nonexistent_benefit_guard(decision, request)
+
+    assert result.guard_id == GuardId.NONE
+
+
+def test_nonexistent_benefit_guard_stays_for_grounded_exclusive_access_request() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONEXISTENT_BENEFIT,
+        domain=Domain.TRANSACTION,
+        intents=["unverified_exclusive_benefit"],
+        tool_profile=ToolProfile.TRANSACTION_COUPON,
+        benefit_context=BenefitContext(
+            unverified_benefit_target="VIP 전용 할인",
+            unverified_access_request="링크 줘",
+        ),
+    )
+    request = _request(messages=[{"role": "user", "content": "VIP 전용 할인 링크 줘"}])
+
+    result = _validate_nonexistent_benefit_guard(decision, request)
+
+    assert result.guard_id == GuardId.NONEXISTENT_BENEFIT
+    assert result.domain == Domain.TRANSACTION
+
+
+def test_owned_coupon_exclusion_moves_followup_to_general_benefit_discovery() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONEXISTENT_BENEFIT,
+        domain=Domain.TRANSACTION,
+        intents=["my_coupons_lookup"],
+        tool_profile=ToolProfile.TRANSACTION_COUPON,
+        benefit_context=BenefitContext(owned_coupon_exclusion="내 쿠폰 말고"),
+    )
+    request = _request(
+        messages=[{"role": "user", "content": "아니 내 쿠폰 말고 20% 할인되는 쿠폰은 어딨어?"}]
+    )
+
+    result = _validate_nonexistent_benefit_guard(decision, request)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.DISCOVERY
+    assert result.extra_domains == []
+    assert result.intents == ["benefit_event_lookup"]
+    assert result.tool_profile == ToolProfile.DISCOVERY_EVENT_CONTENT
+    assert result.needs_selection_card is True
+
+
+def test_non_coupon_route_is_unchanged_by_benefit_guard_validation() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.NONE,
+        domain=Domain.DISCOVERY,
+        intents=["product_search"],
+        tool_profile=ToolProfile.DISCOVERY_SEARCH,
+    )
+
+    result = _validate_nonexistent_benefit_guard(
+        decision,
+        _request(messages=[{"role": "user", "content": "벤투스 상품 찾아줘"}]),
+    )
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.DISCOVERY
+    assert result.intents == ["product_search"]
+    assert result.tool_profile == ToolProfile.DISCOVERY_SEARCH
 
 
 def test_direct_home_delivery_policy_overrides_v3_router_guard() -> None:
@@ -551,6 +659,28 @@ def test_tool_profile_is_required_in_router_schema() -> None:
     # list and the mini model skips them — measured ~0% tool_profile emission
     # before it was made required (the Pydantic default masked the omission).
     assert "tool_profile" in (RouteDecision.model_json_schema().get("required") or [])
+
+
+def test_benefit_context_evidence_is_required_in_router_schema() -> None:
+    route_schema = RouteDecision.model_json_schema()
+    benefit_schema = route_schema["$defs"]["BenefitContext"]
+
+    assert "benefit_context" in (route_schema.get("required") or [])
+    assert set(benefit_schema.get("required") or []) == {
+        "owned_coupon_exclusion",
+        "unverified_benefit_target",
+        "unverified_access_request",
+    }
+
+
+def test_benefit_context_omitted_by_existing_callers_defaults_to_empty() -> None:
+    decision = RouteDecision.model_validate({"tool_profile": "full"})
+
+    assert decision.benefit_context == BenefitContext(
+        owned_coupon_exclusion=None,
+        unverified_benefit_target=None,
+        unverified_access_request=None,
+    )
 
 
 def test_tool_profile_omitted_by_model_still_defaults_to_full() -> None:

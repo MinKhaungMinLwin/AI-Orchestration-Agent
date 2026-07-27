@@ -135,6 +135,22 @@ def test_router_prompt_requires_brand_role_context_for_unsupported_brand():
     assert "ignore an unsupported target carried only by conversation history" in ROUTER_PROMPT
 
 
+def test_router_prompt_requires_current_turn_evidence_for_nonexistent_benefit():
+    assert "benefit_context.unverified_benefit_target" in ROUTER_PROMPT
+    assert "benefit_context.unverified_access_request" in ROUTER_PROMPT
+    assert "현재 사용자 발화에서 그대로 인용한 문구" in ROUTER_PROMPT
+    assert "이전 대화에만 있는 VIP/50%/링크 문구라면 이 guard를 선택하지 마세요" in ROUTER_PROMPT
+    assert "일반 N% 쿠폰의 존재·위치·수령 경로 질문" in ROUTER_PROMPT
+
+
+def test_router_prompt_routes_owned_coupon_exclusion_to_benefit_discovery():
+    assert "benefit_context.owned_coupon_exclusion" in ROUTER_PROMPT
+    assert "내 쿠폰 말고 20% 할인되는 쿠폰은 어디 있어?" in ROUTER_PROMPT
+    assert "이전의 my_coupons_lookup 문맥을 이어가지 마세요" in ROUTER_PROMPT
+    assert 'intents=["benefit_event_lookup"]' in ROUTER_PROMPT
+    assert 'tool_profile="discovery_event_content"' in ROUTER_PROMPT
+
+
 def test_router_prompt_routes_external_prediction_or_advice_as_out_of_scope():
     guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
 

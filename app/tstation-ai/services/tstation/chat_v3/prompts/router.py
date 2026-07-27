@@ -43,6 +43,9 @@ T-Station은 한국타이어의 타이어 판매·장착·차량 관리 서비�
 - nonexistent_benefit: 사용자가 특정하여 지목한, 존재/확인되지 않는 전용·비공개 혜택
   (예: "VIP 전용", "블랙카드", "히든 50% 할인 링크", "숨겨진 특가 링크")을
   실제로 있는 것처럼 요구하거나 그 링크·코드를 달라고 조를 때만 사용합니다.
+  이 guard를 선택할 때는 benefit_context.unverified_benefit_target과
+  benefit_context.unverified_access_request에 **현재 사용자 발화에서 그대로 인용한 문구**를 모두 채우세요.
+  두 근거 중 하나라도 현재 발화에 없거나, 이전 대화에만 있는 VIP/50%/링크 문구라면 이 guard를 선택하지 마세요.
   판단 기준은 문장에 "무료/공짜/할인/N%/혜택" 같은 단어가 있는지가 아니라,
   사용자가 실제로 지목한 대상(entity) 자체가 존재하지 않는 전용 혜택인지입니다.
   "공짜/무료"는 "무상"과 같은 뜻의 일상적 표현일 뿐 악용 신호가 아닙니다.
@@ -54,6 +57,10 @@ T-Station은 한국타이어의 타이어 판매·장착·차량 관리 서비�
     → domain=TRANSACTION (쿠폰 적용가·주문 흐름). 이는 새 쿠폰 발급 요청(coupon_issue_request)이 아닙니다.
   - "30% 쿠폰 어디 있어", "50% 할인 쿠폰 있어?", "할인 쿠폰 어디서 받아" 등 일반 쿠폰·프로모션의 존재/위치/수령 경로 문의
     → domain=TRANSACTION(my_coupons_lookup) 또는 진행 중인 이벤트/프로모션 탐색(domain=DISCOVERY).
+  - "내 쿠폰 말고 20% 할인되는 쿠폰은 어디 있어?", "보유 쿠폰 말고 지금 받을 수 있는 혜택 보여줘"처럼
+    현재 발화가 자신의 보유 쿠폰을 명시적으로 제외하면, 이전의 my_coupons_lookup 문맥을 이어가지 마세요.
+    benefit_context.owned_coupon_exclusion에 현재 발화의 제외 문구를 그대로 넣고, guard_id="none",
+    domain=DISCOVERY, intents=["benefit_event_lookup"], tool_profile="discovery_event_content"로 라우팅하세요.
   - "나 OO 회사 직원/임직원인데 N% 할인된다고 들었어, 어떻게 적용해?", "제휴사 할인 어떻게 받아?" 등
     회사·제휴사를 통해 안내받은 임직원/제휴 할인의 적용 방법을 묻는 문의
     → domain=TRANSACTION 또는 SUPPORT. 챗봇이 제휴 자격을 직접 확인할 수 없다는 점과 제휴 경로·쿠폰함에서
@@ -118,6 +125,13 @@ Fill brand_context whenever the current user turn mentions tire brands.
 Use guard_id="unsupported_brand" only when unsupported_brand_target is filled. Do not use unsupported_brand when the unsupported brand is only installed_brand and the user is asking to switch to another brand or get alternatives. Supported brands are never unsupported_brand.
 When switch_to_supported_alternative is true, ignore an unsupported target carried only by conversation history,
 use guard_id="none", and route to DISCOVERY for a new supported-brand recommendation.
+
+## 1-B. benefit_context — current-turn evidence only
+- owned_coupon_exclusion: 현재 발화가 자신의 보유 쿠폰을 제외하는 문구를 현재 발화 그대로 인용합니다.
+- unverified_benefit_target: 현재 발화가 명시한 VIP/블랙카드/히든/비공개 전용 혜택 대상을 그대로 인용합니다.
+- unverified_access_request: 그 미확인 혜택의 링크·코드·비공개 접근을 요구하는 문구를 그대로 인용합니다.
+- 이전 대화의 문구를 복사하지 마세요. 일반 N% 쿠폰의 존재·위치·수령 경로 질문에는
+  unverified_benefit_target과 unverified_access_request를 비워 두세요.
 
 ## 2. domain — guard가 none일 때 이번 턴을 처리할 주 영역
 - DISCOVERY: 타이어 추천, 상품 검색, 차량-타이어 호환, 내 차량 조회, 이벤트/혜택 상품 탐색
