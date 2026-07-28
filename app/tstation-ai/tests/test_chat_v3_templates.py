@@ -980,6 +980,47 @@ def test_order_history_tool_builds_history_quickreply_instead_of_quantity_chips(
     assert [chip["label"] for chip in quick_replies] != ["1개", "2개", "3개", "4개"]
 
 
+def test_my_coupons_tool_builds_quickreply_when_discount_value_is_null():
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "보유 쿠폰을 확인했어요.",
+            [
+                {
+                    "name": "get_my_coupons_tool",
+                    "args": {},
+                    "output": json.dumps(
+                        {
+                            "status": "success",
+                            "data": {
+                                "coupons": [
+                                    {
+                                        "cpn_no": "C000000001",
+                                        "cpn_nm": "할인 조건 확인 필요 쿠폰",
+                                        "rt_amt_val": None,
+                                    },
+                                    {
+                                        "cpn_no": "C000000002",
+                                        "cpn_nm": "30% 할인쿠폰",
+                                        "rt_amt_val": 30,
+                                    },
+                                ]
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+            user_text="내 30% 할인 쿠폰 어디있어?",
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_my_coupons_lookup"
+    assert "할인 조건 확인 필요 쿠폰" in event["data"]["assistantResponse"]
+    assert "30% 할인쿠폰 (30% 할인)" in event["data"]["assistantResponse"]
+
+
 def test_maintenance_history_tool_builds_lookup_quickreply_with_service_history_cta():
     event = asyncio.run(
         templates.build_rich_data_event(

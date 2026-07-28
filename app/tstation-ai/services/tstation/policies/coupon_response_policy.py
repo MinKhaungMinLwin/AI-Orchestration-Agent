@@ -521,7 +521,7 @@ def _owned_coupon_lookup_summary_text(
 
 def _coupon_numeric_value(row: dict) -> float | None:
     value = _to_float(row.get("rt_amt_val"))
-    return value if value > 0 else None
+    return value if value is not None and value > 0 else None
 
 
 def _looks_like_percent_coupon(row: dict) -> bool:

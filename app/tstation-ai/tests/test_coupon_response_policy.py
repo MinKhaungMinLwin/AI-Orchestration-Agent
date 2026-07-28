@@ -5,6 +5,7 @@ import datetime
 from services.tstation.policies.coupon_response_policy import (
     build_coupon_applicability_event,
     build_coupon_channel_policy_event,
+    build_my_coupons_list_event,
     build_owned_coupon_best_discount_event,
     build_owned_coupon_expiry_lookup_event,
     build_product_coupon_eligibility_event,
@@ -57,6 +58,33 @@ def test_owned_coupon_best_discount_summarizes_percent_and_amount() -> None:
     assert "20% 쿠폰" in text
     assert "정액 쿠폰" in text
     assert is_owned_coupon_best_discount_query("내 쿠폰 중 가장 할인 큰 쿠폰 뭐야?")
+
+
+def test_my_coupons_list_tolerates_missing_or_invalid_discount_values() -> None:
+    event = build_my_coupons_list_event(
+        {
+            "data": {
+                "coupons": [
+                    {"cpn_nm": "할인값 NULL 쿠폰", "rt_amt_val": None},
+                    {"cpn_nm": "할인값 누락 쿠폰"},
+                    {"cpn_nm": "할인값 비정상 쿠폰", "rt_amt_val": "미정"},
+                    {"cpn_nm": "할인값 0원 쿠폰", "rt_amt_val": 0},
+                    {"cpn_nm": "30% 쿠폰", "rt_amt_val": 30},
+                    {"cpn_nm": "정액 쿠폰", "rt_amt_val": 15000},
+                ]
+            }
+        }
+    )
+
+    text = event["data"]["assistantResponse"]
+    assert event["assistant_response_source"] == "code_my_coupons_lookup"
+    assert "보유 쿠폰은 총 6개예요." in text
+    assert "할인값 NULL 쿠폰" in text
+    assert "할인값 누락 쿠폰" in text
+    assert "할인값 비정상 쿠폰" in text
+    assert "할인값 0원 쿠폰" in text
+    assert "30% 쿠폰 (30% 할인)" in text
+    assert "정액 쿠폰 (15,000원 할인)" in text
 
 
 def test_specific_owned_coupon_matching_handles_ambiguous_names() -> None:
