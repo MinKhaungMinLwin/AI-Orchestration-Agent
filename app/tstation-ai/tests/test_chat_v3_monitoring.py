@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import asyncio
+from contextlib import contextmanager
+from types import SimpleNamespace
 
 _TEST_ENV_DEFAULTS = {
     "PROJECT_NAME": "test",
@@ -46,7 +49,109 @@ _TEST_ENV_DEFAULTS = {
 for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
+from config import tracing  # noqa: E402
 from services.tstation.chat_v3 import monitoring, service  # noqa: E402
+
+
+def test_active_trace_span_propagates_formal_user_and_session(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeSpan:
+        id = "span-1"
+
+    class FakeManager:
+        def __init__(self, name: str, value: object) -> None:
+            self.name = name
+            self.value = value
+
+        def __enter__(self):
+            calls.append((f"{self.name}_enter", self.value))
+            return self.value
+
+        def __exit__(self, exc_type, exc, traceback):
+            calls.append((f"{self.name}_exit", exc_type))
+
+    class FakeTracer:
+        def start_as_current_span(self, **kwargs):
+            calls.append(("start_as_current_span", kwargs))
+            return FakeManager("span", FakeSpan())
+
+    def fake_propagate_attributes(**kwargs):
+        calls.append(("propagate_attributes", kwargs))
+        return FakeManager("attributes", None)
+
+    monkeypatch.setattr(tracing, "_tracing_enabled", True)
+    monkeypatch.setattr(tracing, "tracer", FakeTracer())
+    monkeypatch.setattr(tracing, "propagate_attributes", fake_propagate_attributes)
+
+    with tracing.active_trace_span(
+        "chat_v3",
+        trace_id="trace-1",
+        session_id="session-1",
+        user_id="user-1",
+        trace_name="타이어 추천",
+        input="타이어 추천",
+        metadata={"runtime": "chat_v3"},
+    ) as span:
+        assert span.id == "span-1"
+
+    start_kwargs = next(value for name, value in calls if name == "start_as_current_span")
+    propagated = next(value for name, value in calls if name == "propagate_attributes")
+    assert start_kwargs["trace_context"] == {"trace_id": "trace-1"}
+    assert start_kwargs["metadata"] == {"runtime": "chat_v3"}
+    assert propagated == {
+        "session_id": "session-1",
+        "user_id": "user-1",
+        "trace_name": "타이어 추천",
+    }
+    assert [name for name, _ in calls[-2:]] == ["attributes_exit", "span_exit"]
+
+
+def test_run_turn_keeps_pipeline_inside_active_trace_context(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeSpan:
+        id = "span-1"
+
+        def update_trace(self, **kwargs) -> None:
+            captured["trace_update"] = kwargs
+
+    @contextmanager
+    def fake_active_trace_span(**kwargs):
+        captured["active_context"] = kwargs
+        yield FakeSpan()
+
+    async def fake_run_turn_impl(request, result, *, parent_span, parent_span_id):
+        captured["impl_parent_span"] = parent_span
+        captured["impl_parent_span_id"] = parent_span_id
+        yield "event"
+
+    flush_calls: list[bool] = []
+    monkeypatch.setattr(service.context, "last_user_text", lambda request: "타이어 추천")
+    monkeypatch.setattr(service, "active_trace_span", fake_active_trace_span)
+    monkeypatch.setattr(service, "_run_turn_impl", fake_run_turn_impl)
+    monkeypatch.setattr(service, "_flush_trace", lambda: flush_calls.append(True))
+
+    request = SimpleNamespace(tracing_id="trace-1", session_id="session-1", user_id="user-1")
+    async def collect_events() -> list[object]:
+        return [event async for event in service._run_turn(request, {})]
+
+    events = asyncio.run(collect_events())
+
+    assert events == ["event"]
+    assert captured["active_context"] == {
+        "name": "chat_v3",
+        "trace_id": "trace-1",
+        "session_id": "session-1",
+        "user_id": "user-1",
+        "trace_name": "타이어 추천",
+        "input": "타이어 추천",
+        "metadata": {"runtime": "chat_v3"},
+    }
+    assert captured["impl_parent_span_id"] == "span-1"
+    assert captured["trace_update"]["session_id"] == "session-1"
+    assert captured["trace_update"]["user_id"] == "user-1"
+    assert flush_calls == [True]
 
 
 def test_customer_monitoring_groups_domain_af_and_tools() -> None:
@@ -129,9 +234,8 @@ def test_customer_monitoring_records_qc_failure_without_changing_status() -> Non
 
 
 def test_update_trace_monitoring_does_not_call_current_trace(monkeypatch) -> None:
-    # The turn's parent span is created via start_span() (never activated as the current
-    # span), so tracer.update_current_trace() only logs a "No active span" warning and is
-    # skipped. The payload must go through the explicit parent span instead.
+    # The payload is applied to the explicit active parent span so the monitoring
+    # update cannot accidentally target one of its child observations.
     current_trace_calls: list[dict] = []
     parent_trace_calls: list[dict] = []
 

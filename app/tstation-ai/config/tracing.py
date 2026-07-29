@@ -4,7 +4,7 @@ from contextvars import ContextVar
 from typing import Any, Iterator
 
 from config.env import Environment, settings
-from langfuse import Langfuse
+from langfuse import Langfuse, propagate_attributes
 from langfuse.langchain import CallbackHandler
 
 logger = logging.getLogger(__name__)
@@ -229,6 +229,50 @@ class _NullSpan:
 
 
 _NULL_SPAN = _NullSpan()
+
+
+@contextlib.contextmanager
+def active_trace_span(
+    name: str,
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    trace_name: str | None = None,
+    input: Any = None,
+    metadata: dict[str, Any] | None = None,
+) -> Iterator[Any]:
+    """Activate a root span and propagate trace-level identity to all child observations."""
+    if not _tracing_enabled or not trace_id:
+        yield _NULL_SPAN
+        return
+
+    truncated_input = truncate_for_trace(input, MAX_TRACE_INPUT_CHARS) if input is not None else None
+    stack = contextlib.ExitStack()
+    try:
+        span = stack.enter_context(
+            tracer.start_as_current_span(
+                name=name,
+                trace_context={"trace_id": trace_id},
+                input=truncated_input,
+                metadata=metadata,
+            )
+        )
+        stack.enter_context(
+            propagate_attributes(
+                session_id=session_id,
+                user_id=user_id,
+                trace_name=trace_name,
+            )
+        )
+    except Exception as exc:
+        stack.close()
+        logger.debug("[TRACE] Failed to activate span '%s': %s", name, exc)
+        yield _NULL_SPAN
+        return
+
+    with stack:
+        yield span
 
 
 @contextlib.contextmanager

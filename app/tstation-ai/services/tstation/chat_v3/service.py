@@ -14,7 +14,14 @@ from collections.abc import Callable
 from fastapi.responses import StreamingResponse
 
 from config.env import settings
-from config.tracing import _tracing_enabled, build_trace_config, safe_trace_update, set_trace_name, tracer, truncate_for_trace
+from config.tracing import (
+    active_trace_span,
+    build_trace_config,
+    safe_trace_update,
+    set_trace_name,
+    tracer,
+    truncate_for_trace,
+)
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
@@ -692,14 +699,52 @@ def _update_trace_monitoring(
             )
         except Exception:
             logger.debug("[CHAT_V3] Langfuse customer monitoring event failed", exc_info=True)
-    # NOTE: do not call tracer.update_current_trace() here — the turn's parent span is
-    # created with start_span() (never activated as the current span), so there is no
-    # active span in context and the call is skipped with a "No active span" warning.
-    # safe_trace_update(trace_observation, trace=True, ...) above already applies the
-    # same trace_update to the explicit parent span, so this was redundant noise.
+    # User/session identity is propagated by the active turn context. The event
+    # metadata remains useful for operations, but is not the source of truth for
+    # Langfuse's formal user_id/session_id fields.
 
 
 async def _run_turn(request: TStationChatRequest, result: dict):
+    user_text = context.last_user_text(request)
+    trace_name = user_text[:60] if user_text else "chat_v3"
+    set_trace_name(trace_name)
+    try:
+        with active_trace_span(
+            name="chat_v3",
+            trace_id=request.tracing_id,
+            session_id=request.session_id,
+            user_id=request.user_id,
+            trace_name=trace_name,
+            input=user_text,
+            metadata={"runtime": "chat_v3"},
+        ) as parent_span:
+            safe_trace_update(
+                parent_span,
+                trace=True,
+                name=trace_name,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                input=truncate_for_trace(user_text),
+                metadata={"runtime": "chat_v3"},
+            )
+            async for event in _run_turn_impl(
+                request,
+                result,
+                parent_span=parent_span,
+                parent_span_id=parent_span.id,
+            ):
+                yield event
+    finally:
+        _flush_trace()
+
+
+async def _run_turn_impl(
+    request: TStationChatRequest,
+    result: dict,
+    *,
+    parent_span,
+    parent_span_id: str | None,
+):
     t0 = time.perf_counter()
     usage_tracker = TurnTokenUsage()
     set_tstation_be_token(request.access_token)
@@ -707,28 +752,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     user_text = context.last_user_text(request)
     message_id = str((request.metadata or {}).get("message_id") or "")
     set_trace_name(user_text[:60] if user_text else "chat_v3")
-    parent_span = None
-    parent_span_id = None
-    if _tracing_enabled:
-        try:
-            parent_span = tracer.start_span(
-                name="chat_v3",
-                trace_context={"trace_id": request.tracing_id},
-                input=truncate_for_trace(user_text),
-                metadata={"runtime": "chat_v3"},
-            )
-            parent_span_id = parent_span.id
-            safe_trace_update(
-                parent_span,
-                trace=True,
-                name=user_text[:60] if user_text else "chat_v3",
-                session_id=request.session_id,
-                user_id=request.user_id,
-                input=truncate_for_trace(user_text),
-                metadata={"runtime": "chat_v3"},
-            )
-        except Exception:
-            logger.debug("[CHAT_V3] parent Langfuse span failed", exc_info=True)
     # Deterministic guard inside discovery tools against recommending for a
     # registered car the user did not name — V2 seeds this the same way.
     _audit_set_user_message(user_text)
@@ -787,8 +810,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
         )
-        if parent_span is not None:
-            parent_span.end()
         _flush_trace()
         await _record_real_usage(request, usage_tracker)
         await save_slots(request.session_id, slots, user_id=request.user_id)
@@ -823,8 +844,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
         )
-        if parent_span is not None:
-            parent_span.end()
         _flush_trace()
         await _record_real_usage(request, usage_tracker)
         await save_slots(request.session_id, slots, user_id=request.user_id)
@@ -874,8 +893,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
         )
-        if parent_span is not None:
-            parent_span.end()
         _flush_trace()
         await _record_real_usage(request, usage_tracker)
         await save_slots(request.session_id, slots, user_id=request.user_id)
@@ -919,8 +936,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
         )
-        if parent_span is not None:
-            parent_span.end()
         _flush_trace()
         await _record_real_usage(request, usage_tracker)
         for event in sse.done():
@@ -966,8 +981,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
         )
-        if parent_span is not None:
-            parent_span.end()
         _flush_trace()
         await _record_real_usage(request, usage_tracker)
         for event in sse.done():
@@ -1095,8 +1108,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
                 latency_ms=int((time.perf_counter() - t0) * 1000),
                 trace_observation=parent_span,
             )
-            if parent_span is not None:
-                parent_span.end()
             _flush_trace()
             await _record_real_usage(request, usage_tracker)
             await save_slots(request.session_id, slots, user_id=request.user_id)
@@ -1131,8 +1142,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             latency_ms=int((time.perf_counter() - t0) * 1000),
             trace_observation=parent_span,
         )
-        if parent_span is not None:
-            parent_span.end()
         _flush_trace()
         await _record_real_usage(request, usage_tracker)
         await save_slots(request.session_id, slots, user_id=request.user_id)
@@ -1371,8 +1380,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         latency_ms=int((time.perf_counter() - t0) * 1000),
         trace_observation=parent_span,
     )
-    if parent_span is not None:
-        parent_span.end()
     _flush_trace()
     await _record_real_usage(request, usage_tracker)
 
