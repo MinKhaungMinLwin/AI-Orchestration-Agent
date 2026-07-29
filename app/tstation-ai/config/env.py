@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     APP_STATIC_DIR: str = "static"
     APP_PUBLIC_DIR: str = "static/public"
     API_SECRET_KEY: str
-    TZ_OFFSET: int = 7
+    TZ_OFFSET: int = 9
 
     # TSTATION-BE
     TSTATION_BE_API: str

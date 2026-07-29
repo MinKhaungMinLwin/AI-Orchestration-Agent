@@ -10,7 +10,7 @@ os.makedirs(LOGS_DIR, exist_ok=True)
 
 class TZFormatter(logging.Formatter):
     def __init__(self, *args, **kwargs):
-        self.tz_offset = int(os.getenv("TZ_OFFSET", "7"))
+        self.tz_offset = int(os.getenv("TZ_OFFSET", "9"))
         super().__init__(*args, **kwargs)
 
     def formatTime(self, record, datefmt=None):
