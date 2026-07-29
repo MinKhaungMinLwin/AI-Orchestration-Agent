@@ -249,6 +249,8 @@ def derive_slots_from_tool_calls(slots: ConversationSlots, tool_calls: list[dict
         name = call.get("name") or ""
         args = call.get("args") or {}
         output = str(call.get("output") or "")
+        if output.startswith("Tool error"):
+            continue
         for field in _INPUT_FIELDS.get(name, ()):
             if args.get(field) not in (None, ""):
                 values[field] = _coerce(field, args[field])

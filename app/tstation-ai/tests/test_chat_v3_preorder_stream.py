@@ -916,11 +916,104 @@ def test_transaction_tool_guard_allows_order_after_staggered_size_selection() ->
         tire_size="245/40R19",
         tire_size_front="245/40R19",
         tire_size_rear="275/35R19",
+        requested_cal_day="20260731",
+        rsv_hour="11",
     )
     guard = service._transaction_tool_guard(decision, request, slots)
 
     assert guard({"name": "present_order_preview_tool", "args": {}}) is None
     assert guard({"name": "quick_order_tool", "args": {}}) is None
+
+
+def test_transaction_tool_guard_blocks_first_available_slot_until_user_selects_schedule() -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2개 한남점에서 구매"}],
+        stream=True,
+        user_id="u",
+        session_id="s",
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+    slots = ConversationSlots(
+        goods_no="G000000309698",
+        ord_qty=2,
+        shop_id="F07782",
+        shop_name="티스테이션 한남점",
+    )
+    guard = service._transaction_tool_guard(decision, request, slots)
+    preview_call = {
+        "name": "present_order_preview_tool",
+        "args": {
+            "goods_no": "G000000309698",
+            "ord_qty": 2,
+            "shop_id": "F07782",
+            "requested_cal_day": "20260731",
+            "rsv_hour": "09",
+        },
+    }
+
+    denial = guard(preview_call)
+
+    assert denial is not None
+    assert "first_available_slot" in denial
+    assert guard({"name": "get_store_install_availability_tool", "args": {}}) is None
+
+
+@pytest.mark.parametrize("tool_name", ["present_order_preview_tool", "quick_order_tool"])
+def test_transaction_tool_guard_allows_only_matching_confirmed_schedule(tool_name: str) -> None:
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2026년 7월 31일 11시"}],
+        stream=True,
+        user_id="u",
+        session_id="s",
+    )
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["place_order"],
+        slots_patch=SlotsPatch(requested_cal_day="20260731", rsv_hour="11"),
+    )
+    slots = ConversationSlots(requested_cal_day="20260731", rsv_hour="11")
+    guard = service._transaction_tool_guard(decision, request, slots)
+
+    assert guard({
+        "name": tool_name,
+        "args": {"requested_cal_day": "20260731", "rsv_hour": "11"},
+    }) is None
+    assert guard({
+        "name": tool_name,
+        "args": {"requested_cal_day": "20260731", "rsv_hour": "09"},
+    }) is not None
+
+
+def test_blocked_preorder_call_cannot_promote_candidate_schedule_into_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309698",
+        ord_qty=2,
+        shop_id="F07782",
+        shop_name="티스테이션 한남점",
+    )
+    blocked_call = {
+        "name": "present_order_preview_tool",
+        "args": {
+            "goods_no": "G000000309698",
+            "ord_qty": 2,
+            "shop_id": "F07782",
+            "requested_cal_day": "20260731",
+            "rsv_hour": "09",
+        },
+        "output": (
+            "Tool error: blocked_by_policy — The installation schedule has not been confirmed by the user."
+        ),
+    }
+
+    harvested = service.templates.harvest_order_slots(slots.model_copy(deep=True), [blocked_call])
+    derived = derive_slots_from_tool_calls(slots.model_copy(deep=True), [blocked_call])
+    preview = service.templates.build_present_order_preview_event("주문 내용을 확인해 주세요.", slots, [blocked_call])
+
+    assert harvested.requested_cal_day is None
+    assert harvested.rsv_hour is None
+    assert derived.requested_cal_day is None
+    assert derived.rsv_hour is None
+    assert preview is None
 
 
 def test_executor_guard_blocks_tool_invocation() -> None:

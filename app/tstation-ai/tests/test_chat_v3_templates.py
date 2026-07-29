@@ -1290,6 +1290,7 @@ def test_preorder_fallback_builds_ready_order_card_from_slots():
     assert event["data"]["metadata"]["tireSize"] == "245/45R19"
     assert event["data"]["metadata"]["tire_size"] == "245/45R19"
     assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 308200
     assert event["data"]["orderInfo"]["storeName"] == "티스테이션 한남점"
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
 
@@ -1414,6 +1415,7 @@ def test_present_order_preview_uses_slot_tire_size_when_tool_output_omits_it(mon
     assert event["data"]["metadata"]["tireSize"] == "245/45R19"
     assert event["data"]["metadata"]["tire_size"] == "245/45R19"
     assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 616400
 
 
 def test_get_final_price_tool_does_not_build_preorder_without_schedule():
@@ -1624,6 +1626,92 @@ def test_ready_preorder_takes_priority_over_generic_price_template(monkeypatch):
 
     assert "preOrder" in templates_seen
     assert "cheapestProduct" not in templates_seen
+
+
+def test_present_order_preview_price_takes_priority_over_slot_fallback(monkeypatch):
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(
+            domain=Domain.TRANSACTION,
+            intents=["place_order"],
+            slots_patch={"shop_id": "F07782", "shop_name": "티스테이션 한남점"},
+        )
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots(
+            goods_no="G000000309698",
+            tire_model="키너지 GT",
+            tire_size="245/45R19",
+            ord_qty=2,
+            shop_id="F07782",
+            shop_name="티스테이션 한남점",
+            requested_cal_day="20260731",
+            rsv_hour="09",
+            pending_intent="order",
+            goal_type="place_order",
+        )
+
+    class PreviewExecutor:
+        def __init__(self, *args, **kwargs):
+            self.final_text = "주문 확인 부탁드립니다."
+            self.tool_calls = [
+                {
+                    "name": "present_order_preview_tool",
+                    "args": {
+                        "goods_no": "G000000309698",
+                        "ord_qty": 2,
+                        "payment_amount": 253400,
+                    },
+                    "output": json.dumps(
+                        {
+                            "status": "ok",
+                            "goods_no": "G000000309698",
+                            "ord_qty": 2,
+                            "shop_id": "F07782",
+                            "shop_name": "티스테이션 한남점",
+                            "requested_cal_day": "20260731",
+                            "rsv_hour": "09",
+                            "payment_amount": 253400,
+                            "product_name": "키너지 GT",
+                            "tire_size": "245/45R19",
+                            "is_ready_to_order": True,
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ]
+
+        async def stream(self):
+            if False:
+                yield None
+
+    async def fake_verify_answer(answer, *args, **kwargs):
+        return answer
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", PreviewExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service, "save_slots", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service, "_record_real_usage", fake_noop)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2개 한남점에서 구매"}],
+        user_id="M200012931",
+        session_id="02215199-87c4-4ca2-922b-61aa305d0049",
+    )
+
+    events = asyncio.run(_collect_turn_events(request))
+    data_events = [_parse_sse_event(event) for event in events if event.startswith("data: {")]
+    preorder = next(event for event in data_events if event.get("template") == "preOrder")
+
+    assert preorder["data"]["metadata"]["source"] == "chat_v3_k1_order_preview"
+    assert preorder["data"]["orderInfo"]["paymentAmount"] == 253400
 
 
 def test_preorder_fallback_skips_irrelevant_followup_even_with_ready_slots():

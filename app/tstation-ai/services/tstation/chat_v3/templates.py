@@ -418,6 +418,27 @@ def build_preorder_fallback(answer: str, slots: ConversationSlots, decision: Rou
     )
 
 
+def build_present_order_preview_event(
+    answer: str,
+    slots: ConversationSlots | None,
+    tool_calls: list[dict],
+) -> dict | None:
+    """Build K1 preOrder from the preview tool snapshot before considering slot fallback."""
+    for call in reversed(tool_calls):
+        if call.get("name") != "present_order_preview_tool":
+            continue
+        if str(call.get("output") or "").startswith("Tool error"):
+            continue
+        event = build_preorder_data_event(
+            answer,
+            _with_slot_fallback(_parse_tool_output(call.get("output")), slots),
+            source="chat_v3_k1_order_preview",
+        )
+        if event is not None:
+            return event
+    return None
+
+
 def build_final_price_preorder_event(answer: str, slots: ConversationSlots | None, call: dict) -> dict | None:
     if slots is None or not _ready_order_slots(slots):
         return None
@@ -444,6 +465,8 @@ def harvest_order_slots(slots: ConversationSlots, tool_calls: list[dict]) -> Con
     for call in tool_calls:
         name = str(call.get("name") or "")
         args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        if str(call.get("output") or "").startswith("Tool error"):
+            continue
         parsed = _parse_json(call.get("output"))
 
         _set_product_slot(slots, "goods_no", args.get("goods_no"))
@@ -2072,11 +2095,7 @@ async def build_rich_data_event(
         # K1: the model emitted the order via present_order_preview_tool. Build the card
         # in code from that snapshot (never via the generic LLM template builder — it
         # cannot set isReadyToOrder / metadata.goodsId reliably). None → K2 slot fallback.
-        return build_preorder_data_event(
-            answer,
-            _with_slot_fallback(_parse_tool_output(call.get("output")), slots),
-            source="chat_v3_k1_order_preview",
-        )
+        return build_present_order_preview_event(answer, slots, [call])
     if template_name == "location":
         if not _is_booking_location_context(slots):
             logger.info("[CHAT_V3] location template skipped — plain store search context")

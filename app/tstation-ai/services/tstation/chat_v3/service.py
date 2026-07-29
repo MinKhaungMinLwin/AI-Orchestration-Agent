@@ -427,6 +427,10 @@ _UNSELECTED_STAGGERED_ORDER_TOOLS = {
     _QUICK_ORDER_TOOL,
     _SAVE_TO_CART_TOOL,
 }
+_CONFIRMED_SCHEDULE_ORDER_TOOLS = {
+    _PRESENT_ORDER_PREVIEW_TOOL,
+    _QUICK_ORDER_TOOL,
+}
 
 
 def _transaction_tool_guard(
@@ -449,6 +453,30 @@ def _transaction_tool_guard(
                 "The front and rear tire sizes differ, but no single size has been selected for this order. "
                 "Do not create an order, cart item, or pre-order preview until the user selects one size."
             )
+        args = call.get("args") if isinstance(call.get("args"), dict) else {}
+        requires_confirmed_schedule = name in _CONFIRMED_SCHEDULE_ORDER_TOOLS and not (
+            name == _PRESENT_ORDER_PREVIEW_TOOL and bool(args.get("is_ready_to_add_to_cart"))
+        )
+        if requires_confirmed_schedule:
+            confirmed_day = str(slots.requested_cal_day or "").strip()
+            confirmed_hour = str(slots.rsv_hour or "").strip()
+            confirmed_hour = confirmed_hour.zfill(2) if confirmed_hour else ""
+            proposed_day = str(args.get("requested_cal_day") or args.get("rsv_date") or "").strip()
+            proposed_hour = str(args.get("rsv_hour") or "").strip()
+            proposed_hour = proposed_hour.zfill(2) if proposed_hour else ""
+            if not (confirmed_day and confirmed_hour):
+                return (
+                    "The installation schedule has not been confirmed by the user. Availability-tool fields such as "
+                    "first_available_slot are candidates, not user selections. Show the date/time choices and wait "
+                    "for the user to select one before creating a pre-order preview or order."
+                )
+            if (proposed_day and proposed_day != confirmed_day) or (
+                proposed_hour and proposed_hour != confirmed_hour
+            ):
+                return (
+                    "The proposed installation schedule differs from the date/time confirmed in conversation slots. "
+                    "Use only the user's confirmed schedule."
+                )
         return cart_guard(call)
 
     return guard
@@ -1257,7 +1285,11 @@ async def _run_turn_impl(
             usage_tracker=usage_tracker,
         ),
     )
-    preorder_event = templates.build_preorder_fallback(answer, slots, decision)
+    preorder_event = templates.build_present_order_preview_event(
+        answer,
+        slots,
+        executor.tool_calls,
+    ) or templates.build_preorder_fallback(answer, slots, decision)
     rich_event = qna_event or (
         None
         if preorder_event or current_events_event
