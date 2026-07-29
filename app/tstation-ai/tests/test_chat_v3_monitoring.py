@@ -295,7 +295,7 @@ def test_update_trace_monitoring_applies_payload_to_parent_span(monkeypatch) -> 
     assert parent_trace_calls[0]["output"] == "추천 타이어입니다."
 
 
-def test_update_trace_monitoring_records_customer_event_with_turn_metadata(monkeypatch) -> None:
+def test_update_trace_monitoring_records_customer_event_as_active_trace_child(monkeypatch) -> None:
     events: list[dict] = []
     scores: list[dict] = []
 
@@ -330,7 +330,7 @@ def test_update_trace_monitoring_records_customer_event_with_turn_metadata(monke
 
     assert events
     metadata = events[0]["metadata"]
-    assert events[0]["trace_context"] == {"trace_id": "trace-1", "parent_span_id": "span-1"}
+    assert "trace_context" not in events[0]
     assert events[0]["input"] == "주문할래"
     assert events[0]["output"] == "주문 내용을 확인해 주세요."
     assert metadata["message_id"] == "message-1"

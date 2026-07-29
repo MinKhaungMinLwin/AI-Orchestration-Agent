@@ -700,12 +700,8 @@ def _update_trace_monitoring(
     if trace_observation is not None:
         safe_trace_update(trace_observation, trace=True, **trace_update)
     if trace_id:
-        trace_context = {"trace_id": trace_id}
-        if parent_span_id:
-            trace_context["parent_span_id"] = parent_span_id
         try:
             event = tracer.create_event(
-                trace_context=trace_context,
                 name="customer_monitoring",
                 input=truncate_for_trace(user_text) if user_text is not None else None,
                 output=truncate_for_trace(answer) if answer is not None else None,
