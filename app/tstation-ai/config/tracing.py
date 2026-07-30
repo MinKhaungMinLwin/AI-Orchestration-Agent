@@ -171,6 +171,7 @@ def build_trace_config(
     tags: list[str] | None = None,
     extra_metadata: dict[str, Any] | None = None,
     prompt_name: str | None = None,
+    inherit_active_trace: bool = False,
 ) -> dict[str, Any]:
     """Return a LangChain RunnableConfig wired with the Langfuse callback and trace metadata."""
     metadata: dict[str, Any] = {}
@@ -192,10 +193,10 @@ def build_trace_config(
             tc: dict[str, str] = {"trace_id": trace_id}
             if parent_span_id:
                 tc["parent_span_id"] = parent_span_id
-            config["callbacks"] = [FilteredCallbackHandler(
-                prompt_name=prompt_name,
-                trace_context=tc,
-            )]
+            handler_kwargs: dict[str, Any] = {"prompt_name": prompt_name}
+            if not (inherit_active_trace and _has_matching_active_trace(trace_id)):
+                handler_kwargs["trace_context"] = tc
+            config["callbacks"] = [FilteredCallbackHandler(**handler_kwargs)]
         elif langfuse_handler is not None:
             config["callbacks"] = [langfuse_handler]
     # Stash trace_id and parent_span_id under `configurable` so downstream
@@ -229,6 +230,15 @@ class _NullSpan:
 
 
 _NULL_SPAN = _NullSpan()
+
+
+def _has_matching_active_trace(trace_id: str | None) -> bool:
+    if not trace_id:
+        return False
+    try:
+        return tracer.get_current_trace_id() == trace_id
+    except Exception:
+        return False
 
 
 @contextlib.contextmanager
@@ -289,16 +299,18 @@ def trace_span(
         return
 
     truncated_input = truncate_for_trace(input, MAX_TRACE_INPUT_CHARS) if input is not None else None
-    trace_context: dict[str, str] = {"trace_id": trace_id}
-    if parent_span_id:
-        trace_context["parent_span_id"] = parent_span_id
-
     try:
-        span = tracer.start_span(
-            name=name,
-            trace_context=trace_context,
-            input=truncated_input,
-        )
+        if _has_matching_active_trace(trace_id):
+            span = tracer.start_span(name=name, input=truncated_input)
+        else:
+            trace_context: dict[str, str] = {"trace_id": trace_id}
+            if parent_span_id:
+                trace_context["parent_span_id"] = parent_span_id
+            span = tracer.start_span(
+                name=name,
+                trace_context=trace_context,
+                input=truncated_input,
+            )
     except Exception as exc:
         logger.debug("[TRACE] Failed to start span '%s': %s", name, exc)
         yield _NULL_SPAN

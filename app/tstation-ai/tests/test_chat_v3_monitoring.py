@@ -107,6 +107,145 @@ def test_active_trace_span_propagates_formal_user_and_session(monkeypatch) -> No
     assert [name for name, _ in calls[-2:]] == ["attributes_exit", "span_exit"]
 
 
+def test_build_trace_config_inherits_matching_active_trace(monkeypatch) -> None:
+    handlers: list[dict] = []
+
+    class FakeHandler:
+        def __init__(self, **kwargs):
+            handlers.append(kwargs)
+
+    class FakeTracer:
+        def get_current_trace_id(self):
+            return "trace-1"
+
+    monkeypatch.setattr(tracing, "_tracing_enabled", True)
+    monkeypatch.setattr(tracing, "tracer", FakeTracer())
+    monkeypatch.setattr(tracing, "FilteredCallbackHandler", FakeHandler)
+
+    config = tracing.build_trace_config(
+        trace_id="trace-1",
+        parent_span_id="span-1",
+        inherit_active_trace=True,
+    )
+
+    assert config["callbacks"]
+    assert handlers == [{"prompt_name": None}]
+    assert config["configurable"]["tstation_trace_id"] == "trace-1"
+    assert config["configurable"]["tstation_parent_span_id"] == "span-1"
+
+
+def test_build_trace_config_keeps_explicit_context_without_matching_active_trace(monkeypatch) -> None:
+    handlers: list[dict] = []
+
+    class FakeHandler:
+        def __init__(self, **kwargs):
+            handlers.append(kwargs)
+
+    class FakeTracer:
+        def get_current_trace_id(self):
+            return "other-trace"
+
+    monkeypatch.setattr(tracing, "_tracing_enabled", True)
+    monkeypatch.setattr(tracing, "tracer", FakeTracer())
+    monkeypatch.setattr(tracing, "FilteredCallbackHandler", FakeHandler)
+
+    tracing.build_trace_config(
+        trace_id="trace-1",
+        parent_span_id="span-1",
+        inherit_active_trace=True,
+    )
+
+    assert handlers == [{
+        "prompt_name": None,
+        "trace_context": {"trace_id": "trace-1", "parent_span_id": "span-1"},
+    }]
+
+
+def test_trace_span_inherits_matching_active_trace(monkeypatch) -> None:
+    starts: list[dict] = []
+
+    class FakeSpan:
+        def end(self):
+            return None
+
+    class FakeTracer:
+        def get_current_trace_id(self):
+            return "trace-1"
+
+        def start_span(self, **kwargs):
+            starts.append(kwargs)
+            return FakeSpan()
+
+    monkeypatch.setattr(tracing, "_tracing_enabled", True)
+    monkeypatch.setattr(tracing, "tracer", FakeTracer())
+
+    with tracing.trace_span(
+        "tool-summary",
+        trace_id="trace-1",
+        parent_span_id="span-1",
+        input={"goods_no": "G0001"},
+    ):
+        pass
+
+    assert starts == [{"name": "tool-summary", "input": {"goods_no": "G0001"}}]
+
+
+def test_trace_span_keeps_explicit_context_without_matching_active_trace(monkeypatch) -> None:
+    starts: list[dict] = []
+
+    class FakeSpan:
+        def end(self):
+            return None
+
+    class FakeTracer:
+        def get_current_trace_id(self):
+            return "other-trace"
+
+        def start_span(self, **kwargs):
+            starts.append(kwargs)
+            return FakeSpan()
+
+    monkeypatch.setattr(tracing, "_tracing_enabled", True)
+    monkeypatch.setattr(tracing, "tracer", FakeTracer())
+
+    with tracing.trace_span(
+        "tool-summary",
+        trace_id="trace-1",
+        parent_span_id="span-1",
+        input={"goods_no": "G0001"},
+    ):
+        pass
+
+    assert starts == [{
+        "name": "tool-summary",
+        "trace_context": {"trace_id": "trace-1", "parent_span_id": "span-1"},
+        "input": {"goods_no": "G0001"},
+    }]
+
+
+def test_v3_trace_config_requests_active_trace_inheritance(monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_build_trace_config(**kwargs):
+        captured.update(kwargs)
+        return {}
+
+    monkeypatch.setattr(service, "build_trace_config", fake_build_trace_config)
+    request = SimpleNamespace(session_id="session-1", user_id="user-1", tracing_id="trace-1")
+
+    service._trace_config(
+        request,
+        run_name="router",
+        prompt_name="router",
+        tags=["router"],
+        parent_span_id="span-1",
+    )
+
+    assert captured["inherit_active_trace"] is True
+    assert captured["trace_id"] == "trace-1"
+    assert captured["parent_span_id"] == "span-1"
+
+
 def test_run_turn_keeps_pipeline_inside_active_trace_context(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
@@ -266,9 +405,13 @@ def test_update_trace_monitoring_does_not_call_current_trace(monkeypatch) -> Non
 
 def test_update_trace_monitoring_applies_payload_to_parent_span(monkeypatch) -> None:
     current_trace_calls: list[dict] = []
+    parent_observation_calls: list[dict] = []
     parent_trace_calls: list[dict] = []
 
     class FakeParentSpan:
+        def update(self, **kwargs):
+            parent_observation_calls.append(kwargs)
+
         def update_trace(self, **kwargs):
             parent_trace_calls.append(kwargs)
 
@@ -289,6 +432,10 @@ def test_update_trace_monitoring_applies_payload_to_parent_span(monkeypatch) -> 
     )
 
     assert current_trace_calls == []
+    assert parent_observation_calls == [{
+        "input": "타이어 추천",
+        "output": "추천 타이어입니다.",
+    }]
     assert parent_trace_calls
     assert parent_trace_calls[0]["metadata"]["primary_af"] == "Product Recommendation AF"
     assert parent_trace_calls[0]["input"] == "타이어 추천"

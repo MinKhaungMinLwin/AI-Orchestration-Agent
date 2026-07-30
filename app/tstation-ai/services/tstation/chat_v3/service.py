@@ -603,6 +603,7 @@ def _trace_config(
         tags=["chat_v3", *tags],
         extra_metadata={"runtime": "chat_v3"},
         prompt_name=prompt_name,
+        inherit_active_trace=True,
     )
     if usage_tracker is not None:
         config.setdefault("callbacks", []).append(usage_tracker.callback())
@@ -698,6 +699,16 @@ def _update_trace_monitoring(
         trace_update["metadata"]["route_profile"] = route_profile
         trace_update["tags"].append(f"profile:{monitoring._slug(route_profile)}")
     if trace_observation is not None:
+        observation_update = {
+            key: value
+            for key, value in {
+                "input": truncate_for_trace(user_text) if user_text is not None else None,
+                "output": truncate_for_trace(answer) if answer is not None else None,
+            }.items()
+            if value is not None
+        }
+        if observation_update:
+            safe_trace_update(trace_observation, **observation_update)
         safe_trace_update(trace_observation, trace=True, **trace_update)
     if trace_id:
         try:
