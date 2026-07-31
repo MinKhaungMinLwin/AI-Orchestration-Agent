@@ -115,6 +115,24 @@ class _FakeToolLoopExecutor:
         if False:
             yield None
 
+    async def run_required_tool(self, name, args):
+        self.tool_calls.append({
+            "name": name,
+            "args": args,
+            "output": json.dumps({
+                "status": "success",
+                "data": {
+                    "items": [{
+                        "shop_id": "F00721",
+                        "status": "available",
+                        "slots": [{"cal_day": "20260708", "tm": "1400"}],
+                    }],
+                },
+            }),
+        })
+        if False:
+            yield None
+
 
 class _FakeDatepickStructuredLLM:
     async def ainvoke(self, messages):
@@ -1281,6 +1299,7 @@ def test_preorder_fallback_builds_ready_order_card_from_slots():
         "아래 내용으로 구매 진행해도 될까요?",
         slots,
         decision,
+        schedule_verified=True,
     )
 
     assert event is not None
@@ -1293,6 +1312,35 @@ def test_preorder_fallback_builds_ready_order_card_from_slots():
     assert event["data"]["orderInfo"]["paymentAmount"] == 308200
     assert event["data"]["orderInfo"]["storeName"] == "티스테이션 한남점"
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
+
+
+def test_preorder_fallback_requires_matching_schedule_evidence():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        payment_amount=308200,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["place_order"],
+        slots_patch={"rsv_hour": "14"},
+    )
+
+    event = templates.build_preorder_fallback(
+        "아래 내용으로 구매 진행해도 될까요?",
+        slots,
+        decision,
+    )
+
+    assert event is None
 
 
 def test_preorder_always_uses_order_action_even_with_stale_cart_state():
@@ -1610,6 +1658,7 @@ def test_ready_preorder_takes_priority_over_generic_price_template(monkeypatch):
     monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
     monkeypatch.setattr(service.templates, "build_rich_data_event", fake_build_rich_data_event)
     monkeypatch.setattr(service, "save_slots", fake_noop)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
@@ -1684,6 +1733,24 @@ def test_present_order_preview_price_takes_priority_over_slot_fallback(monkeypat
             if False:
                 yield None
 
+        async def run_required_tool(self, name, args):
+            self.tool_calls.append({
+                "name": name,
+                "args": args,
+                "output": json.dumps({
+                    "status": "success",
+                    "data": {
+                        "items": [{
+                            "shop_id": "F07782",
+                            "status": "available",
+                            "slots": [{"cal_day": "20260731", "tm": "0900"}],
+                        }],
+                    },
+                }),
+            })
+            if False:
+                yield None
+
     async def fake_verify_answer(answer, *args, **kwargs):
         return answer
 
@@ -1695,6 +1762,7 @@ def test_present_order_preview_price_takes_priority_over_slot_fallback(monkeypat
     monkeypatch.setattr(service, "ToolLoopExecutor", PreviewExecutor)
     monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
     monkeypatch.setattr(service, "save_slots", fake_noop)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service, "_record_real_usage", fake_noop)
     monkeypatch.setattr(service, "_tokens_enabled", lambda: False)

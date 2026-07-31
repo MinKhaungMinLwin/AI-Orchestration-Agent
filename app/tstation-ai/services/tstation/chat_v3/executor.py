@@ -273,6 +273,16 @@ class ToolLoopExecutor:
         self.composer_fallback_used = True
         return text.strip()
 
+    async def run_required_tool(self, name: str, args: dict):
+        """Run one deterministic contract-required tool through the normal SSE/tool recording path."""
+        call = {
+            "name": name,
+            "args": args,
+            "id": f"required_{name}_{len(self.tool_calls) + 1}",
+        }
+        async for event in self._run_tool(call):
+            yield event
+
     def _normalize_tool_call(self, call: dict) -> dict:
         return self._tool_call_normalizer(call) if self._tool_call_normalizer is not None else call
 

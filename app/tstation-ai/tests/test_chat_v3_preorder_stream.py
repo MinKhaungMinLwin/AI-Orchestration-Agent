@@ -107,6 +107,10 @@ def test_preorder_stream_does_not_emit_duplicate_message(monkeypatch: pytest.Mon
     asyncio.run(_assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch))
 
 
+def test_manual_schedule_with_no_inventory_does_not_emit_preorder(monkeypatch: pytest.MonkeyPatch) -> None:
+    asyncio.run(_assert_manual_schedule_with_no_inventory_does_not_emit_preorder(monkeypatch))
+
+
 def test_stream_chat_response_saves_preorder_template_without_text(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(_assert_stream_chat_response_saves_preorder_template_without_text(monkeypatch))
 
@@ -1211,7 +1215,7 @@ async def _assert_staggered_size_chip_selection_requests_quantity_before_tools(
     monkeypatch.setattr(service, "route_request", fake_route_request)
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
     monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenExecutor)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None: [])
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None, **kwargs: [])
     monkeypatch.setattr(service, "save_slots", fake_noop)
     monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
     monkeypatch.setattr(service, "_flush_trace", lambda: None)
@@ -1295,7 +1299,7 @@ async def _assert_staggered_region_followup_bypasses_simultaneous_purchase_guard
 
     monkeypatch.setattr(service, "route_request", fake_route_request)
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None: [])
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None, **kwargs: [])
     monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
     monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
     monkeypatch.setattr(service, "save_slots", fake_save_slots)
@@ -1432,7 +1436,7 @@ async def _assert_cart_turn_goes_through_executor(
     monkeypatch.setattr(service, "route_request", fake_route_request)
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
     monkeypatch.setattr(service, "save_slots", fake_noop)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None: [])
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None, **kwargs: [])
     monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
     monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
     monkeypatch.setattr(service.memory, "load_tool_context", fake_noop)
@@ -1488,6 +1492,24 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
         async def stream(self):
             yield service.sse.token("Please confirm the order details.")
 
+        async def run_required_tool(self, name, args):
+            self.tool_calls.append({
+                "name": name,
+                "args": args,
+                "output": json.dumps({
+                    "status": "success",
+                    "data": {
+                        "items": [{
+                            "shop_id": "S0001",
+                            "status": "available",
+                            "slots": [{"cal_day": "20260708", "tm": "1700"}],
+                        }],
+                    },
+                }),
+            })
+            if False:
+                yield None
+
     async def fake_verify_answer(answer, tool_calls, trace_config):
         return answer
 
@@ -1502,7 +1524,7 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
 
     monkeypatch.setattr(service, "route_request", fake_route_request)
     monkeypatch.setattr(service, "load_slots", fake_load_slots)
-    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None: [])
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None, **kwargs: [])
     monkeypatch.setattr(service, "ToolLoopExecutor", FakeExecutor)
     monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
     monkeypatch.setattr(service, "save_slots", fake_noop)
@@ -1530,6 +1552,111 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
     ]
     assert pre_order_events
     assert "assistantResponse" not in pre_order_events[0]["data"]
+
+
+async def _assert_manual_schedule_with_no_inventory_does_not_emit_preorder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_model="크로스클라이밋 2",
+        tire_size="245/40R18",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        requested_cal_day="20260731",
+        rsv_hour="14",
+        pending_intent="order",
+        goal_type="place_order",
+        payment_amount=616600,
+    )
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["reservation_status_lookup"],
+        slots_patch=SlotsPatch(requested_cal_day="20260731", rsv_hour="14"),
+    )
+
+    class NoInventoryExecutor:
+        def __init__(self, *args, **kwargs) -> None:
+            self.final_text = "오늘 오후 2시 장착을 진행할게요."
+            self.tool_calls = []
+
+        async def stream(self):
+            if False:
+                yield None
+
+        async def run_required_tool(self, name, args):
+            self.tool_calls.append({
+                "name": name,
+                "args": args,
+                "output": json.dumps({
+                    "status": "success",
+                    "data": {
+                        "items": [{
+                            "shop_id": "F00721",
+                            "status": "no_inventory",
+                            "has_today_stock": False,
+                            "has_tna_stock": False,
+                            "has_logistics_stock": False,
+                            "slots": [],
+                        }],
+                        "schedule": {"tier": "none", "stores": []},
+                    },
+                }),
+            })
+            if False:
+                yield None
+
+    async def fake_route_request(*args, **kwargs):
+        return decision
+
+    async def fake_load_slots(session_id):
+        return slots
+
+    async def fake_verify_answer(answer, *args, **kwargs):
+        return answer
+
+    async def fake_none(*args, **kwargs):
+        return None
+
+    async def fake_chips(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", NoInventoryExecutor)
+    monkeypatch.setattr(service, "tools_for_domains", lambda domains, tool_profile=None, **kwargs: [])
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service.templates, "build_rich_data_event", fake_none)
+    monkeypatch.setattr(service.templates, "build_datepick_fallback", fake_none)
+    monkeypatch.setattr(service.composer, "suggest_quick_replies", fake_chips)
+    monkeypatch.setattr(service, "save_slots", fake_none)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_none)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_none)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "오늘 2시"}],
+        stream=True,
+        user_id="test-user",
+        session_id="no-inventory-preorder-test",
+    )
+
+    events = []
+    async for line in service._run_turn(request, {}):
+        event = _parse_sse_event(line)
+        if event:
+            events.append(event)
+
+    assert not [
+        event
+        for event in events
+        if event.get("type") == "data" and event.get("template") == "preOrder"
+    ]
+    messages = [event["content"] for event in events if event.get("type") == "message"]
+    assert messages
+    assert "재고가 없어" in messages[-1]
 
 
 async def _assert_stream_chat_response_saves_preorder_template_without_text(

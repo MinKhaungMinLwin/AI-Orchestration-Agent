@@ -25,7 +25,7 @@ from config.tracing import (
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
-from services.tstation.chat_v3 import composer, context, memory, monitoring, qc, sse, templates
+from services.tstation.chat_v3 import composer, context, memory, monitoring, qc, schedule_validation, sse, templates
 from services.tstation.chat_v3.executor import ToolLoopExecutor
 from services.tstation.chat_v3.price_notice import apply_price_notice
 from services.tstation.chat_v3.token_usage import TurnTokenUsage
@@ -1113,6 +1113,34 @@ async def _run_turn_impl(
             token_events.append(event)
             continue
         yield event
+
+    schedule_completed_this_turn = schedule_validation.schedule_completed_this_turn(request, decision)
+    schedule_validation_required = schedule_validation.needs_preorder_schedule_validation(
+        request,
+        decision,
+        slots,
+        executor.tool_calls,
+    )
+    schedule_evidence = schedule_validation.current_turn_evidence(executor.tool_calls, slots)
+    if schedule_validation_required:
+        if (
+            not schedule_evidence.checked
+            and (
+                schedule_validation.is_schedule_ui_selection(request)
+                or not schedule_completed_this_turn
+            )
+        ):
+            schedule_evidence = schedule_validation.context_evidence(tool_ctx_items, slots)
+        if not schedule_evidence.checked:
+            token_events = []
+            async for event in executor.run_required_tool(
+                schedule_validation.AVAILABILITY_TOOL,
+                schedule_validation.availability_args(slots),
+            ):
+                yield event
+            schedule_evidence = schedule_validation.current_turn_evidence(executor.tool_calls, slots)
+        executor.final_text = schedule_validation.validation_answer(slots, schedule_evidence)
+        token_events = []
     t_tools = time.perf_counter()
 
     if _support_answer_is_ungrounded(decision, executor.tool_calls):
@@ -1303,7 +1331,13 @@ async def _run_turn_impl(
         answer,
         slots,
         executor.tool_calls,
-    ) or templates.build_preorder_fallback(answer, slots, decision)
+    ) if not schedule_validation_required or schedule_evidence.available else None
+    preorder_event = preorder_event or templates.build_preorder_fallback(
+        answer,
+        slots,
+        decision,
+        schedule_verified=schedule_evidence.available,
+    )
     rich_event = qna_event or (
         None
         if preorder_event or current_events_event

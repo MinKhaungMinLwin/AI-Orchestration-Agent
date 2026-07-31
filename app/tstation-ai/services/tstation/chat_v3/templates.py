@@ -406,10 +406,18 @@ def _looks_like_confirmation_turn(decision: RouteDecision | None) -> bool:
     return any(key in patch for key in _CONFIRM_SLOT_KEYS)
 
 
-def build_preorder_fallback(answer: str, slots: ConversationSlots, decision: RouteDecision | None) -> dict | None:
+def build_preorder_fallback(
+    answer: str,
+    slots: ConversationSlots,
+    decision: RouteDecision | None,
+    *,
+    schedule_verified: bool = False,
+) -> dict | None:
     if not _looks_like_confirmation_turn(decision):
         return None
     if not _ready_order_slots(slots):
+        return None
+    if not schedule_verified:
         return None
     return build_preorder_data_event(
         answer,
