@@ -5,6 +5,7 @@ from pathlib import Path
 _APP_ROOT = Path(__file__).resolve().parents[1]
 _PERSONA = runpy.run_path(_APP_ROOT / "services/tstation/chat_v3/prompts/persona.py")
 SYSTEM_PROMPT = _PERSONA["SYSTEM_PROMPT"]
+COMPETITOR_CHARACTERISTIC_GUIDANCE = _PERSONA["COMPETITOR_CHARACTERISTIC_GUIDANCE"]
 TRANSACTION_WRITE_GUIDANCE = _PERSONA["TRANSACTION_WRITE_GUIDANCE"]
 STORE_SEARCH_FLOW_GUIDANCE = _PERSONA["STORE_SEARCH_FLOW_GUIDANCE"]
 VEHICLE_LOOKUP_GUIDANCE = _PERSONA["VEHICLE_LOOKUP_GUIDANCE"]
@@ -53,6 +54,18 @@ def test_system_prompt_locks_user_facing_price_labels():
     assert "extra_fvr_sale_prc를 '보유쿠폰 적용 혜택가'라고 설명하지 말고" in SYSTEM_PROMPT
     assert "'안내가', '예시 혜택가', '보유 쿠폰 적용 시 예시 혜택가'" in SYSTEM_PROMPT
     assert "임의 라벨은 사용하지 마세요" in SYSTEM_PROMPT
+
+
+def test_competitor_guidance_infers_traits_without_direct_comparison_or_tools():
+    assert "도구를 호출하지 않고" in COMPETITOR_CHARACTERISTIC_GUIDANCE
+    assert "카테고리·계절·핵심 성능 성향" in COMPETITOR_CHARACTERISTIC_GUIDANCE
+    assert "직접 비교 안내는 어렵지만" in COMPETITOR_CHARACTERISTIC_GUIDANCE
+    assert "공식 대응 상품, 동급 상품, 동일 성능 제품이라고 단정하지 말고" in (
+        COMPETITOR_CHARACTERISTIC_GUIDANCE
+    )
+    assert "차량번호나 타이어 규격" in COMPETITOR_CHARACTERISTIC_GUIDANCE
+    assert "벤투스 에어 S 또는 벤투스 S2 AS" in COMPETITOR_CHARACTERISTIC_GUIDANCE
+    assert "확신할 수 없으면 상품명을 지어내지 말고" in COMPETITOR_CHARACTERISTIC_GUIDANCE
 
 
 def test_transaction_prompt_resolves_goods_no_without_asking_customer_for_internal_id():

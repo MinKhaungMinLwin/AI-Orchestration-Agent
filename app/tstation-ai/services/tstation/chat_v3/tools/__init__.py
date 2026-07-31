@@ -87,6 +87,10 @@ PROFILE_TOOL_NAMES: dict[str, frozenset[str]] = {
     }),
 }
 
+NO_TOOL_INFORMATIONAL_INTENTS = frozenset({
+    "competitor_counterpart_guidance",
+})
+
 
 def tools_for_domain(domain: str) -> list:
     if domain == "DISCOVERY":
@@ -104,13 +108,20 @@ def tools_for_domain(domain: str) -> list:
     return []  # LEADING — pure conversation, no tools
 
 
-def tools_for_domains(domains: list[str], tool_profile: str | None = None) -> list:
+def tools_for_domains(
+    domains: list[str],
+    tool_profile: str | None = None,
+    intents: list[str] | None = None,
+) -> list:
     """Union of the domains' tools, deduped by tool name (V2 chained agents
     per domain; V3 gives one LLM every tool the turn needs instead).
 
     A narrow ``tool_profile`` filters the union by name, but only for
     single-domain turns — multi-domain turns keep the full union.
     """
+    if NO_TOOL_INFORMATIONAL_INTENTS.intersection(intents or ()):
+        return []
+
     seen: set[str] = set()
     union = []
     for domain in domains:

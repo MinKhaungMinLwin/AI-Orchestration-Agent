@@ -187,7 +187,7 @@ def _clear_non_target_unsupported_brand_guard(decision: RouteDecision) -> RouteD
     decision.guard_id = GuardId.NONE
     decision.domain = Domain.DISCOVERY
     decision.extra_domains = []
-    decision.needs_selection_card = True
+    decision.needs_selection_card = "competitor_counterpart_guidance" not in decision.intents
     return decision
 
 

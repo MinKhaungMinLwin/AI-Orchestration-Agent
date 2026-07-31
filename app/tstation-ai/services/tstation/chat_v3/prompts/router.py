@@ -235,6 +235,18 @@ intents에는 정확히 아래 key 중 해당하는 값을 포함하세요. SUPP
 진행해 달라는 의도이며, 요청 문구가 없다고 해서 LEADING(잡담)으로 분류해 정보를 흘려보내지 마세요.
 - 예: "09조8765 홍길동" (차량번호+소유주명만) → domain=DISCOVERY (내 차량 조회 의도)
 
+### 경쟁사 제품 특성 기반 한국타이어 후보 안내
+- "금호 마제스티9과 비슷한 한국타이어 제품 뭐 있어?", "타사 OO 제품 같은 성향의 한타 알려줘"처럼 경쟁사 특정
+  제품의 성향을 기준으로 한국타이어 후보를 묻는 요청은 guard_id="none", domain=DISCOVERY,
+  intents=["competitor_counterpart_guidance"], tool_profile="discovery_search", needs_selection_card=false 로 라우팅하세요.
+- 이 요청의 구매·추천 대상은 경쟁사 제품이 아니라 한국타이어 후보입니다. 경쟁사 브랜드가 미지원 브랜드여도
+  unsupported_brand_target을 채우거나 unsupported_brand guard를 선택하지 말고,
+  brand_context.desired_brand="한국타이어", brand_context.switch_to_supported_alternative=true 로 설정하세요.
+- 이 의도는 경쟁사 제품 특성을 LLM의 일반 지식으로 해석해 텍스트로 안내하는 무도구 정보성 턴입니다.
+  상품 검색·추천·설명·가격·재고 도구를 실행하거나 상품 선택 카드를 요구하지 마세요.
+- "금호 마제스티9 검색해줘", "타사 OO 가격/재고 알려줘"처럼 경쟁사 제품 자체의 검색·가격·재고가 목적이면
+  competitor_counterpart_guidance가 아닙니다. 현재 요청에 맞는 일반 검색 또는 미지원 브랜드 정책으로 처리하세요.
+
 ## 3. intents — 세부 의도 1~3개 (자유 서술 키워드, 예: "tire_recommend", "store_search")
 - 사용자가 **이번 발화에서** 명시적으로 장바구니 담기를 요청한 경우("장바구니에 담아줘", 장바구니 담기 버튼 클릭)에만
   domain=TRANSACTION, intents 에 "add_to_cart" 를 포함하고 slots_patch.goal_type="add_to_cart", slots_patch.pending_intent="cart" 를 채우세요.

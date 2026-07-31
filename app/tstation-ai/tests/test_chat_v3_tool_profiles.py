@@ -57,7 +57,11 @@ _TEST_ENV_DEFAULTS = {
 for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
-from services.tstation.chat_v3.tools import PROFILE_TOOL_NAMES, tools_for_domains  # noqa: E402
+from services.tstation.chat_v3.tools import (  # noqa: E402
+    NO_TOOL_INFORMATIONAL_INTENTS,
+    PROFILE_TOOL_NAMES,
+    tools_for_domains,
+)
 
 # Tools that can turn a product name/size into a goods_no.
 RESOLVER_TOOLS = frozenset({
@@ -79,6 +83,13 @@ def test_v3_does_not_bind_member_coupon_cheapest_price_tool() -> None:
 
     assert "get_cheapest_price_tool" not in full_discovery
     assert all("get_cheapest_price_tool" not in names for names in PROFILE_TOOL_NAMES.values())
+
+
+def test_competitor_characteristic_guidance_binds_no_tools() -> None:
+    intents = ["competitor_counterpart_guidance"]
+
+    assert "competitor_counterpart_guidance" in NO_TOOL_INFORMATIONAL_INTENTS
+    assert tools_for_domains(["DISCOVERY"], "discovery_search", intents=intents) == []
 
 
 # `transaction_order` has the same shape of gap — get_final_price_tool, save_to_cart_tool

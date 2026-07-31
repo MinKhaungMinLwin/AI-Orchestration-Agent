@@ -2860,11 +2860,15 @@ def test_oe_replacement_query_is_detected() -> None:
 
 def test_competitor_counterpart_guidance_lives_in_llm_prompt_not_regex_guard() -> None:
     for prompt in (DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE, DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE):
-        assert "COMPETITOR PRODUCT COUNTERPART GUIDANCE" in prompt
-        assert "Do NOT call tools for the initial counterpart guidance answer" in prompt
-        assert "Do NOT ask for vehicle or tire size" in prompt
-        assert "공식 대응 상품이나 동일 성능 제품" in prompt
-        assert "키너지 4S2를 검색해드릴까요?" in prompt
+        assert "COMPETITOR PRODUCT CHARACTERISTIC GUIDANCE" in prompt
+        assert "without calling tools" in prompt
+        assert "representative category, season, and primary" in prompt
+        assert "performance traits" in prompt
+        assert "Do NOT directly compare the competitor and Hankook products" in prompt
+        assert "official counterpart, equivalent product, same-grade product, or same-performance product" in prompt
+        assert "차량번호나 타이어 규격" in prompt
+        assert "Ventus air S or Ventus S2 AS" in prompt
+        assert "do not guess a product name" in prompt
 
 
 def test_discovery_recommendation_prompt_locks_price_label_wording() -> None:

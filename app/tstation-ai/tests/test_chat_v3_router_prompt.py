@@ -26,6 +26,17 @@ def test_router_routes_bare_info_to_the_domain_that_can_use_it():
     assert "09조8765 홍길동" in ROUTER_PROMPT
 
 
+def test_router_routes_competitor_characteristic_guidance_to_no_tool_discovery():
+    assert "금호 마제스티9과 비슷한 한국타이어 제품 뭐 있어?" in ROUTER_PROMPT
+    assert 'intents=["competitor_counterpart_guidance"]' in ROUTER_PROMPT
+    assert 'guard_id="none", domain=DISCOVERY' in ROUTER_PROMPT
+    assert 'tool_profile="discovery_search", needs_selection_card=false' in ROUTER_PROMPT
+    assert 'brand_context.desired_brand="한국타이어"' in ROUTER_PROMPT
+    assert "unsupported_brand_target을 채우거나 unsupported_brand guard를 선택하지 말고" in ROUTER_PROMPT
+    assert "무도구 정보성 턴" in ROUTER_PROMPT
+    assert "경쟁사 제품 자체의 검색·가격·재고가 목적이면" in ROUTER_PROMPT
+
+
 def test_router_prompt_routes_card_interest_free_installments_to_support():
     assert "card_installment_lookup" in ROUTER_PROMPT
     assert "무이자 할부 카드 알려줘" in ROUTER_PROMPT

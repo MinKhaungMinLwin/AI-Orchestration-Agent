@@ -32,6 +32,7 @@ from services.tstation.chat_v3.token_usage import TurnTokenUsage
 from services.tstation.quota_service import record_monthly_tokens
 from services.tstation.chat_v3.prompts.persona import (
     BENEFIT_INQUIRY_GUIDANCE,
+    COMPETITOR_CHARACTERISTIC_GUIDANCE,
     ERROR_RESPONSE,
     MAINTENANCE_HISTORY_GUIDANCE,
     MY_COUPONS_GUIDANCE,
@@ -1048,6 +1049,8 @@ async def _run_turn_impl(
             )
     if "DISCOVERY" in domains:
         extra_context.append(VEHICLE_LOOKUP_GUIDANCE)
+        if decision and "competitor_counterpart_guidance" in decision.intents:
+            extra_context.append(COMPETITOR_CHARACTERISTIC_GUIDANCE)
     if "SUPPORT" in domains:
         extra_context.append(BENEFIT_INQUIRY_GUIDANCE)
     static_faq_context = _static_faq_policy_context(decision)
@@ -1080,7 +1083,11 @@ async def _run_turn_impl(
     route_profile = decision.tool_profile.value if decision else ""
     executor = ToolLoopExecutor(
         messages,
-        tools_for_domains(domains, tool_profile=route_profile),
+        tools_for_domains(
+            domains,
+            tool_profile=route_profile,
+            intents=(decision.intents if decision else None),
+        ),
         _tool_display_names(),
         stream_tokens=_tokens_enabled(),
         trace_config=_trace_config(

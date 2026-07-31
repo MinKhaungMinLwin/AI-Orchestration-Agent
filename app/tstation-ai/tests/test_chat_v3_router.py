@@ -398,6 +398,26 @@ def test_supported_alternative_switch_overrides_unsupported_target_from_history(
     assert result.needs_selection_card is True
 
 
+def test_competitor_characteristic_guidance_clears_unsupported_guard_without_selection_card() -> None:
+    decision = RouteDecision(
+        guard_id=GuardId.UNSUPPORTED_BRAND,
+        domain=Domain.DISCOVERY,
+        intents=["competitor_counterpart_guidance"],
+        brand_context=BrandContext(
+            unsupported_brand_target="Kumho",
+            desired_brand="Hankook",
+            switch_to_supported_alternative=True,
+        ),
+        needs_selection_card=True,
+    )
+
+    result = _clear_non_target_unsupported_brand_guard(decision)
+
+    assert result.guard_id == GuardId.NONE
+    assert result.domain == Domain.DISCOVERY
+    assert result.needs_selection_card is False
+
+
 def test_supported_brand_switch_resets_product_and_guard_state_but_preserves_fitment() -> None:
     slots = ConversationSlots(
         tire_size="245/45R18",
