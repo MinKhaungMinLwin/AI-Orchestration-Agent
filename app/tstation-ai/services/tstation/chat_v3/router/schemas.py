@@ -75,6 +75,8 @@ class GuardId(str, Enum):
     PRIVACY_CONTACT = "privacy_contact"
     REGIONAL_CHEAPEST = "regional_cheapest"
     UNSUPPORTED_BRAND = "unsupported_brand"
+    OTHER_BRAND_PURCHASE_CHANNEL = "other_brand_purchase_channel"
+    HANKOOK_ALTERNATIVE_PURCHASE_CHANNEL = "hankook_alternative_purchase_channel"
     EXTERNAL_PRICE = "external_price"
     PAST_EVENT_PAGE = "past_event_page"
     COUPON_ISSUE_REQUEST = "coupon_issue_request"

@@ -146,6 +146,20 @@ def test_router_prompt_requires_brand_role_context_for_unsupported_brand():
     assert "ignore an unsupported target carried only by conversation history" in ROUTER_PROMPT
 
 
+def test_router_prompt_routes_tire_purchase_channels_in_scope_without_price_comparison():
+    guard_section = ROUTER_PROMPT.split("## 2. domain", maxsplit=1)[0]
+
+    assert "other_brand_purchase_channel" in guard_section
+    assert "금호타이어는 어디서 살 수 있어?" in guard_section
+    assert "넥센 타이어 구매 사이트 알려줘" in guard_section
+    assert "hankook_alternative_purchase_channel" in guard_section
+    assert "한국타이어는 티스테이션 말고 어디서 사?" in guard_section
+    assert "한국타이어 파는 다른 온라인몰 있어?" in guard_section
+    assert "가격 비교·최저가 확인을 요구하지 않으면 external_price가 아닙니다" in guard_section
+    assert "타이어 구매 채널은 T-Station 고객 업무 범위입니다" in guard_section
+    assert "out_of_scope로 분류하지 말고" in guard_section
+
+
 def test_router_prompt_requires_current_turn_evidence_for_nonexistent_benefit():
     assert "benefit_context.unverified_benefit_target" in ROUTER_PROMPT
     assert "benefit_context.unverified_access_request" in ROUTER_PROMPT

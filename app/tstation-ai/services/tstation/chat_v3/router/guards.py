@@ -85,6 +85,31 @@ _STATIC_GUARDS: dict[GuardId, Guard] = {
         ],
         predicted_domains=["DISCOVERY"],
     ),
+    GuardId.OTHER_BRAND_PURCHASE_CHANNEL: Guard(
+        id="other_brand_purchase_channel",
+        text=(
+            "다른 브랜드의 타이어는 해당 브랜드의 공식 판매 채널 또는 온라인 판매처에서 구매하실 수 있습니다. "
+            "판매 가격, 재고, 장착 가능 여부는 판매처마다 다를 수 있으므로 구매를 원하는 판매처에서 확인해 주세요. "
+            "한국타이어 제품은 티스테이션닷컴에서 편리하게 구매 및 장착 예약을 이용하실 수 있습니다."
+        ),
+        chips=[
+            {"label": "한국타이어 상품 보기", "domain": "DISCOVERY"},
+            {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+        ],
+        predicted_domains=["DISCOVERY"],
+    ),
+    GuardId.HANKOOK_ALTERNATIVE_PURCHASE_CHANNEL: Guard(
+        id="hankook_alternative_purchase_channel",
+        text=(
+            "한국타이어는 티스테이션닷컴 외에도 다양한 온라인 및 오프라인 판매처에서 구매하실 수 있습니다. "
+            "티스테이션닷컴에서는 다양한 할인 혜택과 장착 예약 서비스를 함께 이용하실 수 있습니다."
+        ),
+        chips=[
+            {"label": "한국타이어 상품 보기", "domain": "DISCOVERY"},
+            {"label": "진행 중인 혜택", "domain": "DISCOVERY"},
+        ],
+        predicted_domains=["DISCOVERY"],
+    ),
     GuardId.EXTERNAL_PRICE: Guard(
         id="external_price",
         text=(
