@@ -9,66 +9,51 @@ from pydantic import BaseModel, Field
 
 from langchain_litellm import ChatLiteLLM
 
+
+def _make_llm(model_setting: str, *, streaming: bool = True, timeout: int = 120) -> ChatLiteLLM:
+    return ChatLiteLLM(
+        api_base=settings.AI_GATEWAY_BASE_URL,
+        api_key=settings.AI_GATEWAY_API_KEY,
+        model=f"{settings.AI_DEFAULT_PROVIDER}/{model_setting}",
+        streaming=streaming,
+        request_timeout=timeout,
+    )
+
+
 # Default LLM (AI_MODEL) — used by Discovery and Support agents.
-LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL}",
-    streaming=True,
-)
+LLM = _make_llm(settings.AI_MODEL)
 
 # Per-agent overrides
-LEADING_LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_LEADING_AGENT}",
-    streaming=True,
-)
-
-TRANSACTION_LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_TRANSACTION_AGENT}",
-    streaming=True,
-)
+LEADING_LLM = _make_llm(settings.AI_MODEL_LEADING_AGENT)
+TRANSACTION_LLM = _make_llm(settings.AI_MODEL_TRANSACTION_AGENT)
 
 # Lightweight LLM for routing/decision tasks (AI_MODEL_QC_AGENT, e.g. gpt-4o-mini).
 # Use for short structured outputs where reasoning depth is not needed.
-DECISION_LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT}",
-)
-
-# Singleton for QC fact-checking chain — same model tier as DECISION_LLM but kept
-# separate so each can be reconfigured independently (e.g. streaming, temperature).
-QC_LLM = ChatLiteLLM(
-    api_base=settings.AI_GATEWAY_BASE_URL,
-    api_key=settings.AI_GATEWAY_API_KEY,
-    model=f"{settings.AI_DEFAULT_PROVIDER}/{settings.AI_MODEL_QC_AGENT}",
-)
+DECISION_LLM = _make_llm(settings.AI_MODEL_QC_AGENT, streaming=False, timeout=30)
 
 ### Multi-Agent Router
 # Leading Agent
-from services.tstation.agents.a_leading_agent.agent import LeadingAgent
+from services.tstation.agents.a_leading_agent.agent import LeadingAgent  # noqa: E402
 
 leading_agent = LeadingAgent(LEADING_LLM)
 # Discovery Agent
-from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent
+from services.tstation.agents.b_discovery_agent.agent import DiscoverySubAgent  # noqa: E402
 
 discovery_subagent = DiscoverySubAgent(LLM)
 # Transaction Agent (merged PRICING + ORDER)
-from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent
+from services.tstation.agents.c_transaction_agent.agent import TransactionSubAgent  # noqa: E402
 
 transaction_subagent = TransactionSubAgent(TRANSACTION_LLM)
 
 # Support Agent
-from services.tstation.agents.e_support_agent.agent import SupportSubAgent
+from services.tstation.agents.e_support_agent.agent import SupportSubAgent  # noqa: E402
 
 support_subagent = SupportSubAgent(LLM)
 
-# UI Template Agent disabled — template rendering is handled by code mapper.
-# QC Agent disabled — kept out of runtime path.
+# Template rendering is handled by the code-based template_mapper (Path A) or
+# directly by domain agents emitting structured `data` events (Path B). The
+# legacy UI Template Agent has been removed in refactor/af-labels-and-template-cleanup.
+# QC Agent stays out of the runtime path.
 
 
 ## Router
@@ -107,9 +92,9 @@ class AgentDomain(BaseModel):
         Classify user message into ONE domain.
 
         DOMAINS:
-        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, reservation, store visit/booking, order tracking, create order draft, coupon inquiry
-        - SUPPORT: FAQ, warranty, returns, policies, maintenance, human agent
-        - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features
+        - TRANSACTION: Price, stock (logistics/store), inventory, store search by location/name, store availability, purchase, store visit reservation (specific date/time slot booking at a store), order tracking, create order draft, coupon inquiry, coupon applicable product lookup
+        - SUPPORT: FAQ, warranty, returns, policies, general maintenance information, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 알림 만기 / all my T 점검 만기** (data-backed schedule inquiry for the user's registered car), human agent
+        - DISCOVERY: Product search by name, recommendations, vehicle-tire compatibility check, features, **registered vehicle list (listCar) inquiry**
         - LEADING: Greeting, unclear intent
 
         DECISION RULES:
@@ -123,12 +108,16 @@ class AgentDomain(BaseModel):
         - Find "All My T" stores (e.g., "all my T", "All My T", "올마이티", "allMyT")
         - Check store inventory (which stores have this tire)
         - "Buy", "purchase", "order", "checkout" WITH goods_no already known
+        - Explicit order-execution requests with already provided order payload slots, even if goods_no is not resolved yet
+          (e.g., product + quantity + store/installation shop + reservation date/time + "주문해줘", "주문서 만들어줘",
+          "이 정보대로 진행해줘", "예약해줘")
         - Track existing order (provide order number)
         - "장바구니에 담아줘", "장바구니 저장" (cart save)
         - Book store visit/reservation with specific date/time
         - Select quantity for order (e.g., "4개 주문", "2개")
         - Select store for order
         - Coupon inquiry ("쿠폰 조회", "내 쿠폰", "쿠폰함")
+        - Coupon applicable product lookup by coupon name/discount ("드라이브 행사 고객 한정 적용 가능 상품", "30% 쿠폰 적용 상품", "이 쿠폰으로 살 수 있는 타이어")
         Examples:
         - "{{goods_no}} 가격 얼마야?" (e.g., "G012345678901" - goods_no KNOWN → TRANSACTION)
         - "Is {{goods_no}} in stock?" (e.g., "G012345678901")
@@ -137,11 +126,14 @@ class AgentDomain(BaseModel):
         - "All My T 매장 찾아줘"
         - "올마이티 매장 검색"
         - "{{goods_no}} 4개 주문할게" (e.g., "G012345678901" - goods_no KNOWN → TRANSACTION)
+        - "타이어 사이즈 2454519 / 상품: 벤투스 air S / 수량: 4개 / 매장: 티스테이션 분당정자점 / 장착일: 7월 4일 11시 / 이 정보대로 주문서 만들어 줘"
+        - "장착점 티스테이션 분당정자점으로 7월 4일 11시에 이대로 주문해줘"
         - "Book installation at 2pm"
         - "Track my order 12345"
         - "장바구니에 담아줘"
         - "쿠폰 조회해줘"
         - "내 쿠폰 보여줘"
+        - "드라이브 행사 고객 한정 적용 가능 상품 뭐야"
 
         DISCOVERY if user wants:
         - Search products by NAME/KEYWORD (e.g., "search for Ventus", "show me Hankook tires")
@@ -161,11 +153,13 @@ class AgentDomain(BaseModel):
         - Tire replacement guidance (when to replace, air pressure, maintenance)
         - Policy questions (warranty terms, return conditions, refund process)
         - General guidance without purchase intent
+        - **Per-vehicle maintenance schedule / D-day inquiry** — "내 차 정비 일정", "엔진오일 언제 갈아야", "배터리 교체 시기", "타이어 교체 시기", "all my T 점검 만기 언제", "내 차 5대무상 점검 만기", "와이퍼 언제 갈아", "정비 D-day", "점검 만기일" (registered-car-based D-day matrix for the 7 items: 얼라인먼트/all my T 무상점검/엔진오일/실내필터/와이퍼/타이어/배터리). ⚠️ NOT to be confused with "store visit reservation booking" (=TRANSACTION).
         - Request for human agent / 1:1 inquiry
         - Write/save 1:1 inquiry with AI-summarized content
         - "1:1 문의 작성", "상담원 연결", "이 문제를 1:1로 저장하고 싶어요"
-        - **Customer complaints, frustration, anger** (e.g., "뭐 이런 서비스가", "제대로 해", "상담 이딴식으로", "엉망이야", aggressive/angry tone)
-        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요", "너 상담 왜 이렇게 못해?", "짜증나", "다른 상담원 연결해줘"
+        - **T-Station service complaints, frustration, anger** where the target is tires, products, orders, payment, delivery, installation, stores, coupons, vehicles, or chatbot answers (e.g., "뭐 이런 서비스가", "주문 오류 때문에 짜증나", "너 상담 왜 이렇게 못해?")
+        - Do NOT route out-of-scope complaints to SUPPORT just because the tone is angry. Stock/investment, daily-life, politics, legal, medical, other-company/service complaints should stay LEADING with a support-scope 안내. Unclear frustration should stay LEADING and ask what T-Station-related issue was uncomfortable.
+        Examples: "When should I replace tires?", "What's the warranty policy?", "Can I return this?", "1:1 문의 작성해주세요", "상담원 연결해주세요", "너 상담 왜 이렇게 못해?", "타이어 주문했는데 계속 오류나고 짜증나", "다른 상담원 연결해줘", "내 차 정비 일정 알려줘", "엔진오일 언제 갈아야 해?", "all my T 점검 언제까지야?"
 
         LEADING if:
         - Just greeting ("hello", "hi", "안녕하세요")
@@ -182,8 +176,14 @@ class AgentDomain(BaseModel):
         - "does [tire] fit [car]?" → DISCOVERY (compatibility check)
         - "buy tires" → TRANSACTION
         - "recommend tires" → DISCOVERY
-        - "warranty, return, maintenance" → SUPPORT
+        - "warranty, return, maintenance FAQ" → SUPPORT
+        - "내 차 정비 일정 / 정비 D-day / 교체 시기 / 점검 만기" → SUPPORT (data-backed, registered vehicle 7-item D-day matrix)
+        - "방문 예약 시간 알려줘 / 매장 예약 조회" → TRANSACTION (store visit slot booking)
         - "find stores" → TRANSACTION
+        - If the current turn includes product/quantity/store(or 장착점/매장)/date-time slots plus an explicit execution verb
+          such as "주문", "주문서 만들어", "진행해줘", or "예약해줘", classify as TRANSACTION, not DISCOVERY.
+        - Do NOT classify a turn as DISCOVERY/store detail when the user is asking to execute an order or reservation
+          using already provided slots.
 
         Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
         """)

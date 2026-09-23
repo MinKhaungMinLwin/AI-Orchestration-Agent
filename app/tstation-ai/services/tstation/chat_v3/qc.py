@@ -1,0 +1,82 @@
+"""Optional fact-check pass over the final answer, gated by AI_QC_ENABLED.
+
+Layer 1 (default): deterministic ``qc_verifier`` comparison of the answer's
+prices/codes/store names/dates against raw tool outputs — no LLM call, ~ms.
+Layer 2 (fallback): LLM-based (mini model) verdict, only when no tool output
+could be parsed for the deterministic check.
+"""
+
+import logging
+
+from pydantic import BaseModel, Field
+
+from config.env import settings
+from services.tstation import qc_verifier
+from services.tstation.chat_v3.executor import _model_visible_tool_output
+from services.tstation.chat_v3.llm import get_router_llm
+
+logger = logging.getLogger(__name__)
+
+_QC_PROMPT = (
+    "당신은 챗봇 답변의 사실 검증기입니다. 도구 실행 결과(원본 데이터)와 챗봇 답변을 비교하세요.\n"
+    "- 답변의 수치·가격·매장명·재고·날짜가 도구 결과와 다르면 passed=false와 reason을 작성하세요.\n"
+    "- 도구 결과에 없는 내용이라도 일반 상식/안내 수준이면 통과시키세요.\n"
+    "- 문제가 없으면 passed=true, reason은 비워두세요."
+)
+
+_MAX_REASON_MISMATCHES = 3
+
+
+class QCVerdict(BaseModel):
+    passed: bool = Field(description="답변이 도구 결과와 사실적으로 일치하면 true")
+    reason: str = Field(default="", description="passed=false일 때 불일치 사유")
+
+
+class QCResult(BaseModel):
+    answer: str = Field(description="Original answer. QC never rewrites the user-visible response.")
+    passed: bool = Field(default=True, description="Whether QC found a factual mismatch.")
+    corrected_response: str = Field(default="", description="LLM-suggested correction retained for trace/debug only.")
+    reason: str = Field(default="", description="Short machine-readable QC outcome reason.")
+
+    @property
+    def failed(self) -> bool:
+        return not self.passed
+
+
+async def verify_answer(answer: str, tool_calls: list[dict], trace_config: dict | None = None) -> QCResult:
+    """Return QC verdict metadata while preserving the original answer."""
+    if not settings.AI_QC_ENABLED or not tool_calls or not answer:
+        return QCResult(answer=answer, reason="qc_disabled_or_noop")
+    sources = [
+        (str(call.get("name") or ""), parsed)
+        for call in tool_calls
+        if (parsed := qc_verifier.parse_tool_output(call.get("output"))) is not None
+    ]
+    if sources:
+        mismatches = qc_verifier.verify_draft(answer, sources)
+        if not mismatches:
+            return QCResult(answer=answer, reason="qc_det_passed")
+        summary = ",".join(f"{m.field}={m.value}" for m in mismatches[:_MAX_REASON_MISMATCHES])
+        logger.info("[CHAT_V3] deterministic QC flagged the answer; keeping original response: %s", summary)
+        return QCResult(answer=answer, passed=False, reason=f"qc_det_failed:{summary}")
+    return await _verify_answer_llm(answer, tool_calls, trace_config)
+
+
+async def _verify_answer_llm(answer: str, tool_calls: list[dict], trace_config: dict | None) -> QCResult:
+    """LLM fallback for tool outputs the deterministic verifier cannot parse."""
+    facts = "\n\n".join(
+        f"[{call.get('name')}] input={call.get('args')}\n"
+        f"{_model_visible_tool_output(str(call.get('name') or ''), str(call.get('output') or ''))[:4000]}"
+        for call in tool_calls
+    )
+    try:
+        llm = get_router_llm().with_structured_output(QCVerdict, method="function_calling")
+        messages = [("system", _QC_PROMPT), ("user", f"## 도구 결과\n{facts[:12000]}\n\n## 챗봇 답변\n{answer}")]
+        verdict = await llm.ainvoke(messages, config=trace_config) if trace_config else await llm.ainvoke(messages)
+        if not verdict.passed:
+            logger.info("[CHAT_V3] QC flagged the answer; keeping original response")
+            return QCResult(answer=answer, passed=False, reason=verdict.reason.strip() or "qc_failed")
+    except Exception:
+        logger.exception("[CHAT_V3] QC verification failed — keeping original answer")
+        return QCResult(answer=answer, reason="qc_error")
+    return QCResult(answer=answer, reason="qc_passed")

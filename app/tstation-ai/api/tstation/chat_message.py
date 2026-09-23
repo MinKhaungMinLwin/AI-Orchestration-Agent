@@ -2,30 +2,32 @@
 Chat Message API - CRUD operations for conversations via Redis.
 
 Endpoints:
-- POST /api/messages/chat - Chat with content only (history managed by service)
-- GET /api/messages/sessions - List all sessions for user
-- GET /api/messages/history/{session_id} - Get messages for a session
-- DELETE /api/messages/{session_id} - Delete a session
-- GET /api/messages/user-info - Get user info from JWT
-- POST /api/messages/validate-token - Validate JWT token
+- POST /api/tstation/messages/chat - Chat with content only (history managed by service)
+- GET /api/tstation/messages/sessions - List all sessions for user
+- GET /api/tstation/messages/history/{session_id} - Get messages for a session
+- DELETE /api/tstation/messages/{session_id} - Delete a session
+- GET /api/tstation/messages/user-info - Get user info from JWT
+- POST /api/tstation/messages/validate-token - Validate JWT token
 """
 import asyncio
 import json
 import logging
 import re
+from urllib.parse import urlparse
 import urllib.request
 import uuid
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Security
+from fastapi import APIRouter, Depends, HTTPException, Request, Security
 from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 
-from config.sec import get_api_key
+from common.jwt_utils import TOKEN_EXPIRED_CODE, decode_jwt, is_jwt_payload_expired
+from config.sec import get_api_key, security
 from schemas.tstation.chat_message import (
     ChatMessageRequest,
     ChatMessageResponse,
-    ChatStreamResponse,
+    QuickOrderActionRequest,
     SessionListResponse,
     SessionInfo,
     ChatHistoryResponse,
@@ -38,9 +40,47 @@ from schemas.tstation.chat_message import (
 )
 from services.tstation.chat_history_service import get_chat_history_service
 from services.tstation.chat import TStationChatServiceV2
+from services.tstation.common.cta_urls import CTAUrls
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_TSTATION_ORIGIN_HOSTS = {
+    "wwwqa.tstation.com",
+    "mqa.tstation.com",
+    "mbiz.tstation.com",
+    "bizqa.tstation.com",
+    "www.tstation.com",
+    "m.tstation.com",
+    "biz.tstation.com",
+}
+
+
+def _normalize_tstation_origin_host(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if "://" in raw:
+        host = urlparse(raw).hostname
+    else:
+        host = raw.split(",", 1)[0].split(":", 1)[0]
+    host = (host or "").strip().lower()
+    if host in _TSTATION_ORIGIN_HOSTS:
+        return host
+    return None
+
+
+def _origin_host_from_request(request: Request) -> str | None:
+    for header_name in ("origin", "referer", "x-forwarded-host", "host"):
+        host = _normalize_tstation_origin_host(request.headers.get(header_name))
+        if host:
+            return host
+    return None
+
+
+def _log_task_error(task: asyncio.Task) -> None:
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error("Background task %s failed: %s", task.get_name(), exc, exc_info=exc)
 
 _LITELLM_REG_KEY = "litellm:registered:{user_id}"
 _LITELLM_REG_TTL = 90 * 24 * 60 * 60  # 90 days
@@ -57,7 +97,7 @@ def _register_litellm_user(user_id: str) -> None:
 
     redis = get_redis_client()
     cache_key = _LITELLM_REG_KEY.format(user_id=user_id)
-    if redis.exists(cache_key):
+    if redis.get(cache_key) is not None:
         return
 
     base = settings.AI_GATEWAY_BASE_URL.rstrip("/")
@@ -87,19 +127,15 @@ def _register_litellm_user(user_id: str) -> None:
                             user_id, settings.LITELLM_USER_MAX_BUDGET, settings.LITELLM_USER_BUDGET_DURATION)
     except Exception as exc:
         logger.warning("[LITELLM] Failed to register user %s: %s", user_id, exc)
+        redis.setex(cache_key, 60, "0")  # back-off 60s to avoid retry storm on LiteLLM failure
 
 
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 def _update_quota_score(user_id: str, tokens: int, trace_id: str, limit: int) -> None:
-    from services.tstation.quota_service import add_monthly_tokens, post_langfuse_score
-    new_total = add_monthly_tokens(user_id, tokens)
-    logger.info("[QUOTA] %s: %d / %d tokens this month", user_id, new_total, limit)
-    post_langfuse_score(
-        trace_id, "monthly_tokens_used", float(new_total),
-        f"{new_total:,} / {limit:,} tokens this month",
-    )
+    from services.tstation.quota_service import record_monthly_tokens
+    record_monthly_tokens(user_id, tokens, trace_id, limit)
 
 
 def get_current_time() -> str:
@@ -123,8 +159,238 @@ def _ensure_session_owner(service, session_id: str, user_id: str) -> None:
         raise HTTPException(status_code=404, detail="Session not found")
 
 
+def _quick_order_action_event(message: str, *, metadata: dict | None = None) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_quick_order_action_guard",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": [
+                {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata or {},
+        },
+    }
+
+
+def _quick_order_action_parse_booking_datetime(raw: str | None) -> tuple[str | None, str | None]:
+    text = str(raw or "").strip()
+    if not text:
+        return None, None
+    match = re.search(
+        r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})\D+(?:\([^)]*\)\s*)?(\d{1,2})\s*(?::\s*\d{1,2}|시)?",
+        text,
+    )
+    if not match:
+        return None, None
+    year, month, day, hour = (int(part) for part in match.groups())
+    return f"{year:04d}{month:02d}{day:02d}", f"{hour:02d}"
+
+
+def _latest_preorder_payload(history: list[dict]) -> dict:
+    for message in reversed(history):
+        template_data = message.get("template_data")
+        if not isinstance(template_data, dict):
+            continue
+        if template_data.get("template") == "preOrder" and isinstance(template_data.get("data"), dict):
+            return template_data["data"]
+        if isinstance(template_data.get("orderInfo"), dict) and template_data.get("isReadyToOrder"):
+            return template_data
+    return {}
+
+
+def _normalize_quick_order_action_payload(action_payload: dict, preorder_payload: dict) -> dict:
+    metadata = preorder_payload.get("metadata") if isinstance(preorder_payload.get("metadata"), dict) else {}
+    order_info = preorder_payload.get("orderInfo") if isinstance(preorder_payload.get("orderInfo"), dict) else {}
+    payload = {**metadata, **action_payload}
+
+    requested_cal_day = str(payload.get("requestedCalDay") or payload.get("requested_cal_day") or "").strip()
+    rsv_hour = str(payload.get("rsvHour") or payload.get("rsv_hour") or "").strip()
+    if not (requested_cal_day and rsv_hour):
+        parsed_day, parsed_hour = _quick_order_action_parse_booking_datetime(
+            payload.get("bookingDateTime") or order_info.get("bookingDateTime")
+        )
+        requested_cal_day = requested_cal_day or (parsed_day or "")
+        rsv_hour = rsv_hour or (parsed_hour or "")
+
+    raw_qty = payload.get("ordQty") or payload.get("ord_qty") or payload.get("quantity") or order_info.get("quantity")
+    raw_amount = payload.get("paymentAmount") or payload.get("payment_amount") or order_info.get("paymentAmount")
+    normalized: dict[str, object] = {
+        "goods_no": str(payload.get("goodsNo") or payload.get("goodsId") or payload.get("goods_no") or "").strip(),
+        "shop_id": str(payload.get("shopId") or payload.get("shop_id") or "").strip(),
+        "requested_cal_day": requested_cal_day,
+        "rsv_hour": str(rsv_hour).split(":", 1)[0].zfill(2) if rsv_hour else "",
+        "car_no": str(payload.get("carNo") or payload.get("car_no") or "").strip(),
+        "car_lnc_cd": str(payload.get("carLncCd") or payload.get("car_lnc_cd") or "").strip(),
+        "product_name": str(payload.get("productName") or order_info.get("product") or "").strip(),
+        "tire_size": str(payload.get("tireSize") or "").strip(),
+        "store_name": str(payload.get("storeName") or payload.get("shopName") or order_info.get("storeName") or "").strip(),
+        "booking_datetime": str(payload.get("bookingDateTime") or order_info.get("bookingDateTime") or "").strip(),
+    }
+    try:
+        normalized["ord_qty"] = int(raw_qty or 0)
+    except (TypeError, ValueError):
+        normalized["ord_qty"] = 0
+    try:
+        normalized["payment_amount"] = int(raw_amount or 0)
+    except (TypeError, ValueError):
+        normalized["payment_amount"] = 0
+    return normalized
+
+
+def _validate_quick_order_action_payload(normalized: dict, preorder_payload: dict) -> tuple[bool, str]:
+    required = ("goods_no", "shop_id", "requested_cal_day", "rsv_hour")
+    missing = [field for field in required if not normalized.get(field)]
+    if int(normalized.get("ord_qty") or 0) <= 0:
+        missing.append("ord_qty")
+    if missing:
+        return False, "missing:" + ",".join(missing)
+
+    metadata = preorder_payload.get("metadata") if isinstance(preorder_payload.get("metadata"), dict) else {}
+    order_info = preorder_payload.get("orderInfo") if isinstance(preorder_payload.get("orderInfo"), dict) else {}
+    expected_goods_no = str(metadata.get("goodsNo") or metadata.get("goodsId") or "").strip()
+    expected_shop_id = str(metadata.get("shopId") or "").strip()
+    if expected_goods_no and expected_goods_no != normalized.get("goods_no"):
+        return False, "goods_no_mismatch"
+    if expected_shop_id and expected_shop_id != normalized.get("shop_id"):
+        return False, "shop_id_mismatch"
+
+    expected_amount_raw = metadata.get("paymentAmount") or order_info.get("paymentAmount")
+    try:
+        expected_amount = int(expected_amount_raw or 0)
+    except (TypeError, ValueError):
+        expected_amount = 0
+    payment_amount = int(normalized.get("payment_amount") or 0)
+    if expected_amount and payment_amount:
+        tolerance = max(1000, int(expected_amount * 0.1))
+        if abs(expected_amount - payment_amount) > tolerance:
+            return False, "payment_amount_mismatch"
+    return True, "ok"
+
+
+def _quick_order_attempt_context(tool_input: dict, normalized: dict, quick_order_result: dict) -> dict:
+    order_snapshot = {
+        key: value
+        for key, value in {
+            "goods_no": tool_input.get("goods_no"),
+            "ord_qty": tool_input.get("ord_qty"),
+            "shop_id": tool_input.get("shop_id"),
+            "requested_cal_day": tool_input.get("rsv_date"),
+            "rsv_hour": tool_input.get("rsv_hour"),
+            "product_name": normalized.get("product_name"),
+            "store_name": normalized.get("store_name"),
+            "booking_datetime": normalized.get("booking_datetime"),
+            "payment_amount": normalized.get("payment_amount"),
+        }.items()
+        if value not in (None, "", 0)
+    }
+    return {
+        "last_order_attempt": {
+            "tool": "quick_order_tool",
+            "status": str(quick_order_result.get("status") or "unknown"),
+            "message": str(quick_order_result.get("message") or "").strip() or None,
+            "order": order_snapshot,
+        }
+    }
+
+
+async def _persist_quick_order_attempt_context(
+    history_service,
+    *,
+    session_id: str,
+    user_id: str | None,
+    tool_input: dict,
+    normalized: dict,
+    quick_order_result: dict,
+) -> None:
+    try:
+        await history_service.finalize_chat_context_async(
+            session_id=session_id,
+            tool_data=[{"tool": "quick_order_tool", "input": tool_input, "data": quick_order_result}],
+            quick_reply_domains=["TRANSACTION"],
+            predicted_domains=["TRANSACTION"],
+            user_id=user_id,
+        )
+        slots = await asyncio.to_thread(history_service.get_slots, session_id)
+        order_context = dict(slots.order_context or {})
+        order_context.update(_quick_order_attempt_context(tool_input, normalized, quick_order_result))
+        await history_service.save_slots_async(
+            session_id,
+            slots.apply_runtime_values({"order_context": order_context}, source="quick_order_action"),
+            user_id=user_id,
+        )
+    except Exception:
+        logger.exception("[QUICK_ORDER_ACTION] failed to persist quick order attempt context")
+
+
+def _dict_tool_result(raw_result) -> dict:
+    if isinstance(raw_result, dict):
+        return raw_result
+    if isinstance(raw_result, str):
+        try:
+            parsed = json.loads(raw_result)
+            return parsed if isinstance(parsed, dict) else {"status": "success", "data": parsed}
+        except json.JSONDecodeError:
+            return {"status": "success", "data": raw_result}
+    return {"status": "success", "data": raw_result}
+
+
+def _append_should_route_to_chat(request: AppendMessageRequest) -> bool:
+    if request.role != "user":
+        return False
+    if request.ui_action or request.chip_context or request.slots or request.user_info or request.tracing_id:
+        return True
+    template_data = request.template_data if isinstance(request.template_data, dict) else {}
+    if not template_data:
+        return False
+    for key in ("ui_action", "chip_context", "slots", "user_info", "tracing_id"):
+        value = template_data.get(key)
+        if isinstance(value, dict) and value:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    metadata = template_data.get("metadata")
+    if isinstance(metadata, dict):
+        nested_ui_action = metadata.get("ui_action")
+        nested_slots = metadata.get("slots")
+        if isinstance(nested_ui_action, dict) and nested_ui_action:
+            return True
+        if isinstance(nested_slots, dict) and nested_slots:
+            return True
+    return False
+
+
+def _append_request_to_chat_body(request: AppendMessageRequest) -> ChatMessageRequest:
+    template_data = request.template_data if isinstance(request.template_data, dict) else {}
+    chip_context = request.chip_context
+    template_chip_context = template_data.get("chip_context")
+    if chip_context is None and isinstance(template_chip_context, dict):
+        chip_context = template_chip_context
+
+    template_metadata = template_data.get("metadata")
+    template_ui_action = template_data.get("ui_action")
+    template_slots = template_data.get("slots")
+    metadata_ui_action = template_metadata.get("ui_action") if isinstance(template_metadata, dict) else None
+    metadata_slots = template_metadata.get("slots") if isinstance(template_metadata, dict) else None
+
+    return ChatMessageRequest(
+        content=request.content,
+        session_id=request.session_id,
+        stream=False,
+        user_info=request.user_info or template_data.get("user_info"),
+        tracing_id=request.tracing_id or template_data.get("tracing_id"),
+        chip_context=chip_context,
+        ui_action=request.ui_action or template_ui_action or metadata_ui_action,
+        slots=request.slots or template_slots or metadata_slots,
+    )
+
+
 @router.post("/chat", dependencies=[Depends(get_api_key)])
-async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
+async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict = Security(get_api_key)):
     """
     Chat endpoint - only content, history managed by service via Redis.
 
@@ -150,16 +416,21 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     # Register user in LiteLLM budget system on first request (fire-and-forget)
     if user_id:
-        asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id))
+        asyncio.create_task(asyncio.to_thread(_register_litellm_user, user_id)).add_done_callback(_log_task_error)
 
     # Always generate a trace ID so Langfuse scores are linkable
-    tracing_id = _valid_tracing_id(request.tracing_id) or uuid.uuid4().hex
+    tracing_id = _valid_tracing_id(chat_body.tracing_id) or uuid.uuid4().hex
 
     # ── Monthly token quota check ──────────────────────────────────────────────
     if user_id:
         from config.env import settings
-        from services.tstation.quota_service import is_quota_exceeded, get_monthly_tokens, post_langfuse_score
-        if is_quota_exceeded(user_id, settings.MONTHLY_TOKEN_LIMIT):
+        from services.tstation.quota_service import (
+            get_monthly_tokens,
+            post_langfuse_score,
+            should_block_monthly_quota,
+        )
+
+        if should_block_monthly_quota(user_id, settings.MONTHLY_TOKEN_LIMIT):
             current = get_monthly_tokens(user_id)
             post_langfuse_score(
                 tracing_id, "quota_blocked", 1.0,
@@ -174,14 +445,14 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
     service = get_chat_history_service()
 
     # Redis client is sync; run hot-path calls in worker threads so FastAPI's event loop stays free.
-    session_id = await asyncio.to_thread(service.get_or_create_session_id, request.session_id, user_id)
-    msg_id = await asyncio.to_thread(service.save_message, session_id, "user", request.content, user_id=user_id)
+    session_id = await asyncio.to_thread(service.get_or_create_session_id, chat_body.session_id, user_id)
+    msg_id = await asyncio.to_thread(service.save_message, session_id, "user", chat_body.content, user_id=user_id)
     history = await asyncio.to_thread(service.get_history_for_llm, session_id)
     messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
     # Add current user message only if not duplicate of last history
-    if not (messages and messages[-1].get("role") == "user" and messages[-1].get("content") == request.content):
-        messages.append({"role": "user", "content": request.content})
+    if not (messages and messages[-1].get("role") == "user" and messages[-1].get("content") == chat_body.content):
+        messages.append({"role": "user", "content": chat_body.content})
 
     # Prepare request for chat service
     from schemas.tstation.chat import TStationChatRequest
@@ -189,32 +460,39 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
 
     chat_request = TStationChatRequest(
         messages=messages,
-        stream=request.stream,
+        stream=chat_body.stream,
         user_id=user_id,
         session_id=session_id,
         access_token=user["token"],
-        user_info=request.user_info,
-        chip_context=request.chip_context.model_dump() if request.chip_context else None,
+        origin_host=_origin_host_from_request(http_request),
+        user_info=chat_body.user_info,
+        chip_context=chat_body.chip_context.model_dump() if chat_body.chip_context else None,
+        ui_action=chat_body.ui_action,
+        slots=chat_body.slots,
+        metadata={"message_id": msg_id},
         **({"tracing_id": tracing_id} if tracing_id else {}),
     )
 
     # ── Token quota increment (fire-and-forget) ───────────────────────────────
-    if user_id:
+    # chat_v3 reports its own real per-turn usage (services/tstation/chat_v3/service.py)
+    # at the end of the turn — skip the estimate here to avoid double-counting.
+    from services.tstation.chat_v3 import enabled as _chat_v3_enabled
+    if user_id and not _chat_v3_enabled():
         from services.tstation.quota_service import estimate_tokens
         from config.env import settings
-        input_tokens = estimate_tokens(request.content)
+        input_tokens = estimate_tokens(chat_body.content)
         output_estimate = 400  # conservative avg response size in tokens
         asyncio.create_task(asyncio.to_thread(
             _update_quota_score, user_id, input_tokens + output_estimate,
             tracing_id, settings.MONTHLY_TOKEN_LIMIT,
-        ))
+        )).add_done_callback(_log_task_error)
 
     # Call chat service
-    if request.stream:
+    if chat_body.stream:
         from services.tstation.chat_history_service import get_async_redis_client
         _redis = get_async_redis_client()
-        _streaming_key = f"chat:streaming:{session_id}"
-        if await _redis.exists(_streaming_key):
+        _streaming_key = _STREAMING_KEY.format(session_id)
+        if not await _redis.set(_streaming_key, "1", nx=True, ex=_STREAMING_TTL):
             raise HTTPException(status_code=409, detail="session_busy")
         return StreamingResponse(
             stream_chat_response(chat_request, session_id, msg_id, service),
@@ -227,7 +505,15 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
         )
 
     # Non-stream mode
-    response = await TStationChatServiceV2.chat(chat_request)
+    from services.tstation.chat_history_service import get_async_redis_client
+    _redis = get_async_redis_client()
+    _session_key = _STREAMING_KEY.format(session_id)
+    if not await _redis.set(_session_key, "1", nx=True, ex=_STREAMING_TTL):
+        raise HTTPException(status_code=409, detail="session_busy")
+    try:
+        response = await TStationChatServiceV2.chat(chat_request)
+    finally:
+        await _redis.delete(_session_key)
 
     if isinstance(response, TStationChatResponse):
         # Save assistant response to history without blocking the event loop.
@@ -237,7 +523,7 @@ async def chat(request: ChatMessageRequest, user: dict = Security(get_api_key)):
             session_id=session_id,
             message_id=msg_id,
             role="user",
-            content=request.content,
+            content=chat_body.content,
             created_at=get_current_time(),
         )
 
@@ -258,11 +544,37 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
     _streaming_key = _STREAMING_KEY.format(session_id)
     _abort_key = _ABORT_KEY.format(session_id)
 
-    await _redis.set(_streaming_key, "1", ex=_STREAMING_TTL)
-
     full_assistant_content = ""
     assistant_response_ui = None
     template_data = None
+    assistant_saved = False
+
+    async def save_assistant_history() -> None:
+        nonlocal assistant_saved
+        if assistant_saved:
+            return
+        message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
+        if not message_to_save and not template_data:
+            return
+
+        logger.debug(
+            "[CHAT_MESSAGE] Saving assistant message"
+            + (" with template_data" if template_data else "")
+            + f": {message_to_save[:50]}..."
+        )
+
+        from services.tstation.history_summarizer import refresh_summary
+
+        await asyncio.to_thread(
+            service.save_message,
+            session_id,
+            "assistant",
+            message_to_save or "",
+            template_data=template_data,
+            user_id=chat_request.user_id,
+        )
+        assistant_saved = True
+        asyncio.create_task(refresh_summary(session_id)).add_done_callback(_log_task_error)
 
     try:
         stream_response = await TStationChatServiceV2.chat(chat_request)
@@ -320,26 +632,207 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
 
             yield chunk
 
-        message_to_save = assistant_response_ui if assistant_response_ui else full_assistant_content
-        if message_to_save:
-            logger.debug(f"[CHAT_MESSAGE] Saving assistant message" +
-                      (f" with template_data" if template_data else "") + f": {message_to_save[:50]}...")
-
-            from services.tstation.history_summarizer import refresh_summary
-            asyncio.create_task(asyncio.to_thread(
-                service.save_message,
-                session_id,
-                "assistant",
-                message_to_save,
-                template_data=template_data,
-                user_id=chat_request.user_id,
-            ))
-            asyncio.create_task(refresh_summary(session_id))
+        await save_assistant_history()
 
         yield "data: [DONE]\n\n"
 
     finally:
+        await save_assistant_history()
         await _redis.delete(_streaming_key)
+
+
+@router.post("/actions/quick-order", dependencies=[Depends(get_api_key)])
+async def quick_order_action(
+    action_body: QuickOrderActionRequest,
+    http_request: Request,
+    user: dict = Security(get_api_key),
+):
+    """Execute a ready preOrder CTA as a structured action without LLM/router."""
+    user_id = user.get("user_id")
+    service = get_chat_history_service()
+    await asyncio.to_thread(_ensure_session_owner, service, action_body.session_id, user_id)
+
+    from services.tstation.chat_history_service import get_async_redis_client
+
+    _redis = get_async_redis_client()
+    _streaming_key = _STREAMING_KEY.format(action_body.session_id)
+    if not await _redis.set(_streaming_key, "1", nx=True, ex=_STREAMING_TTL):
+        raise HTTPException(status_code=409, detail="session_busy")
+
+    action_id = str(action_body.message_id or uuid.uuid4().hex)
+    dedup_key = f"chat:action:quick_order:{action_body.session_id}:{action_id}"
+    if not await _redis.set(dedup_key, "1", nx=True, ex=120):
+        await _redis.delete(_streaming_key)
+        raise HTTPException(status_code=409, detail="duplicate_action")
+
+    user_msg_id = await asyncio.to_thread(
+        service.save_message,
+        action_body.session_id,
+        "user",
+        "주문하기",
+        user_id=user_id,
+    )
+
+    async def _stream():
+        assistant_response = ""
+        template_data = None
+        try:
+            from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
+
+            set_tstation_be_token(user.get("token"))
+            set_tstation_origin_host(_origin_host_from_request(http_request))
+
+            initial_response = {
+                "session_id": action_body.session_id,
+                "message_id": user_msg_id,
+                "role": "user",
+                "content": "주문하기",
+                "created_at": get_current_time(),
+                "stream_started": True,
+            }
+            yield f"data: {json.dumps(initial_response, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+
+            history = await asyncio.to_thread(service.get_history, action_body.session_id)
+            preorder_payload = _latest_preorder_payload(history)
+            normalized = _normalize_quick_order_action_payload(action_body.payload.model_dump(), preorder_payload)
+            valid, reason = _validate_quick_order_action_payload(normalized, preorder_payload)
+            if action_body.action != "quick_order_execute":
+                valid, reason = False, "unsupported_action"
+            if not valid:
+                event = _quick_order_action_event(
+                    "주문 정보를 다시 확인해 주세요.",
+                    metadata={
+                        "action": "quick_order_execute",
+                        "router_skipped": True,
+                        "source": "preOrder_action",
+                        "validationReason": reason,
+                    },
+                )
+                template_data = event
+                assistant_response = event["data"]["assistantResponse"]
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            tool_input = {
+                "goods_no": str(normalized["goods_no"]),
+                "ord_qty": int(normalized["ord_qty"]),
+                "shop_id": str(normalized["shop_id"]),
+                "rsv_date": str(normalized["requested_cal_day"]),
+                "rsv_hour": str(normalized["rsv_hour"]),
+            }
+            if normalized.get("car_lnc_cd"):
+                tool_input["car_lnc_cd"] = str(normalized["car_lnc_cd"])
+            status_event = {
+                "type": "status",
+                "status": "tool_start",
+                "tool": "quick_order_tool",
+                "display_name": "주문서 생성 중...",
+                "source_domain": "transaction",
+            }
+            yield f"data: {json.dumps(status_event, ensure_ascii=False)}\n\n"
+
+            from services.tstation.agents.c_transaction_agent.tools import quick_order_tool
+            from services.tstation.template_mapper import try_build_template
+
+            try:
+                raw_result = await asyncio.to_thread(quick_order_tool.invoke, tool_input)
+                quick_order_result = _dict_tool_result(raw_result)
+            except Exception as exc:
+                logger.exception("[QUICK_ORDER_ACTION] quick_order_tool failed: %s", exc)
+                quick_order_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            await _persist_quick_order_attempt_context(
+                service,
+                session_id=action_body.session_id,
+                user_id=user_id,
+                tool_input=tool_input,
+                normalized=normalized,
+                quick_order_result=quick_order_result,
+            )
+
+            agent_flow_event = {
+                "type": "agent_flow",
+                "agent": "[Quick Shopping AF]",
+                "agent_class": "Transaction Agent",
+                "status": quick_order_result.get("status", "success"),
+                "source_domain": "transaction",
+            }
+            tool_event = {
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(quick_order_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "quick_order_tool",
+                "source_domain": "transaction",
+            }
+            yield f"data: {json.dumps(agent_flow_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(tool_event, ensure_ascii=False)}\n\n"
+
+            event = try_build_template(
+                [{"tool": "quick_order_tool", "args": tool_input, "data": quick_order_result}],
+                "",
+            )
+            if event is None:
+                event = _quick_order_action_event(
+                    "주문서 생성에 실패했어요. 주문 정보를 다시 확인해 주세요.",
+                    metadata={
+                        "action": "quick_order_execute",
+                        "router_skipped": True,
+                        "source": "preOrder_action",
+                        "called_tools": ["quick_order_tool"],
+                    },
+                )
+            event.setdefault("source_domain", "transaction")
+            event.setdefault("assistant_response_source", "code_quick_order_action")
+            event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            metadata = event_data.setdefault("metadata", {}) if isinstance(event_data, dict) else {}
+            if isinstance(metadata, dict):
+                metadata.update({
+                    "action": "quick_order_execute",
+                    "router_skipped": True,
+                    "source": "preOrder_action",
+                    "called_tools": ["quick_order_tool"],
+                })
+            assistant_response = str(event_data.get("assistantResponse") or "")
+            template_data = event
+
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            await _redis.delete(_streaming_key)
+            if assistant_response:
+                from services.tstation.history_summarizer import refresh_summary
+
+                asyncio.create_task(asyncio.to_thread(
+                    service.save_message,
+                    action_body.session_id,
+                    "assistant",
+                    assistant_response,
+                    template_data=template_data,
+                    user_id=user_id,
+                )).add_done_callback(_log_task_error)
+                asyncio.create_task(refresh_summary(action_body.session_id)).add_done_callback(_log_task_error)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/sessions", dependencies=[Depends(get_api_key)], response_model=SessionListResponse)
@@ -402,9 +895,10 @@ async def get_history(
     )
 
 
-@router.post("/append", dependencies=[Depends(get_api_key)], response_model=AppendMessageResponse)
+@router.post("/append", dependencies=[Depends(get_api_key)], response_model=AppendMessageResponse | ChatMessageResponse)
 async def append_message(
     request: AppendMessageRequest,
+    http_request: Request,
     user: dict = Security(get_api_key),
 ):
     """
@@ -437,6 +931,9 @@ async def append_message(
     # Validate role
     if request.role not in ("user", "assistant"):
         raise HTTPException(status_code=400, detail="Role must be 'user' or 'assistant'")
+
+    if _append_should_route_to_chat(request):
+        return await chat(_append_request_to_chat_body(request), http_request, user)
 
     # Append message (saved at end due to timestamp score)
     msg_id = await asyncio.to_thread(
@@ -539,8 +1036,8 @@ async def get_user_info(user: dict = Security(get_api_key)):
     return UserInfoResponse(**user_data)
 
 
-@router.post("/validate-token", dependencies=[Depends(get_api_key)], response_model=ValidateTokenResponse)
-async def validate_token_endpoint(user: dict = Security(get_api_key)):
+@router.post("/validate-token", response_model=ValidateTokenResponse)
+async def validate_token_endpoint(credentials: HTTPAuthorizationCredentials = Security(security)):
     """
     Validate JWT token.
 
@@ -554,10 +1051,16 @@ async def validate_token_endpoint(user: dict = Security(get_api_key)):
         - user_id (str): User ID if valid
         - reason (str): Reason if invalid
     """
-    # user is already the decoded JWT payload
-    user_id = user.get("user_id")
-    if user_id:
-        return ValidateTokenResponse(valid=True, user_id=user_id)
-    else:
-        return ValidateTokenResponse(valid=False, reason="Invalid token")
+    if not credentials:
+        return ValidateTokenResponse(valid=False, reason="Missing token")
 
+    payload = decode_jwt(credentials.credentials)
+    user_id = payload.get("user_id") if payload else None
+    if not user_id:
+        return ValidateTokenResponse(valid=False, reason="Invalid token")
+    try:
+        if is_jwt_payload_expired(payload):
+            return ValidateTokenResponse(valid=False, user_id=user_id, reason=TOKEN_EXPIRED_CODE)
+    except ValueError:
+        return ValidateTokenResponse(valid=False, user_id=user_id, reason="Invalid token expiration")
+    return ValidateTokenResponse(valid=True, user_id=user_id)

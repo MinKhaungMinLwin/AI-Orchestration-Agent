@@ -1,6 +1,4 @@
-import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -12,11 +10,25 @@ class ChipContext(BaseModel):
         default=None,
         description="Target domain declared by the chip emitter. One of: DISCOVERY, TRANSACTION, SUPPORT, LEADING.",
     )
+    actionId: Optional[str] = Field(default=None, description="Executable quick reply action identifier.")
+    action_id: Optional[str] = Field(default=None, description="Executable quick reply action identifier.")
+    intentKey: Optional[str] = Field(default=None, description="Conversation intent key declared by the chip emitter.")
+    intent_key: Optional[str] = Field(default=None, description="Conversation intent key declared by the chip emitter.")
+    cta_id: Optional[str] = Field(default=None, description="Shared CTA registry identifier emitted with the chip.")
+    cta_action: Optional[str] = Field(default=None, description="Shared CTA registry action emitted with the chip.")
+    expected_behavior: Optional[str] = Field(default=None, description="open_url, conversation_action, or dynamic_choice.")
+    source_intent: Optional[str] = Field(default=None, description="Intent that emitted this CTA.")
+    expected_contract_intent: Optional[str] = Field(default=None, description="Next-turn contract intent expected by the CTA.")
+    ui_action: Optional[dict] = Field(default=None, description="Normalized UI action envelope.")
+    slots: Optional[dict] = Field(default=None, description="Current-turn slot patch carried by the UI action.")
+    metadata: Optional[dict] = Field(default=None, description="Action-specific metadata emitted with the chip.")
+
+    model_config = {"extra": "allow"}
 
 
 class ChatMessageRequest(BaseModel):
     """Chat request - auth via Bearer token in header."""
-    content: str = Field(..., description="User message content")
+    content: str = Field(..., max_length=3000, description="User message content")
     session_id: str = Field(..., description="Session ID (required)")
     stream: bool = Field(default=False, description="Stream mode")
     user_info: Optional[dict] = Field(default=None, description="Additional user info from UI (overrides JWT fields)")
@@ -25,6 +37,8 @@ class ChatMessageRequest(BaseModel):
         default=None,
         description="Set by FE when the user taps a quick reply chip. Allows backend to skip LLM classifier.",
     )
+    ui_action: Optional[dict] = Field(default=None, description="Normalized UI action payload sent by the FE.")
+    slots: Optional[dict] = Field(default=None, description="Current-turn slot patch sent by the FE.")
 
     model_config = {
         "json_schema_extra": {
@@ -42,6 +56,38 @@ class ChatMessageRequest(BaseModel):
             }
         }
     }
+
+
+class QuickOrderActionPayload(BaseModel):
+    """Canonical payload emitted by a preOrder CTA for deterministic quick-order execution."""
+
+    goodsNo: Optional[str] = Field(default=None, description="Canonical goods number.")
+    goodsId: Optional[str] = Field(default=None, description="Legacy goods identifier; mapped to goodsNo.")
+    ordQty: Optional[int] = Field(default=None, description="Order quantity.")
+    shopId: Optional[str] = Field(default=None, description="Store ID.")
+    requestedCalDay: Optional[str] = Field(default=None, description="Reservation day in YYYYMMDD.")
+    rsvHour: Optional[str] = Field(default=None, description="Reservation hour in HH or HH:MM.")
+    carNo: Optional[str] = Field(default=None, description="Vehicle plate number.")
+    carLncCd: Optional[str] = Field(default=None, description="Registered vehicle linkage code.")
+    paymentAmount: Optional[int] = Field(default=None, description="Expected payment amount.")
+    productName: Optional[str] = Field(default=None, description="Product display name.")
+    tireSize: Optional[str] = Field(default=None, description="Tire size.")
+    storeName: Optional[str] = Field(default=None, description="Store display name.")
+    bookingDateTime: Optional[str] = Field(default=None, description="Korean booking date/time label.")
+    mbrCarRegSeq: Optional[str] = Field(default=None, description="Member car registration sequence.")
+
+    model_config = {"extra": "allow"}
+
+
+class QuickOrderActionRequest(BaseModel):
+    """Structured action request for preOrder CTA execution."""
+
+    session_id: str = Field(..., description="Session ID.")
+    message_id: Optional[str] = Field(default=None, description="Client-side action/message id for idempotency.")
+    action: str = Field(default="quick_order_execute", description="Action name.")
+    payload: QuickOrderActionPayload = Field(..., description="Canonical quick-order payload.")
+    stream: bool = Field(default=True, description="Stream mode; action endpoint returns SSE by default.")
+    tracing_id: Optional[str] = Field(default=None, description="Tracing ID for Langfuse/eval.")
 
 
 class ChatMessageResponse(BaseModel):
@@ -71,7 +117,7 @@ class SessionInfo(BaseModel):
 
 
 class SessionListResponse(BaseModel):
-    """Response for GET /api/messages/sessions."""
+    """Response for GET /api/tstation/messages/sessions."""
     sessions: List[SessionInfo] = Field(default_factory=list, description="List of sessions")
     total: int = Field(default=0, description="Total number of sessions")
 
@@ -88,7 +134,7 @@ class MessageResponse(BaseModel):
 
 
 class ChatHistoryResponse(BaseModel):
-    """Response for GET /api/messages/history/{session_id}."""
+    """Response for GET /api/tstation/messages/history/{session_id}."""
     session_id: str = Field(..., description="Session ID")
     total: int = Field(default=0, description="Total messages")
     messages: List[MessageResponse] = Field(default_factory=list, description="List of messages")
@@ -105,14 +151,14 @@ class UserInfoResponse(BaseModel):
 
 
 class ValidateTokenResponse(BaseModel):
-    """Response for POST /api/messages/validate-token."""
+    """Response for POST /api/tstation/messages/validate-token."""
     valid: bool = Field(..., description="Token is valid or not")
     user_id: Optional[str] = Field(default=None, description="User ID if valid")
     reason: Optional[str] = Field(default=None, description="Error reason if invalid")
 
 
 class DeleteSessionResponse(BaseModel):
-    """Response for DELETE /api/messages/{session_id}."""
+    """Response for DELETE /api/tstation/messages/{session_id}."""
     success: bool = Field(..., description="Delete success flag")
     session_id: str = Field(..., description="Deleted session ID")
     messages_deleted: int = Field(default=0, description="Number of messages deleted")
@@ -124,6 +170,14 @@ class AppendMessageRequest(BaseModel):
     content: str = Field(..., description="Message content")
     role: str = Field(default="user", description="Role (user/assistant)")
     template_data: Optional[dict] = Field(default=None, description="Optional template data for assistant messages")
+    user_info: Optional[dict] = Field(default=None, description="Additional user info from UI (overrides JWT fields)")
+    tracing_id: Optional[str] = Field(default=None, description="Tracing ID for Langfuse (eval use)")
+    chip_context: Optional[ChipContext] = Field(
+        default=None,
+        description="Structured chip context. If present on a user append, backend can promote it to /chat handling.",
+    )
+    ui_action: Optional[dict] = Field(default=None, description="Normalized UI action payload sent by the FE.")
+    slots: Optional[dict] = Field(default=None, description="Current-turn slot patch sent by the FE.")
 
 
 class AppendMessageResponse(BaseModel):

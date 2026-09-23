@@ -14,7 +14,7 @@ celery_app = Celery(
     "ingestion",
     broker=os.getenv("RABBITMQ_URL"),
     backend=os.getenv("REDIS_QUEUE_URL"),
-    include=["tasks.faq_sync_task"],
+    include=["tasks.faq_sync_task", "tasks.faq_fetch_task"],
 )
 
 celery_app.conf.update(
@@ -25,4 +25,11 @@ celery_app.conf.update(
     task_acks_late=True,
     # Process one task at a time per worker to avoid OOM during large embedding batches
     worker_prefetch_multiplier=1,
+    beat_schedule={
+        "faq-fetch-periodic": {
+            "task": "faq_fetch_task",
+            "schedule": int(os.getenv("FAQ_SYNC_INTERVAL_SECONDS", "25200")),
+            "options": {"queue": "faq_sync"},
+        },
+    },
 )

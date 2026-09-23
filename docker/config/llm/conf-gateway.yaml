@@ -2,6 +2,21 @@ model_list:
   ## API Model — sorted newest → oldest by release date
   # LLM
 
+  # ── GPT-5.6 ────────────────────────────────────────────────────────────────
+  - model_name: gpt-5.6-luna
+    litellm_params:
+      model: openai/gpt-5.6-luna
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "none"
+
+  - model_name: gpt-5.6-terra-low
+    litellm_params:
+      model: openai/gpt-5.6-terra
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+      reasoning_effort: "low"
+
   # ── GPT-5.5 (23/04/2026) ───────────────────────────────────────────────────
   - model_name: gpt-5.5-reasoning-xhigh
     litellm_params:
@@ -57,6 +72,12 @@ model_list:
       output_cost_per_token: 0.00003
 
   # ── GPT-5.4 (05/03/2026) ───────────────────────────────────────────────────
+  - model_name: gpt-5.4-mini
+    litellm_params:
+      model: openai/gpt-5.4-mini
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+
   - model_name: gpt-5.4-reasoning-high
     litellm_params:
       model: openai/gpt-5.4
@@ -341,6 +362,9 @@ litellm_settings:
   num_retries: 3
   retry_after: 2
   request_timeout: 180
+  # Langfuse is already captured by the app callback handler. Keeping LiteLLM's
+  # extra Langfuse callback on local MinIO creates unsafe object keys from
+  # provider response ids, which Langfuse rejects during S3 event upload.
   callbacks: ["otel"]
   max_internal_user_budget: 20.0        # $20/month default cap for every user
   default_max_internal_user_budget: 20.0

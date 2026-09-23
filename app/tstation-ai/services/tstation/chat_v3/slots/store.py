@@ -1,0 +1,131 @@
+"""Load/merge/save conversation slots — reuses V2's Redis storage.
+
+`ConversationSlots.merge` owns dependency resets; this module only
+validates the LLM patch and talks to `ChatHistoryService`.
+"""
+
+import asyncio
+import json
+import logging
+from typing import Any
+
+from pydantic import ValidationError
+
+from schemas.tstation.slots import ConversationSlots
+from services.tstation.chat_history_service import get_chat_history_service
+from services.tstation.chat_v3.slots.derive import GUARD_REPEAT_ESCALATION_THRESHOLD
+from services.tstation.chat_v3.slots.schemas import SlotsPatch
+from services.tstation.policies.discovery_intent_policy import normalize_tire_size
+from services.tstation.policies.product_name_normalization import normalize_product_slot_values
+
+logger = logging.getLogger(__name__)
+
+
+def _compact_identity(value: Any) -> str:
+    return str(value or "").casefold().replace(" ", "")
+
+
+def _same_product_identity(existing: ConversationSlots, values: dict) -> bool:
+    old_name = _compact_identity(existing.pending_product_name or existing.tire_model)
+    new_name = _compact_identity(values.get("pending_product_name") or values.get("tire_model"))
+    if not old_name or not new_name or old_name not in new_name:
+        return False
+    new_size = str(values.get("tire_size") or existing.tire_size or "").strip()
+    return not existing.tire_size or new_size == existing.tire_size
+
+
+def _restore_confirmed_product(existing: ConversationSlots, merged: ConversationSlots, values: dict) -> ConversationSlots:
+    if not existing.goods_no or merged.goods_no or values.get("goods_no"):
+        return merged
+    if not any(key in values for key in ("pending_product_name", "tire_model", "tire_size")):
+        return merged
+    if not _same_product_identity(existing, values):
+        return merged
+    restored = merged.model_copy()
+    restored.goods_no = existing.goods_no
+    return restored
+
+
+async def load_slots(session_id: str) -> ConversationSlots:
+    service = get_chat_history_service()
+    try:
+        return await asyncio.to_thread(service.get_slots, session_id)
+    except Exception:
+        logger.exception("[CHAT_V3] failed to load slots for %s", session_id)
+        return ConversationSlots()
+
+
+def _normalize_patch_tire_sizes(values: dict) -> dict:
+    """Keep router-extracted tire sizes canonical and drop invalid values."""
+    normalized_values = dict(values)
+    for field in ("tire_size", "tire_size_front", "tire_size_rear"):
+        raw = normalized_values.get(field)
+        if raw in (None, ""):
+            continue
+        normalized = normalize_tire_size(str(raw))
+        if normalized:
+            normalized_values[field] = normalized
+            continue
+        logger.info("[CHAT_V3] dropped unnormalizable %s from router patch: %r", field, raw)
+        normalized_values.pop(field, None)
+    return normalized_values
+
+
+def apply_patch(existing: ConversationSlots, patch: SlotsPatch | None) -> ConversationSlots:
+    if patch is None:
+        return existing
+    values = _normalize_patch_tire_sizes(normalize_product_slot_values(patch.non_empty()))
+    while values:
+        try:
+            merged = existing.merge(ConversationSlots.model_validate(values))
+            return _restore_confirmed_product(existing, merged, values)
+        except ValidationError as exc:
+            # Drop fields the LLM filled with out-of-vocabulary values and retry.
+            bad_fields = {str(err["loc"][0]) for err in exc.errors() if err.get("loc")}
+            if not bad_fields:
+                break
+            logger.info("[CHAT_V3] dropped invalid slot fields: %s", sorted(bad_fields))
+            values = {k: v for k, v in values.items() if k not in bad_fields}
+    return existing
+
+
+async def save_slots(session_id: str, slots: ConversationSlots, user_id: str | None = None) -> None:
+    service = get_chat_history_service()
+    try:
+        await service.save_slots_async(session_id, slots, user_id=user_id)
+    except Exception:
+        logger.exception("[CHAT_V3] failed to save slots for %s", session_id)
+
+
+def slots_context_block(slots: ConversationSlots) -> str | None:
+    """Known conversation state, injected into the system prompt."""
+    values = {k: v for k, v in slots.model_dump(mode="json").items() if v is not None}
+    if not values:
+        return None
+    last_order_attempt = (slots.order_context or {}).get("last_order_attempt") if slots.order_context else None
+    if isinstance(last_order_attempt, dict) and last_order_attempt.get("status") != "success":
+        values["order_attempt_recovery_guidance"] = (
+            "A previous quick_order_tool attempt did not succeed. If the user asks about that order attempt, "
+            "answer from order_context.last_order_attempt and preserve the confirmed order slots. Do not show "
+            "a schedule/date picker again unless the user explicitly asks to change the installation schedule."
+        )
+    if (
+        slots.tire_size
+        and slots.tire_size_front
+        and slots.tire_size_rear
+        and slots.tire_size_front != slots.tire_size_rear
+        and slots.tire_size in {slots.tire_size_front, slots.tire_size_rear}
+    ):
+        values["staggered_tire_purchase_guidance"] = (
+            "전/후륜 규격이 다른 차량은 도구로 확인되지 않은 상태에서 두 규격을 한 번에 구매 가능하다고 "
+            "단정하지 말고, 현재 채팅 흐름은 선택한 규격 하나씩 상품 추천/구매를 진행한다고 안내하세요."
+        )
+    if (slots.guard_repeat_count or 0) >= GUARD_REPEAT_ESCALATION_THRESHOLD:
+        values["repeated_guard_deescalation_guidance"] = (
+            "직전 턴들에서 같은 정책 안내가 반복되어 사용자의 실제 의도가 해결되지 않았을 수 있습니다. "
+            "이전 판단에 얽매이지 말고 사용자의 이번 발화만 근거로 다시 판단하세요. 오해가 있었다면 "
+            "짧게 사과하고 정확한 의도를 다시 확인하세요. 이번에도 해결이 어려우면 1:1 문의 상담 연결을 안내하세요."
+        )
+    return "## CONVERSATION SLOTS (known context from earlier turns)\n" + json.dumps(
+        values, ensure_ascii=False, separators=(",", ":")
+    )

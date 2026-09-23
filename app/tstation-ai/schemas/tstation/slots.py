@@ -1,16 +1,72 @@
-import re
-import logging
-from typing import ClassVar, Literal, Optional
+from __future__ import annotations
 
-from pydantic import BaseModel
+import datetime
+import logging
+import re
+from typing import Any, ClassVar, Literal, Mapping, Optional
+
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
+
+
+PRODUCT_IDENTITY_FIELDS = {"tire_model", "pending_product_name"}
+INVALID_PRODUCT_IDENTITY_VALUES = {
+    "하기",
+    "구매하기",
+    "주문하기",
+    "예약하기",
+    "진행하기",
+    "담기",
+    "장바구니담기",
+    "선택하기",
+    "확인하기",
+}
+
+
+def is_invalid_product_identity_value(value: Any) -> bool:
+    normalized = re.sub(r"\s+", "", str(value or "").strip())
+    return normalized in INVALID_PRODUCT_IDENTITY_VALUES
+
+
+def sanitize_product_identity_value(value: Any) -> Any | None:
+    if is_invalid_product_identity_value(value):
+        return None
+    return value
+
+
+def _normalize_store_name_for_identity_compare(value: Any) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z가-힣]", "", str(value or "")).lower()
+    normalized = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _store_name_values_conflict(old_val: Any, new_val: Any) -> bool:
+    old_name = _normalize_store_name_for_identity_compare(old_val)
+    new_name = _normalize_store_name_for_identity_compare(new_val)
+    if old_name and new_name:
+        return old_name != new_name
+    return old_val != new_val
 
 
 # Unfulfilled user intent carried across turns until explicitly fulfilled by a matching tool call.
 # "recommend" is the default/implicit intent and is intentionally NOT stored as a pending intent —
 # only actionable transactional intents are tracked here.
-PendingIntent = Literal["price", "stock", "order"]
+# "reservation" covers 매장 방문 예약 (타이어 장착 외에 와이퍼/배터리/얼라인먼트/경정비 등
+# 부가 서비스 예약 포함). Distinguished from "order" — "예약" 단독 발화는 서비스 방문이지
+# 상품 주문이 아니다. template_mapper 가 isBookingFlow=true 분기 시 함께 본다.
+PendingIntent = Literal["price", "stock", "order", "reservation", "cart", "quantity_benefit_comparison"]
+AvailabilityIntent = Literal["today_install"]
+PendingCheckTopic = Literal[
+    "safe_service",
+    "safe_plus",
+    "coupon_applicability",
+    "today_install",
+    "store_inventory",
+    "warranty",
+    "event_applicability",
+]
+PendingCheckObjectType = Literal["product_name", "tire_size", "store", "vehicle", "none"]
 
 # High-level user goal carried across the session. Drives both goal-aware prompt
 # injection (so agents know the *destination*, not just the immediate turn) and
@@ -24,41 +80,540 @@ GoalType = Literal[
     "store_with_stock",
     "store_finder",
     "price_inquiry",
+    "coupon_discount_amount",
     "place_order",
+    "add_to_cart",
 ]
+
+
+class RecommendationContext(BaseModel):
+    """Typed recommendation-only context kept separate from durable common slots."""
+
+    scenario: Optional[str] = None
+    applied_rcmd_type: Optional[str] = None
+    applied_vehicle_type: Optional[str] = None
+    applied_season_nm: Optional[str] = None
+    approximation: bool = False
+    approximation_basis: Optional[str] = None
+    source_text: Optional[str] = None
+    fitment_source: Optional[str] = None
+    tool_args_patch: Optional[dict[str, Any]] = None
+    expected_tool_args: Optional[dict[str, Any]] = None
+    scope: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | "RecommendationContext" | None) -> "RecommendationContext | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        data = {key: item for key, item in dict(value).items() if item not in (None, "")}
+        if "scenario" not in data and data.get("recommendation_scenario"):
+            data["scenario"] = data.get("recommendation_scenario")
+        return cls(**{key: item for key, item in data.items() if key in cls.model_fields})
+
+    def to_policy_dict(self) -> dict[str, Any]:
+        data = self.model_dump(exclude_none=True)
+        if self.scenario:
+            data["recommendation_scenario"] = self.scenario
+        return data
+
+
+class ComparisonContext(BaseModel):
+    """Typed comparison-only context preserved after deterministic compare answers."""
+
+    product_names: list[str] = Field(default_factory=list)
+    product_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    compare_metric: Optional[str] = None
+    response_shape_key: Optional[str] = None
+    comparison_followup_intent: Optional[str] = None
+    source: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | "ComparisonContext" | None) -> "ComparisonContext | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        data = {key: item for key, item in dict(value).items() if item not in (None, "")}
+        product_names = data.get("product_names") or data.get("productNames")
+        if isinstance(product_names, (tuple, list)):
+            data["product_names"] = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+        product_candidates = data.get("product_candidates") or data.get("candidates")
+        if isinstance(product_candidates, (tuple, list)):
+            data["product_candidates"] = [
+                {key: item for key, item in dict(candidate).items() if item not in (None, "")}
+                for candidate in product_candidates
+                if isinstance(candidate, Mapping)
+            ][:4]
+        return cls(**{key: item for key, item in data.items() if key in cls.model_fields})
+
+    def to_policy_dict(self) -> dict[str, Any]:
+        return self.model_dump(exclude_none=True)
 
 
 class ConversationSlots(BaseModel):
     """Conversation slots for tracking confirmed customer information across turns."""
 
     tire_size: Optional[str] = None      # e.g. "225/45R17"
+    tire_size_front: Optional[str] = None  # selected vehicle front tire size
+    tire_size_rear: Optional[str] = None   # selected vehicle rear tire size
     tire_model: Optional[str] = None     # e.g. "벤투스 S2"
     goods_no: Optional[str] = None       # e.g. "G000000314254"
     ord_qty: Optional[int] = None        # e.g. 4
+    ord_qty_front: Optional[int] = None  # quantity for tire_size_front
+    ord_qty_rear: Optional[int] = None   # quantity for tire_size_rear
     shop_id: Optional[str] = None        # store code
     shop_name: Optional[str] = None      # e.g. "한남점"
+    user_xpos: Optional[float] = None    # browser/user longitude for nearby store search
+    user_ypos: Optional[float] = None    # browser/user latitude for nearby store search
     car_model: Optional[str] = None      # e.g. "쏘나타"
+    car_no: Optional[str] = None         # e.g. "12가3456"
+    car_lnc_cd: Optional[str] = None     # vehicle WCODE
+    car_type: Optional[str] = None       # raw registered vehicle type, e.g. "SUV"
+    vehicle_type: Optional[str] = None   # normalized recommendation filter, e.g. "suv"
+    mbr_car_reg_seq: Optional[str] = None  # member car registration sequence
+    vehicle_candidates: Optional[list[dict[str, Any]]] = None  # last registered-car candidates shown to the user
+    pending_vehicle_lookup_car_no: Optional[str] = None  # unmatched plate awaiting owner name
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
+    availability_intent: Optional[AvailabilityIntent] = None  # e.g. "today_install"
+    stock_check_mode: Optional[str] = None
+    schedule_mode: Optional[str] = None
+    schedule_tier: Optional[str] = None
+    inventory_mode: Optional[str] = None
+    requested_cal_day: Optional[str] = None  # YYYYMMDD requested install/reservation date
+    rsv_hour: Optional[str] = None       # HH from datepick selection for quick_order_tool
+    # 결제금액(원). `get_final_price_tool` 결과 + `ord_qty` 로 산출되거나
+    # `quick_order_tool` 결과의 정확한 금액으로 채워진다. 슬롯에 보존되면
+    # LLM 이 컨텍스트만으로 단가·수량 곱셈을 추측해 hallucination 하지 않고
+    # 결정적 값을 그대로 인용할 수 있다. (예: 할부 계산 질문)
+    payment_amount: Optional[int] = None
+    price_basis: Optional[str] = None
+    price_source_tool: Optional[str] = None
+    source_tool: Optional[str] = None
     # Free-form user store-selection criteria captured on the originating turn
     # (e.g. "친절한 직원, 얼라인먼트, 워셔액 무료"). Sticky across slot-fill
     # turns so the agent can re-apply the criteria once the missing slot
     # (region/address) is satisfied. Cleared automatically when goal_type flips.
     user_preferences_text: Optional[str] = None
     pending_intent: Optional[PendingIntent] = None  # e.g. "price" — carried across turns, cleared by Coordinator when a matching tool runs.
+    intent_candidate: Optional[PendingIntent] = Field(default=None, exclude=True)  # current-turn regex hint only; never persisted
+    goal_candidate: Optional[GoalType] = Field(default=None, exclude=True)  # current-turn regex hint only; never persisted
+    pending_product_name: Optional[str] = None  # product name waiting for a missing slot follow-up
+    pending_quantity_options: Optional[list[int]] = None  # quantity comparison options, e.g. [2, 4]
+    pending_required_slot: Optional[str] = None  # missing slot requested in the previous assistant turn
     goal_type: Optional[GoalType] = None  # e.g. "store_with_stock" — high-level destination, sticky across turns.
+    recommendation_variants: Optional[list[dict[str, Any]]] = None
+    recommendation_limit_per_variant: Optional[int] = None
+    recommendation_source_text: Optional[str] = None
+    recommendation_context: Optional[RecommendationContext] = None
+    comparison_context: Optional[ComparisonContext] = None
+    availability_context: Optional[dict[str, Any]] = None
+    order_context: Optional[dict[str, Any]] = None
+    quantity_comparison_context: Optional[dict[str, Any]] = None
+    price_facts: Optional[dict[str, Any]] = None
+    coupon_facts: Optional[dict[str, Any]] = None
+    pending_check_topic: Optional[PendingCheckTopic] = None
+    pending_check_object_type: Optional[PendingCheckObjectType] = None
+    pending_check_object_value: Optional[str] = None
+    pending_check_turns_remaining: Optional[int] = None
+    # Guard-repeat tracking — see chat_v3/slots/derive.py::track_guard_repeat.
+    last_guard_id: Optional[str] = None
+    guard_repeat_count: Optional[int] = None
 
-    # Slot dependency: when a key changes, its dependent slots are reset to None
+    @field_validator("tire_model", "pending_product_name", mode="before")
+    @classmethod
+    def _drop_invalid_product_identity(cls, value: Any) -> Any | None:
+        return sanitize_product_identity_value(value)
+
+    @field_validator("pending_intent", mode="before")
+    @classmethod
+    def _normalize_pending_intent(cls, value: Any) -> Any | None:
+        if str(value or "").strip() == "store_search":
+            return None
+        return value
+
+    @field_validator("goal_type", mode="before")
+    @classmethod
+    def _normalize_goal_type(cls, value: Any) -> Any | None:
+        if str(value or "").strip() == "store_search":
+            return "store_finder"
+        return value
+
+    # User/regex merge dependencies. These apply before tool/template recovery
+    # and are intentionally stricter than runtime recovery: a user-supplied new
+    # goods_no represents a new concrete SKU, so the old tire_size must be
+    # re-confirmed instead of silently surviving.
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
-        "tire_model": ["goods_no"],
-        "tire_size": ["goods_no"],
-        "goods_no": ["tire_model", "tire_size"],
-        "shop_name": ["shop_id"],
-        "car_model": ["tire_size", "goods_no"],
-        # When the goal flips (e.g. store_finder → product_recommend), drop the
-        # store-specific carryovers. region/preferences only make sense within
-        # a store-finding goal; preserving them across goal flips would inject
-        # stale criteria into unrelated turns.
-        "goal_type": ["region", "user_preferences_text"],
+        "pending_product_name": [
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "tire_model": [
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "tire_size": [
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "tire_size_front": [
+            "ord_qty_front",
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "tire_size_rear": [
+            "ord_qty_rear",
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "goods_no": [
+            "tire_model",
+            "pending_product_name",
+            "tire_size",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "ord_qty": [
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "ord_qty_front": [
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+        ],
+        "ord_qty_rear": [
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+        ],
+        "shop_name": [
+            "shop_id",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "car_model": [
+            "car_no",
+            "car_lnc_cd",
+            "car_type",
+            "vehicle_type",
+            "mbr_car_reg_seq",
+            "tire_size",
+            "tire_size_front",
+            "tire_size_rear",
+            "ord_qty_front",
+            "ord_qty_rear",
+            "goods_no",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+        ],
+        "car_no": [
+            "car_model",
+            "car_lnc_cd",
+            "car_type",
+            "vehicle_type",
+            "mbr_car_reg_seq",
+            "tire_size",
+            "tire_size_front",
+            "tire_size_rear",
+            "ord_qty_front",
+            "ord_qty_rear",
+            "goods_no",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+        ],
+        # When the goal flips, drop free-form store preferences (they are session-specific).
+        # Region changes mean the user is searching a new area, not confirming the
+        # previous store. Clear store identity so a stale shop_id cannot satisfy
+        # the "매장 선택" step after a region-only follow-up like "성남은?".
+        "goal_type": ["user_preferences_text"],
+        "region": [
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+        ],
+    }
+    RUNTIME_DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
+        # Tool/template/history recovery dependencies. Runtime values are
+        # already derived from verified rows or canonical template boundary
+        # data, so they may complete the current context without erasing other
+        # still-valid slots unless those slots directly conflict.
+        # Runtime product resolution is usually "same size, different model".
+        # Keep tire_size so Discovery/Transaction can re-query the new SKU under
+        # the user's active size, but never keep old product label or amount.
+        "goods_no": [
+            "tire_model",
+            "pending_product_name",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "pending_product_name": [
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "tire_model": [
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "tire_size": [
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "tire_size_front": [
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "tire_size_rear": [
+            "goods_no",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "ord_qty": [
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "shop_name": [
+            "shop_id",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "shop_id": [
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "price_facts",
+            "coupon_facts",
+        ],
+        "region": [
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+        ],
+        "car_model": [
+            "car_no",
+            "car_lnc_cd",
+            "car_type",
+            "vehicle_type",
+            "mbr_car_reg_seq",
+            "tire_size",
+            "tire_size_front",
+            "tire_size_rear",
+            "goods_no",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+        ],
+        "car_no": [
+            "car_model",
+            "car_lnc_cd",
+            "car_type",
+            "vehicle_type",
+            "mbr_car_reg_seq",
+            "tire_size",
+            "tire_size_front",
+            "tire_size_rear",
+            "goods_no",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+        ],
+    }
+    PRODUCT_IDENTITY_FIELDS: ClassVar[set[str]] = {
+        "pending_product_name",
+        "tire_model",
+        "tire_size",
+        "tire_size_front",
+        "tire_size_rear",
     }
 
     # Regex patterns for extracting slots from user messages
@@ -67,15 +622,69 @@ class ConversationSlots(BaseModel):
         # Standard format: 225/45R17
         (re.compile(r"(\d{3})/(\d{2})R(\d{2})"), "{0}/{1}R{2}"),
         # Flexible whitespace/separator: "225 45 17", "225 4517", "22545 17", "225/45/17"
-        (re.compile(r"(?<!\d)(\d{3})[\s/]?(\d{2})[\s/]?(\d{2})(?!\d)"), "{0}/{1}R{2}"),
+        (re.compile(r"(?<!\d)(\d{3})[\s/]?(\d)(\d)(?:\3)?[\s/]?(\d{2})(?!\d)"), "{0}/{1}{2}R{3}"),
     ]
     _GOODS_NO_PATTERN: ClassVar[re.Pattern] = re.compile(r"G\d{9,}")
-    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개")
+    _SHOP_NAME_PATTERN: ClassVar[re.Pattern] = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
+    # Generic nouns that end in "점"/"매장" (the same suffix as a real branch name
+    # like "강남점") but never name a store. `_SHOP_NAME_PATTERN` cannot tell these
+    # apart from a real branch by shape alone, so any candidate match equal to one
+    # of these must be rejected outright, regardless of surrounding context words.
+    _GENERIC_STORE_SUFFIX_NOUNS: ClassVar[frozenset[str]] = frozenset({
+        "장착점",  # installation location/point — not a store name
+        "장단점",  # pros and cons
+        "판매점",  # generic "point of sale", not a specific branch
+        "취급점",  # generic "handling store", not a specific branch
+        "지점",  # generic "branch" — not a specific branch name
+    })
+    _STORE_MENTION_CONTEXT_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"티스테이션|더타이어샵|매장|지점|주소|전화|연락처|영업|운영|휴무|"
+        r"예약|재고|입고|장착|구매|주문|질소|보관|야간\s*(?:정비|서비스|작업)|야간정비|"
+        r"얼라인먼트|휠\s*얼라이먼트|리프트|공휴일|휴일|일요일|토요일|문\s*열",
+        re.IGNORECASE,
+    )
+    _BARE_STORE_NAME_TURN_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"^\s*(?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장)\s*$",
+        re.IGNORECASE,
+    )
+    # "10개월"/"10개구" 처럼 "개" 뒤에 한글이 이어지는 경우 quantity 로 오추출되지 않도록
+    # negative lookahead 로 차단. "4개", "4개 주세요", "4개." 는 정상 매칭.
+    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*(?:개|본|짝)(?![가-힣])")
+    _ORD_QTY_KOREAN_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"\b(한|하나|두|둘|세|셋|네|넷|다섯|여섯|일곱|여덟|아홉|열)\s*개\b"
+    )
+    _KOREAN_QTY_VALUES: ClassVar[dict[str, int]] = {
+        "한": 1,
+        "하나": 1,
+        "두": 2,
+        "둘": 2,
+        "세": 3,
+        "셋": 3,
+        "네": 4,
+        "넷": 4,
+        "다섯": 5,
+        "여섯": 6,
+        "일곱": 7,
+        "여덟": 8,
+        "아홉": 9,
+        "열": 10,
+    }
+    _TODAY_INSTALL_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"오늘\s*(?:바로\s*)?장착|오늘\s*서비스|오늘서비스|당일\s*(?:장착|서비스)|"
+        r"오늘\s*가능|바로\s*장착|지금\s*장착|당장\s*장착",
+        re.IGNORECASE,
+    )
+    _TODAY_DATE_PATTERN: ClassVar[re.Pattern] = re.compile(r"오늘|당일|지금|바로|당장", re.IGNORECASE)
+    _RELATIVE_DATE_PATTERN: ClassVar[re.Pattern] = re.compile(r"내일|모레", re.IGNORECASE)
+    _EXPLICIT_MD_DATE_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일"
+    )
 
     # Intent patterns. Order = priority: first match wins when a single user turn
     # mentions multiple intents (e.g., "가격이랑 재고" → price wins).
     # "order" is listed last because it's the most commitment-heavy and should only
-    # be inferred from strong signals ("주문", "구매", "사고 싶어", "사려고", "살래").
+    # be inferred from strong signals ("주문", "구매", "사고 싶어", "사려고", "살래",
+    # "장착하고 싶어/장착할게/장착해줘" — 타이어 매장 장착은 commit-heavy 구매 의도).
     # Stock pattern covers: 재고/입고 (direct inventory) and 장착 가능 (tire-install
     # availability — implies stock at a store). The `\s*가능` tail is deliberate:
     #   - Narrows "장착" so mixed purchase turns like "주문해서 장착하고 싶어요" fall
@@ -87,9 +696,30 @@ class ConversationSlots(BaseModel):
     # Price pattern uses `얼마(?!나)` to avoid matching `얼마나` (degree adverb used in
     # stock/time questions like "재고 얼마나 있어요?" / "얼마나 걸려요?").
     _INTENT_PATTERNS: ClassVar[list[tuple[re.Pattern, "PendingIntent"]]] = [
-        (re.compile(r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가"), "price"),
+        (
+            re.compile(
+                r"가격|얼마(?!나)|비용|총액|금액|할인된?\s*가격|할인가|"
+                r"스마트\s*페이|할부|분할\s*납부|월\s*납부|월\s*결제"
+            ),
+            "price",
+        ),
         (re.compile(r"재고|입고|장착\s*가능"), "stock"),
-        (re.compile(r"주문|구매|사고\s*싶|사려고|살래"), "order"),
+        # 장착 의도 — 타이어 매장 장착은 commit-heavy 구매 의도다. "장착하고 싶어",
+        # "장착하려고", "장착할래/장착할게", "장착해줘/장착해 주세요" 등 의도 동사
+        # 결합 케이스만 매칭. 단순 "장착비/장착료/장착 공임" (price) 과 "장착 가능"
+        # (stock) 은 위 두 패턴이 우선 매칭하므로 충돌 없음.
+        (
+            re.compile(
+                r"주문|구매|사고\s*싶|사려고|살래|"
+                r"장착하고\s*싶|장착하려|장착할래|장착할게|장착해\s*줘|장착해\s*주세요"
+            ),
+            "order",
+        ),
+        # 매장 방문 예약 — 와이퍼/배터리/얼라인먼트/경정비 등 부가 서비스 예약 포함.
+        # "주문 예약" 같은 복합 발화는 위의 "order" 패턴이 먼저 매칭되어 reservation 으로
+        # 떨어지지 않는다 (first-match-wins). 취소/변경 동사는 downstream 분류기·prompt
+        # 가 별도 처리하므로 여기서는 broad match 로 두고 컨텍스트만 표시.
+        (re.compile(r"예약"), "reservation"),
     ]
 
     # Recommend patterns — when the user asks for a fresh recommendation,
@@ -110,7 +740,11 @@ class ConversationSlots(BaseModel):
             r"매장|샵|지점|티스테이션|더타이어샵|올마이T|올마이티|"
             r"가까운\s*곳|근처(?:에)?\s*(?:매장|샵|지점)|"
             r"내\s*주변(?:에)?(?:\s*매장|\s*샵|\s*지점)?|"
-            r"어디.*(?:매장|샵|지점)|(?:매장|샵|지점).*어디"
+            r"어디.*(?:매장|샵|지점)|(?:매장|샵|지점).*어디|"
+            # "근처에 있어?" style existence/proximity questions without the word
+            # "매장" itself (e.g. "<지역> 근처에 있어?"). The store context is
+            # implied by the ongoing store/region-fill flow, not restated here.
+            r"근처(?:에)?\s*있(?:어|나요?|을까요?)"
         ),
     ]
 
@@ -125,7 +759,9 @@ class ConversationSlots(BaseModel):
             r"친절|여성|얼라인먼트|밸런스|워셔액|무료|깨끗|믿을|친근|편하|"
             r"잘\s*봐|꼼꼼|전문|특화|수입차|외제차|프리미엄|"
             r"평점|리뷰|평이?\s*좋|"
-            r"발렛|대기실|커피|음료|와이파이|키즈|여성\s*전용|아이.*동반"
+            r"발렛|대기실|커피|음료|와이파이|키즈|여성\s*전용|아이.*동반|"
+            r"리프트|질소\s*충전|질소|라운지|휴게실|수유실|파우더룸|"
+            r"청결|쾌적|분위기|숙련도|실력|정확도"
         ),
     ]
 
@@ -142,7 +778,7 @@ class ConversationSlots(BaseModel):
         r"강남|강북|강동|강서|관악|광진|구로|금천|노원|도봉|동대문|동작|마포"
         r"|서대문|서초|성동|성북|송파|양천|영등포|용산|은평|종로|중랑"
         # Seoul districts/landmarks
-        r"|잠실|판교|역삼|논현|압구정|신사|청담|반포|방배|이태원|홍대|연남"
+        r"|서울|잠실|판교|역삼|논현|압구정|신사|청담|반포|방배|이태원|홍대|연남"
         r"|성수|왕십리|건대|선릉|삼성"
         # Gyeonggi
         r"|분당|수정|중원|수원|영통|성남|용인|기흥|수지|처인"
@@ -166,6 +802,17 @@ class ConversationSlots(BaseModel):
         # Risk: "강남구청" matches "강남" — acceptable since the region_code is
         # consistent with the user's intent. Mid-word matches are still
         # blocked by the leading lookbehind ("이강남씨" → no match).
+    )
+    _COMPOSITE_REGION_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"(?<![가-힣A-Za-z0-9])"
+        r"(?P<region>"
+        r"(?:서울|서울특별시|부산|부산광역시|대구|대구광역시|인천|인천광역시|광주|광주광역시|"
+        r"대전|대전광역시|울산|울산광역시|세종|세종특별자치시|경기|경기도|강원|강원도|강원특별자치도|"
+        r"충북|충청북도|충남|충청남도|전북|전북특별자치도|전라북도|전남|전라남도|경북|경상북도|"
+        r"경남|경상남도|제주|제주도|제주특별자치도)"
+        r"\s*[가-힣]{2,12}(?:시|군|구)?"
+        r")"
+        r"(?=\s*(?:지역|근처|부근|일대|매장|지점|점|에서|으?로|은|는|에|쪽|\?|$))"
     )
 
     # Phrases that look transactional ("주문") but are actually view-only inquiries
@@ -198,6 +845,7 @@ class ConversationSlots(BaseModel):
         "store_with_stock": "재고 있는 매장 찾기",
         "store_finder": "매장 찾기",
         "price_inquiry": "가격 조회",
+        "coupon_discount_amount": "쿠폰 할인금액 확인",
         "place_order": "주문 진행",
     }
 
@@ -238,6 +886,11 @@ class ConversationSlots(BaseModel):
             ("size", "타이어 사이즈", frozenset({"tire_size"})),
             ("qty", "수량", frozenset({"ord_qty"})),
         ],
+        "coupon_discount_amount": [
+            ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
+            ("size", "타이어 사이즈", frozenset({"tire_size"})),
+            ("qty", "수량", frozenset({"ord_qty"})),
+        ],
         "place_order": [
             ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
             ("size", "타이어 사이즈", frozenset({"tire_size"})),
@@ -250,17 +903,59 @@ class ConversationSlots(BaseModel):
         re.compile(
             # Korean brands (primary user input)
             r"벤투스|키네르기|키너지|옵티모|다이나프로|아이온|라우펜|"
+            r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|"
             r"미쉐린|피렐리|브리지스톤|콘티넨탈|굿이어|한국타이어|"
             # English brands
             r"Ventus|Kinergy|Optimo|Dynapro|iON|Laufenn|"
+            r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|"
             r"Michelin|Pirelli|Bridgestone|Continental|Goodyear|Hankook|"
             # Bare model names (brand omitted by user)
             r"CrossClimate|크로스클라이밋|크로스클라이메이트|"
             r"\bS001\b|\bS007\b|\bER33\b|\bHPX\b|\bHP3\b|"
+            r"S\s*FIT|G\s*FIT|에스핏|지핏|i\*?cept|icept|아이셉트|"
+            r"\b4S2\b|\bDWS06\b|\bCC7\b|\bPS4S\b|\bPS\s*AS\s*4\b|\bPSAS4\b|\bCUP\s*2\b|\bCUP2\b|\bP7\b|"
             r"P\s?Zero|e\.?Primacy|Hyperion|S\.fit",
             re.IGNORECASE,
         ),
     ]
+    _MILEAGE_PRODUCT_LIKE_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|"
+        r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus",
+        re.IGNORECASE,
+    )
+    _MILEAGE_ATTRIBUTE_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"마일리지\s*(?:타이어|좋|높|긴|길|성능|중심|우수|뛰어난)|"
+        r"오래\s*타|수명|마모|내구|장거리|주행거리",
+        re.IGNORECASE,
+    )
+
+    @staticmethod
+    def _kst_today() -> datetime.date:
+        return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
+
+    @classmethod
+    def _extract_requested_cal_day(cls, user_text: str, *, today: datetime.date | None = None) -> str | None:
+        base = today or cls._kst_today()
+        text = user_text or ""
+        if cls._TODAY_DATE_PATTERN.search(text):
+            return base.strftime("%Y%m%d")
+        relative = cls._RELATIVE_DATE_PATTERN.search(text)
+        if relative:
+            offset = 1 if relative.group(0) == "내일" else 2
+            return (base + datetime.timedelta(days=offset)).strftime("%Y%m%d")
+        explicit = cls._EXPLICIT_MD_DATE_PATTERN.search(text)
+        if explicit:
+            year = int(explicit.group(1) or base.year)
+            month = int(explicit.group(2))
+            day = int(explicit.group(3))
+            try:
+                requested = datetime.date(year, month, day)
+            except ValueError:
+                return None
+            if explicit.group(1) is None and requested < base:
+                requested = datetime.date(year + 1, month, day)
+            return requested.strftime("%Y%m%d")
+        return None
 
     def merge(self, new_slots: "ConversationSlots") -> "ConversationSlots":
         """Merge new slots into existing slots with dependency reset logic.
@@ -275,10 +970,20 @@ class ConversationSlots(BaseModel):
         for field, new_val in new_slots.model_dump().items():
             if new_val is None:
                 continue
+            if field in PRODUCT_IDENTITY_FIELDS:
+                new_val = sanitize_product_identity_value(new_val)
+                if new_val is None:
+                    continue
             old_val = getattr(merged, field)
 
-            # Value changed -> reset dependent slots
-            if old_val is not None and old_val != new_val:
+            # Value changed -> reset dependent slots. Product identity fields
+            # invalidate goods_no even on None -> value because goods_no belongs
+            # to a concrete product+size combination.
+            value_conflict = _store_name_values_conflict(old_val, new_val) if field == "shop_name" else old_val != new_val
+            should_reset_dependents = old_val is not None and value_conflict
+            if not should_reset_dependents and field in self.PRODUCT_IDENTITY_FIELDS and old_val != new_val:
+                should_reset_dependents = any(getattr(merged, dep, None) is not None for dep in self.DEPENDENT_RESETS.get(field, []))
+            if should_reset_dependents:
                 for dep in self.DEPENDENT_RESETS.get(field, []):
                     logger.info(f"[SLOTS] {field} changed ({old_val} -> {new_val}), resetting {dep}")
                     setattr(merged, dep, None)
@@ -289,6 +994,60 @@ class ConversationSlots(BaseModel):
         # Store reset fields for merge_fill_only to reference
         object.__setattr__(merged, "_reset_fields", reset_fields)
         return merged
+
+    def apply_runtime_values(
+        self,
+        values: Mapping[str, Any],
+        *,
+        source: str = "runtime",
+        fill_only: bool = False,
+    ) -> "ConversationSlots":
+        """Apply non-None runtime slot values with source-safe dependency resets.
+
+        This is for slots recovered from tools/templates/history after routing
+        has started. It intentionally differs from `merge()`: a newly resolved
+        goods_no should not erase the active tire_size unless the incoming
+        payload says so, because product switches often reuse size/qty/region.
+        """
+        del source  # reserved for trace/debug-specific policies if needed
+        incoming = {
+            field: sanitized
+            for field, value in dict(values).items()
+            if value is not None
+            for sanitized in [sanitize_product_identity_value(value) if field in PRODUCT_IDENTITY_FIELDS else value]
+            if sanitized is not None
+        }
+        updated = self.model_copy()
+
+        for field, new_val in incoming.items():
+            if not hasattr(updated, field):
+                continue
+            old_val = getattr(updated, field)
+            if fill_only and old_val is not None:
+                continue
+            value_conflict = _store_name_values_conflict(old_val, new_val) if field == "shop_name" else old_val != new_val
+            should_reset_dependents = old_val is not None and value_conflict
+            if not should_reset_dependents and field in self.PRODUCT_IDENTITY_FIELDS and old_val != new_val:
+                should_reset_dependents = any(
+                    getattr(updated, dep, None) is not None
+                    for dep in self.RUNTIME_DEPENDENT_RESETS.get(field, [])
+                    if dep not in incoming
+                )
+            if should_reset_dependents:
+                for dep in self.RUNTIME_DEPENDENT_RESETS.get(field, []):
+                    if dep in incoming:
+                        continue
+                    logger.info(
+                        "[SLOTS] runtime %s changed (%r -> %r), resetting %s",
+                        field,
+                        old_val,
+                        new_val,
+                        dep,
+                    )
+                    setattr(updated, dep, None)
+            setattr(updated, field, new_val)
+
+        return updated
 
     def merge_fill_only(
         self,
@@ -310,6 +1069,10 @@ class ConversationSlots(BaseModel):
         for field, new_val in new_slots.model_dump().items():
             if new_val is None:
                 continue
+            if field in PRODUCT_IDENTITY_FIELDS:
+                new_val = sanitize_product_identity_value(new_val)
+                if new_val is None:
+                    continue
             old_val = getattr(merged, field)
 
             if field in overwrite_fields:
@@ -343,7 +1106,7 @@ class ConversationSlots(BaseModel):
     def extract_from_user_text(cls, user_text: str) -> "ConversationSlots":
         """Extract slot values from user message text using regex patterns.
 
-        Extracts: tire_size, goods_no, ord_qty, pending_intent.
+        Extracts: tire_size, goods_no, ord_qty, intent_candidate, goal_candidate.
         tire_model, shop_name, car_model require LLM extraction (handled by Router).
         """
         slots = cls()
@@ -352,63 +1115,81 @@ class ConversationSlots(BaseModel):
         for pattern, fmt in cls._TIRE_SIZE_PATTERNS:
             tire_size_match = pattern.search(user_text)
             if tire_size_match:
-                slots.tire_size = fmt.format(
-                    tire_size_match.group(1),
-                    tire_size_match.group(2),
-                    tire_size_match.group(3),
-                )
+                slots.tire_size = fmt.format(*tire_size_match.groups())
                 break
 
         goods_no_match = cls._GOODS_NO_PATTERN.search(user_text)
         if goods_no_match:
             slots.goods_no = goods_no_match.group(0)
 
-        qty_match = cls._ORD_QTY_PATTERN.search(user_text)
-        if qty_match:
-            slots.ord_qty = int(qty_match.group(1))
+        extracted_qty = cls._extract_order_quantity(user_text)
+        if extracted_qty is not None:
+            slots.ord_qty = extracted_qty
 
-        # Intent: first matching pattern wins. Only set if a transactional keyword
-        # is found — a pure recommendation turn leaves pending_intent untouched
-        # so that prior-turn intents are preserved (see merge() logic).
-        # If the user explicitly asks for a recommendation, callers should instead
-        # clear pending_intent via has_recommend_intent() since switching back to
-        # discovery supersedes any stale transactional intent.
+        shop_name_match = cls._SHOP_NAME_PATTERN.search(user_text)
+        if (
+            shop_name_match
+            and shop_name_match.group(1) not in cls._GENERIC_STORE_SUFFIX_NOUNS
+            and cls.has_valid_store_mention_context(user_text)
+        ):
+            slots.shop_name = shop_name_match.group(1)
+
+        # Intent hint: first matching pattern wins. This is a current-turn regex
+        # candidate only; the executable pending_intent is fixed later by the
+        # router/policy/TurnContract layer and must not be started from slots
+        # extraction alone.
         for pattern, intent_value in cls._INTENT_PATTERNS:
             if pattern.search(user_text):
-                slots.pending_intent = intent_value
+                slots.intent_candidate = intent_value
                 break
 
-        # Goal type — derived from the same signals as pending_intent plus an
-        # explicit recommend check. Recommend takes priority so a fresh
-        # "추천해줘" turn flips a stale transactional goal back to discovery.
-        # Goal is left None when no signal is present so merge() preserves the
-        # previously detected goal across silent turns ("4개", region names).
-        # View-only inquiries (order history, coupon, etc.) leave goal_type
-        # untouched so the LLM domain classifier handles them — checklist-based
-        # fast-path routing would otherwise mis-route them to a product flow.
+        requested_cal_day = cls._extract_requested_cal_day(user_text)
+        text_stripped = user_text.strip()
+        if cls._TODAY_INSTALL_PATTERN.search(user_text):
+            slots.availability_intent = "today_install"
+            slots.requested_cal_day = requested_cal_day or cls._kst_today().strftime("%Y%m%d")
+        elif requested_cal_day and (
+            slots.intent_candidate in {"stock", "order", "reservation"}
+            or cls.has_store_finder_intent(user_text)
+            or len(text_stripped) <= 12
+        ):
+            slots.requested_cal_day = requested_cal_day
+
+        # Goal type — keep only explicit discovery/store-finder style hints here.
+        # Transactional goal_type/pending_intent must be fixed by router/policy/
+        # TurnContract instead of regex extraction.
         is_view_only = any(p.search(user_text) for p in cls._GOAL_VIEW_ONLY_PATTERNS)
         if is_view_only:
             pass
+        elif cls.has_mileage_product_search_intent(user_text):
+            # "마일리지" alone is a recommendation attribute. Only Plus-anchored
+            # product forms such as "마일리지 플러스 2/3" are searched first.
+            slots.goal_candidate = "product_search"
+        elif cls._MILEAGE_ATTRIBUTE_PATTERN.search(user_text):
+            slots.goal_candidate = "product_recommend"
         elif cls.has_recommend_intent(user_text):
-            slots.goal_type = "product_recommend"
-        elif slots.pending_intent == "stock":
-            slots.goal_type = "store_with_stock"
-        elif slots.pending_intent == "price":
-            slots.goal_type = "price_inquiry"
-        elif slots.pending_intent == "order":
-            slots.goal_type = "place_order"
+            slots.goal_candidate = "product_recommend"
         elif cls.has_store_finder_intent(user_text):
             # Pure store search: no stock/price/order intent, but the user is
             # explicitly asking for a store. Routes through goal-router so the
             # follow-up region answer reuses the originating turn's context
             # (preferences) instead of running a generic store list.
-            slots.goal_type = "store_finder"
+            slots.goal_candidate = "store_finder"
+        elif extracted_qty is not None and cls.has_product_keyword(user_text):
+            # Product keyword + explicit quantity in the SAME turn (e.g.
+            # "벤투스 S2 AS 245/45R18 4개") — no 가격/주문 verb, but quantity
+            # signals the user is past pure browsing. Escalate to
+            # price_inquiry so the goal-router (chat.py `_GOAL_COMPLETE_DOMAIN`)
+            # routes to Transaction and `get_final_price_tool` runs
+            # deterministically, instead of leaving the LLM to non-
+            # deterministically choose between product card and price matrix.
+            slots.goal_candidate = "price_inquiry"
         elif cls.has_product_keyword(user_text):
             # Bare product-keyword turn — no transactional intent, no recommend
             # verb, but a known brand/model is mentioned. Drive Discovery to
             # search the product immediately instead of letting the LLM emit a
             # "검색해 드릴까요?" confirmation quickReply.
-            slots.goal_type = "product_search"
+            slots.goal_candidate = "product_search"
 
         # Region extraction — gated to avoid false positives on common-noun
         # tokens that overlap with Seoul-gu names ("동작 안 해", "중구", "북구"...).
@@ -418,16 +1199,23 @@ class ConversationSlots(BaseModel):
         # missing, we skip extraction even if the regex would match — stale
         # region slots persisting from non-store turns are noisier than the
         # occasional missed match.
-        text_stripped = user_text.strip()
         should_extract_region = (
-            len(text_stripped) <= 8
-            or cls.has_store_finder_intent(user_text)
-            or slots.pending_intent == "stock"
+            slots.shop_name is None
+            and (
+                len(text_stripped) <= 8
+                or cls.has_store_finder_intent(user_text)
+                or slots.intent_candidate == "stock"
+                or slots.intent_candidate == "reservation"
+            )
         )
         if should_extract_region:
-            region_match = cls._REGION_PATTERN.search(user_text)
-            if region_match:
-                slots.region = region_match.group("region")
+            composite_region_match = cls._COMPOSITE_REGION_PATTERN.search(user_text)
+            if composite_region_match:
+                slots.region = re.sub(r"\s+", " ", composite_region_match.group("region")).strip()
+            else:
+                region_match = cls._REGION_PATTERN.search(user_text)
+                if region_match:
+                    slots.region = region_match.group("region")
 
         # Free-form preference capture — only when the turn IS store-related
         # AND carries criteria hints. Skips bland turns like "근처 매장 알려줘"
@@ -435,12 +1223,23 @@ class ConversationSlots(BaseModel):
         # non-store turns ("강남 가는 길") so unrelated text doesn't leak in.
         is_store_related = (
             cls.has_store_finder_intent(user_text)
-            or slots.pending_intent == "stock"
+            or slots.intent_candidate == "stock"
+            or slots.intent_candidate == "reservation"
         )
         if is_store_related and cls._has_preference_hints(user_text):
             slots.user_preferences_text = user_text.strip()
 
         return slots
+
+    @classmethod
+    def _extract_order_quantity(cls, user_text: str) -> int | None:
+        qty_match = cls._ORD_QTY_PATTERN.search(user_text)
+        if qty_match:
+            return int(qty_match.group(1))
+        korean_qty_match = cls._ORD_QTY_KOREAN_PATTERN.search(user_text)
+        if korean_qty_match:
+            return cls._KOREAN_QTY_VALUES.get(str(korean_qty_match.group(1) or "").strip())
+        return None
 
     @classmethod
     def has_store_finder_intent(cls, user_text: str) -> bool:
@@ -453,6 +1252,17 @@ class ConversationSlots(BaseModel):
         return any(pattern.search(user_text) for pattern in cls._STORE_FINDER_PATTERNS)
 
     @classmethod
+    def has_valid_store_mention_context(cls, user_text: str) -> bool:
+        """Return True when a suffix-style store name is supported by store context.
+
+        Bare suffix extraction is intentionally gated: ordinary nouns such as
+        "장단점" can end with "점" but are not store selections inside product
+        recommendation/comparison turns.
+        """
+        text = user_text or ""
+        return bool(cls._BARE_STORE_NAME_TURN_PATTERN.fullmatch(text) or cls._STORE_MENTION_CONTEXT_PATTERN.search(text))
+
+    @classmethod
     def _has_preference_hints(cls, user_text: str) -> bool:
         """Return True when the turn carries soft store-selection criteria
         (친절/얼라인먼트/워셔액/...). Used to gate `user_preferences_text` capture
@@ -462,12 +1272,24 @@ class ConversationSlots(BaseModel):
 
     @classmethod
     def has_recommend_intent(cls, user_text: str) -> bool:
-        """Return True when the user turn explicitly asks for a recommendation.
+        """Return True when the user turn explicitly asks for a product recommendation.
+
+        "Recommend" here is **product-recommend** intent (Discovery). When the
+        same turn also signals a store-finder context ("분당 매장 추천해줘",
+        "근처 지점 추천", "친절한 샵 추천해줘"), the turn is treated as
+        store-finder, not product-recommend — return False so the elif chain in
+        `extract_from_user_text` falls through to `has_store_finder_intent` and
+        the location card is rendered with the store list.
 
         Used by Coordinator to clear any stale transactional `pending_intent`
         when the user is clearly switching back to discovery.
         """
-        return any(pattern.search(user_text) for pattern in cls._RECOMMEND_PATTERNS)
+        if not any(pattern.search(user_text) for pattern in cls._RECOMMEND_PATTERNS):
+            return False
+        # "매장/지점/샵 추천해줘" → store-finder owns the turn.
+        if cls.has_store_finder_intent(user_text):
+            return False
+        return True
 
     def evaluate_goal_progress(self) -> tuple[list[str], Optional[str]]:
         """Return (done_step_labels, next_step_label) for the current goal.
@@ -513,6 +1335,13 @@ class ConversationSlots(BaseModel):
         """
         return any(pattern.search(user_text) for pattern in cls._PRODUCT_KEYWORD_PATTERNS)
 
+    @classmethod
+    def has_mileage_product_search_intent(cls, user_text: str) -> bool:
+        """Return True for product-like Mileage queries, not mileage attributes."""
+        if not cls._MILEAGE_PRODUCT_LIKE_PATTERN.search(user_text):
+            return False
+        return not cls._MILEAGE_ATTRIBUTE_PATTERN.search(user_text)
+
     def to_prompt_context(self, include_pending_intent: bool = True) -> str:
         """Format slots as a system prompt context string for agent injection.
 
@@ -534,13 +1363,27 @@ class ConversationSlots(BaseModel):
         """
         entity_label_map = {
             "tire_size": "타이어 사이즈",
+            "tire_size_front": "전륜 타이어 사이즈",
+            "tire_size_rear": "후륜 타이어 사이즈",
             "tire_model": "타이어 모델",
             "goods_no": "상품번호",
             "ord_qty": "수량",
             "shop_id": "매장코드",
             "shop_name": "매장명",
             "car_model": "차량 모델",
+            "car_no": "차량번호",
+            "car_lnc_cd": "차량코드",
+            "mbr_car_reg_seq": "차량등록시퀀스",
             "region": "지역",
+            "availability_intent": "장착 가능 조건",
+            "requested_cal_day": "요청 장착일",
+            "rsv_hour": "요청 예약시간",
+            "payment_amount": "결제금액",
+            "price_basis": "결제금액 기준",
+            "price_source_tool": "결제금액 출처",
+            "pending_check_topic": "확인 대기 주제",
+            "pending_check_object_type": "확인 대상 유형",
+            "pending_check_object_value": "확인 대상 값",
         }
 
         # Map pending_intent enum value → Korean label displayed in the prompt.
@@ -548,13 +1391,28 @@ class ConversationSlots(BaseModel):
             "price": "가격 조회",
             "stock": "재고 확인",
             "order": "주문 진행",
+            "reservation": "방문 예약",
         }
 
         entity_lines = []
         for field, label in entity_label_map.items():
             val = getattr(self, field)
-            if val is not None:
+            if val is None:
+                continue
+            if field == "payment_amount":
+                # 천단위 콤마 + 원 단위 명시 — LLM 이 그대로 인용하기 좋은 형식.
+                # 할부 계산 등에서 이 값을 임의로 변형하지 않도록 "이미 산출된 총액" 임을 분명히.
+                entity_lines.append(f"- {label}: {val:,}원 (이미 산출된 총 결제금액 — 단가×수량 재계산 금지)")
+            else:
                 entity_lines.append(f"- {label}: {val}")
+        if (
+            self.tire_size
+            and self.tire_size_front
+            and self.tire_size_rear
+            and self.tire_size_front != self.tire_size_rear
+            and self.tire_size in {self.tire_size_front, self.tire_size_rear}
+        ):
+            entity_lines.append("- 수량 제한: 전/후륜 규격 상이 차량은 현재 선택한 규격 기준 최대 2개")
 
         blocks: list[str] = []
 
@@ -616,3 +1474,114 @@ class ConversationSlots(BaseModel):
     def has_any(self) -> bool:
         """Return True if at least one slot is filled."""
         return any(v is not None for v in self.model_dump().values())
+
+
+class CanonicalSlotState(BaseModel):
+    """Normalized slot view used by policy/reset code without changing the external slot API."""
+
+    common: dict[str, Any] = {}
+    product: dict[str, Any] = {}
+    store: dict[str, Any] = {}
+    price: dict[str, Any] = {}
+    contexts: dict[str, Any] = {}
+
+    COMMON_FIELDS: ClassVar[tuple[str, ...]] = (
+        "tire_size",
+        "tire_size_front",
+        "tire_size_rear",
+        "vehicle_type",
+        "car_lnc_cd",
+        "car_no",
+        "car_model",
+        "ord_qty",
+        "region",
+    )
+    PRODUCT_FIELDS: ClassVar[tuple[str, ...]] = (
+        "goods_no",
+        "tire_model",
+        "pending_product_name",
+    )
+    STORE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "shop_id",
+        "shop_name",
+        "requested_cal_day",
+        "rsv_hour",
+    )
+    PRICE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "payment_amount",
+        "price_basis",
+        "price_source_tool",
+        "price_facts",
+        "coupon_facts",
+    )
+    CONTEXT_FIELDS: ClassVar[tuple[str, ...]] = (
+        "recommendation_context",
+        "comparison_context",
+        "availability_context",
+        "order_context",
+        "quantity_comparison_context",
+    )
+
+    @classmethod
+    def from_slots(cls, slots: ConversationSlots) -> "CanonicalSlotState":
+        def _value(value: Any) -> Any:
+            if isinstance(value, RecommendationContext):
+                return value.to_policy_dict()
+            if isinstance(value, ComparisonContext):
+                return value.to_policy_dict()
+            if isinstance(value, BaseModel):
+                return value.model_dump(exclude_none=True)
+            return value
+
+        def _group(fields: tuple[str, ...]) -> dict[str, Any]:
+            return {
+                field: _value(getattr(slots, field))
+                for field in fields
+                if getattr(slots, field, None) is not None
+            }
+
+        return cls(
+            common=_group(cls.COMMON_FIELDS),
+            product=_group(cls.PRODUCT_FIELDS),
+            store=_group(cls.STORE_FIELDS),
+            price=_group(cls.PRICE_FIELDS),
+            contexts=_group(cls.CONTEXT_FIELDS),
+        )
+
+    @classmethod
+    def reset_for_new_recommendation(
+        cls,
+        slots: ConversationSlots,
+        *,
+        recommendation_context: Mapping[str, Any] | None = None,
+        current_tire_size: str | None = None,
+        current_product_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Reset flow-specific state for a new recommendation while preserving common fitment slots."""
+
+        cleared: dict[str, Any] = {}
+        if current_tire_size:
+            slots.tire_size = current_tire_size
+        if recommendation_context:
+            slots.recommendation_context = RecommendationContext.from_mapping(recommendation_context)
+
+        product_reset_fields = (
+            "goods_no",
+            "payment_amount",
+            "price_facts",
+            "coupon_facts",
+            "order_context",
+            "pending_product_name",
+            "pending_quantity_options",
+            "pending_required_slot",
+        )
+        for field in product_reset_fields:
+            if getattr(slots, field, None) is not None:
+                cleared[field] = getattr(slots, field)
+                setattr(slots, field, None)
+
+        if not current_product_name and slots.tire_model is not None:
+            cleared["tire_model"] = slots.tire_model
+            slots.tire_model = None
+
+        return cleared

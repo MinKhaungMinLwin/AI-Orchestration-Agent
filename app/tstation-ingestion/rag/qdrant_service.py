@@ -310,6 +310,24 @@ class QdrantService:
         logger.info("Created multi-vector collection: %s (size=%d)", collection_name, vector_size)
         return True
 
+    def ensure_payload_text_index(self, collection_name: str, field_name: str) -> None:
+        """Create a full-text payload index on field_name. Idempotent — safe to call on existing collections."""
+        from qdrant_client.models import TextIndexParams, TokenizerType
+        try:
+            self.client.create_payload_index(
+                collection_name=collection_name,
+                field_name=field_name,
+                field_schema=TextIndexParams(
+                    type="text",
+                    tokenizer=TokenizerType.WORD,
+                    min_token_len=2,
+                    lowercase=True,
+                ),
+            )
+            logger.info("[QdrantService] Text index ensured: %s.%s", collection_name, field_name)
+        except Exception as e:
+            logger.debug("[QdrantService] Text index already exists or skipped: %s", e)
+
     def get_alias_target(self, alias_name: str) -> str | None:
         """Return physical collection currently attached to alias, if any."""
         aliases = self.client.get_aliases().aliases
@@ -491,13 +509,49 @@ class QdrantService:
             logger.exception(f"Failed to delete collection {collection_name}")
             raise
 
+    def get_all_point_metadata(self, collection_name: str) -> dict[str, dict[str, str]]:
+        """Scroll all points and return {point_id: {content_hash, source}}.
+
+        `content_hash` drives the incremental upsert diff; `source` decides which
+        points a given sync is allowed to delete.
+        """
+        points: dict[str, dict[str, str]] = {}
+        offset = None
+        while True:
+            result, next_offset = self.client.scroll(
+                collection_name=collection_name,
+                offset=offset,
+                limit=256,
+                with_vectors=False,
+                with_payload=["metadata"],
+            )
+            for point in result:
+                meta = ((point.payload or {}).get("metadata") or {})
+                points[str(point.id)] = {
+                    "content_hash": meta.get("content_hash", ""),
+                    "source": meta.get("source", ""),
+                }
+            if next_offset is None:
+                break
+            offset = next_offset
+        return points
+
+    def delete_points(self, collection_name: str, point_ids: list[str]) -> None:
+        """Delete specific points by ID."""
+        from qdrant_client.models import PointIdsList
+        self.client.delete(
+            collection_name=collection_name,
+            points_selector=PointIdsList(points=point_ids),
+        )
+        logger.info("Deleted %d points from %s", len(point_ids), collection_name)
+
     def get_collection_stats(self, collection_name: str) -> dict:
         """Get collection statistics."""
         try:
-            collection_info = self.client.get_collection(collection_name)
+            count_result = self.client.count(collection_name, exact=True)
             return {
                 "collection_name": collection_name,
-                "points_count": collection_info.points_count,
+                "points_count": count_result.count,
             }
         except Exception:
             logger.exception(f"Failed to get stats for {collection_name}")

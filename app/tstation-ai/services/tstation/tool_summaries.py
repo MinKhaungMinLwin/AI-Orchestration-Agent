@@ -55,12 +55,12 @@ def summarize_tool(name: str, result: Any) -> str:
     Falls back to ``status=<value>`` for tools without a dedicated summary —
     which is still more useful in the trace tree than the raw JSON preview.
     """
-    if name in ("search_product_tool", "get_products_recommendations_tool"):
+    if name in ("search_product_summary_tool", "search_product_tool", "get_products_recommendations_tool"):
         items = _items(result)
         if not items:
             return "0 hits"
         first = items[0] if isinstance(items[0], dict) else {}
-        head = first.get("goodsNo") or first.get("goods_no") or first.get("name", "")
+        head = first.get("goodsNo") or first.get("goods_no") or first.get("goods_nm") or first.get("name", "")
         return f"{len(items)} hits → {head}" if head else f"{len(items)} hits"
 
     if name == "get_final_price_tool":
@@ -76,7 +76,13 @@ def summarize_tool(name: str, result: Any) -> str:
         qty = d.get("availableQty") or d.get("available_qty") or d.get("qty")
         return f"qty={qty}" if qty is not None else f"status={_status(result)}"
 
-    if name in ("get_nearby_stores_tool", "get_store_list_tool"):
+    if name in (
+        "search_stores_tool",
+        "search_stores_complex_tool",
+        "get_nearby_stores_tool",
+        "get_store_list_tool",
+        "get_favorite_stores_tool",
+    ):
         items = _items(result)
         return f"{len(items)} stores"
 
@@ -100,6 +106,16 @@ def summarize_tool(name: str, result: Any) -> str:
             price = cheapest.get("finalPrice") or cheapest.get("final_price")
             if price is not None:
                 return f"cheapest={_won(price)}"
+        return f"status={_status(result)}"
+
+    if name == "get_cheapest_price_tool":
+        d = _data(result)
+        items = d.get("items") or []
+        if isinstance(items, list) and items:
+            prices = [it.get("final_prc") for it in items if isinstance(it, dict)]
+            valid = [p for p in prices if p is not None]
+            if valid:
+                return f"{len(items)} items, min={_won(min(valid))}"
         return f"status={_status(result)}"
 
     if name == "get_product_description_tool":
@@ -128,6 +144,22 @@ def summarize_tool(name: str, result: Any) -> str:
 
     if name == "transfer_to_qna_tool":
         return "qna handoff"
+
+    if name in ("get_product_warranties_tool", "get_my_warranties_tool"):
+        d = _data(result)
+        items = d.get("warranties", []) if isinstance(d, dict) else []
+        return f"{len(items)} warranties"
+
+    if name == "get_card_installments_tool":
+        d = _data(result)
+        cards = d.get("cards", []) if isinstance(d, dict) else []
+        return f"{len(cards)} cards"
+
+    if name == "check_coupon_stacking_tool":
+        d = _data(result)
+        coupons = d.get("coupons", []) if isinstance(d, dict) else []
+        pairs = d.get("pairs", []) if isinstance(d, dict) else []
+        return f"{len(coupons)} cpn → {len(pairs)} pairs"
 
     if name == "escalate_tool":
         d = _data(result)

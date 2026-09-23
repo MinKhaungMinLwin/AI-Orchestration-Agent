@@ -1,0 +1,359 @@
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "${NGINX_PORT}:80"
+      - "${HTTPS_PORT}:443"
+    configs:
+      - source: nginx_conf_v4
+        target: /etc/nginx/conf.d/default.conf
+    secrets:
+      - source: nginx_cert
+        target: /etc/nginx/certs/server.crt
+      - source: nginx_key
+        target: /etc/nginx/certs/server.key
+    networks:
+      - agent-net
+      - tstation-dev-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:80/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  ai-gateway:
+    image: ghcr.io/berriai/litellm:v1.83.4-nightly
+    configs:
+      - source: litellm_conf
+        target: /app/config.yaml
+    command: ["--config=/app/config.yaml", "--port", "8000"]
+    ports:
+      - "${AI_GATEWAY_PORT:-4001}:8000"
+    env_file:
+      - .env
+    environment:
+      - LITELLM_LOG=INFO
+      - LOG_LEVEL=INFO
+      - DISABLE_SCHEMA_UPDATE=true
+      - LITELLM_DB_URL=postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@langfuse-postgres:5432/langfuse
+      - DATABASE_URL=postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@langfuse-postgres:5432/langfuse
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health/liveliness')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+  tstation-ai:
+    image: ${AGENT_AI_IMAGE}
+    env_file:
+      - .env
+    environment:
+      - UV_CACHE_DIR=/tmp/uv-cache
+      - TZ_OFFSET=9
+      - ENV=staging
+      - LOG_LEVEL=INFO
+      - UVICORN_WORKERS=1
+      - REDIS_CONVERSATION_MANAGEMENT_URL=${REDIS_CONVERSATION_MANAGEMENT_URL}
+      - REDIS_QUEUE_URL=${REDIS_QUEUE_URL}
+      - REDIS_URL=${REDIS_URL}
+    networks:
+      - agent-net
+      - tstation-dev-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USERNAME:?RABBITMQ_USERNAME must be set}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set}
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    configs:
+      - source: qdrant_config
+        target: /qdrant/config/production.yaml
+    volumes:
+      - qdrant-data:/qdrant/storage
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "bash -lc ': </dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  ingestion:
+    image: ${AGENT_INGESTION_IMAGE}
+    command: sh start.sh
+    env_file:
+      - .env
+    environment:
+      - TZ_OFFSET=9
+      - ENV=staging
+      - LOG_LEVEL=INFO
+    # No named volume on /app/data: it would shadow the deployed image and hide
+    # local_faq.json updates. The CI-built image bakes the latest overlay; main.py
+    # reconciles it into Qdrant (persisted in qdrant-data) on start.
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  langfuse-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: langfuse
+      POSTGRES_PASSWORD: ${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: langfuse
+    volumes:
+      - langfuse-postgres-data:/var/lib/postgresql/data
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse -d langfuse"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse-clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?LANGFUSE_CLICKHOUSE_PASSWORD must be set}
+    volumes:
+      - langfuse-clickhouse-data:/var/lib/clickhouse
+      - langfuse-clickhouse-logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse-minio:
+    image: minio/minio:latest
+    entrypoint: sh
+    command: -c "mkdir -p /data/langfuse && exec minio server /data --console-address ':9001'"
+    environment:
+      MINIO_ROOT_USER: ${LANGFUSE_MINIO_USER:?LANGFUSE_MINIO_USER must be set}
+      MINIO_ROOT_PASSWORD: ${LANGFUSE_MINIO_PASSWORD:?LANGFUSE_MINIO_PASSWORD must be set}
+    volumes:
+      - langfuse-minio-data:/data
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  langfuse-redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set} ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
+    environment:
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@langfuse-postgres:5432/langfuse
+      SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT must be set}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?LANGFUSE_ENCRYPTION_KEY must be set}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?LANGFUSE_CLICKHOUSE_PASSWORD must be set}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:?LANGFUSE_MINIO_USER must be set}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:?LANGFUSE_MINIO_PASSWORD must be set}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: "events/"
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:?LANGFUSE_MINIO_USER must be set}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:?LANGFUSE_MINIO_PASSWORD must be set}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: "media/"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    # healthcheck disabled temporarily to stabilize after unpinning
+
+  langfuse-server:
+    image: langfuse/langfuse:3
+    ports:
+      - "${LANGFUSE_PORT:-3006}:3000"
+    depends_on:
+      - langfuse-postgres
+      - langfuse-clickhouse
+    environment:
+      HOSTNAME: "0.0.0.0"
+      DATABASE_URL: postgresql://langfuse:${LANGFUSE_POSTGRES_PASSWORD:?LANGFUSE_POSTGRES_PASSWORD must be set}@langfuse-postgres:5432/langfuse
+      SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT must be set}
+      ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?LANGFUSE_ENCRYPTION_KEY must be set}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET must be set}
+      NEXTAUTH_URL: ${LANGFUSE_NEXTAUTH_URL:-http://localhost:3006}
+      TELEMETRY_ENABLED: "false"
+      LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+      CLICKHOUSE_MIGRATION_URL: clickhouse://langfuse-clickhouse:9000
+      CLICKHOUSE_URL: http://langfuse-clickhouse:8123
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${LANGFUSE_CLICKHOUSE_PASSWORD:?LANGFUSE_CLICKHOUSE_PASSWORD must be set}
+      CLICKHOUSE_CLUSTER_ENABLED: "false"
+      LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+      LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:?LANGFUSE_MINIO_USER must be set}
+      LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:?LANGFUSE_MINIO_PASSWORD must be set}
+      LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_EVENT_UPLOAD_PREFIX: "events/"
+      LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+      LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+      LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: ${LANGFUSE_MINIO_USER:?LANGFUSE_MINIO_USER must be set}
+      LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${LANGFUSE_MINIO_PASSWORD:?LANGFUSE_MINIO_PASSWORD must be set}
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://langfuse-minio:9000
+      LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+      LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: "media/"
+      REDIS_HOST: langfuse-redis
+      REDIS_PORT: 6379
+      REDIS_AUTH: ${LANGFUSE_REDIS_PASSWORD:?LANGFUSE_REDIS_PASSWORD must be set}
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-tstation-org}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-T-Station}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-tstation-ai}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_PROJECT_NAME:-tstation-ai}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:?LANGFUSE_PUBLIC_KEY must be set}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:?LANGFUSE_SECRET_KEY must be set}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-admin@tstation.local}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-Admin}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?LANGFUSE_INIT_USER_PASSWORD must be set}
+    networks:
+      - agent-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    # healthcheck disabled temporarily to stabilize after unpinning
+
+networks:
+  agent-net:
+    driver: overlay
+    attachable: true
+  tstation-dev-net:
+    external: true
+
+volumes:
+  redis-data:
+  qdrant-data:
+  rabbitmq-data:
+  langfuse-postgres-data:
+  langfuse-clickhouse-data:
+  langfuse-clickhouse-logs:
+  langfuse-minio-data:
+
+configs:
+  nginx_conf_v4:
+    file: ./config/nginx/nginx.conf
+  litellm_conf:
+    file: ./config/llm/conf-gateway.yaml
+  qdrant_config:
+    file: ./config/qdrant/production.yaml
+
+secrets:
+  nginx_cert:
+    file: ./config/nginx/certs/server.crt
+  nginx_key:
+    name: tstation-agent-dev-nginx-key-20260724
+    external: true

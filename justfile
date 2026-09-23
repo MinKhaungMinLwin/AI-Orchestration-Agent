@@ -22,8 +22,6 @@ clear-venv:
 dependency:
     # App
     uv export --only-group tstation-ai -o app/tstation-ai/requirements.txt
-    # UI
-    uv export --only-group tstation-ui-demo -o app/tstation-ui-demo/requirements.txt
 
 
 install: dependency
@@ -208,9 +206,6 @@ scan-images:
     @echo ""
     @echo "--- Scanning tstation-ai ---"
     ./bin/trivy image --severity HIGH,CRITICAL --format table {{COMPOSE_PROJECT_NAME}}-tstation-ai:latest || true
-    @echo ""
-    @echo "--- Scanning tstation-ui-demo ---"
-    ./bin/trivy image --severity HIGH,CRITICAL --format table {{COMPOSE_PROJECT_NAME}}-tstation-ui-demo:latest || true
     @echo ""
     @echo "--- Scanning nginx ---"
     ./bin/trivy image --severity HIGH,CRITICAL --format table nginx:alpine || true

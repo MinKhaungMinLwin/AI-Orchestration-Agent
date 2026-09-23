@@ -25,16 +25,19 @@ uv.lock
 !.env.example
 docker/volumes
 docker_local
+docker/config/nginx/certs/*.key
+repomix-output.*
 logs
 **.pem**
 **.crt*
 dataset
-test
 temp/*
 
 # App
 app/tstation-ai/static/public/*
 app/tstation-ai/api/router_local.py
+scripts/local_chat.sh
+scripts/start_local_ai.sh
 playground
 bin
 # Claude
@@ -47,9 +50,16 @@ backup/*
 
 .env
 
-docker/qdrant_storage/collections/
+/docker/qdrant_storage/
 /qdrant_storage/
 example/
-/docs/test-questions/
+/docs/
 
-/eval/results/
+/eval/
+
+.vscode/
+.tmp/
+
+AGENT.md
+AGENTS.md
+CLAUDE.md

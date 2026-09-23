@@ -15,6 +15,8 @@ T = TypeVar("T", bound="StoreDetailResponse")
 class StoreDetailResponse:
     """
     Attributes:
+        shop_seq (None | str | Unset): 매장 순번 (VW_ET_SHOP_INFO.SHOP_SEQ, 예: 'F203675962'). tstation.com 매장 상세 페이지 URL
+            path 값 — '/store/locals/{shop_seq}'. shop_id 와 다름.
         shop_nm (None | str | Unset): 매장명
         tel_no (None | str | Unset): 전화번호
         is_all_my_t (bool | Unset): all my T 매장 여부 (SMART_CARE_SHOP_YN = 'Y') Default: False.
@@ -22,6 +24,10 @@ class StoreDetailResponse:
         is_tna_delivery (bool | Unset): T바로배송(한국타이어 퀵배송) 가능 매장 여부 Default: False.
         is_imported_car (bool | Unset): 수입차 특화점 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default:
             False.
+        is_ev_specialty (bool | Unset): 전기차 특화점 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '214' 보유 매장) Default:
+            False.
+        is_ev_charge_available (bool | Unset): 전기차 충전 가능 여부 (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '215' 보유 매장)
+            Default: False.
         svc_codes (list[str] | None | Unset): 매장이 보유한 서비스 구분 코드 목록 (ET_SHOP_ITEM_SVC_INFO.SHOP_ITEM_SVC_SCT_CD). 노출 코드:
             '113'=타이어(온라인), '116'=배터리(온라인), '119'=타이어 보관서비스(윈터타이어 주문 시 113과 함께 필요), '120'=수입타이어 취급(수입차 특화점은 별도
             is_imported_car 플래그), '121'=경정비-온라인(엔진오일세트/와이퍼/실내필터 등 배터리 외 경정비), '122'=경정비 오늘장착(당일 경정비), '124'=휠얼라이먼트-오프라인,
@@ -35,14 +41,19 @@ class StoreDetailResponse:
         shop_sat_strt_time (None | str | Unset): 토요일 영업 시작 시간
         shop_sat_end_time (None | str | Unset): 토요일 영업 종료 시간
         available_slots (list[str] | Unset): 예약 가능 시간 슬롯 목록 (예: ['09','10','11'])
+        rating_idx (float | None | Unset): 매장 평점 환산 지수 (ET_SHOP_SCR_INFO.SHOP_EVAL_CVRT_IDX). 평점 없으면 None.
+        review_count (int | Unset): 정상 리뷰 수 (ET_SHOP_REV_INFO.SHOP_REV_STAT_SCT_CD = '100' 카운트). Default: 0.
     """
 
+    shop_seq: None | str | Unset = UNSET
     shop_nm: None | str | Unset = UNSET
     tel_no: None | str | Unset = UNSET
     is_all_my_t: bool | Unset = False
     is_installable: bool | Unset = False
     is_tna_delivery: bool | Unset = False
     is_imported_car: bool | Unset = False
+    is_ev_specialty: bool | Unset = False
+    is_ev_charge_available: bool | Unset = False
     svc_codes: list[str] | None | Unset = UNSET
     holiday: None | str | Unset = UNSET
     shop_biz_strt_time: None | str | Unset = UNSET
@@ -52,9 +63,17 @@ class StoreDetailResponse:
     shop_sat_strt_time: None | str | Unset = UNSET
     shop_sat_end_time: None | str | Unset = UNSET
     available_slots: list[str] | Unset = UNSET
+    rating_idx: float | None | Unset = UNSET
+    review_count: int | Unset = 0
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        shop_seq: None | str | Unset
+        if isinstance(self.shop_seq, Unset):
+            shop_seq = UNSET
+        else:
+            shop_seq = self.shop_seq
+
         shop_nm: None | str | Unset
         if isinstance(self.shop_nm, Unset):
             shop_nm = UNSET
@@ -74,6 +93,10 @@ class StoreDetailResponse:
         is_tna_delivery = self.is_tna_delivery
 
         is_imported_car = self.is_imported_car
+
+        is_ev_specialty = self.is_ev_specialty
+
+        is_ev_charge_available = self.is_ev_charge_available
 
         svc_codes: list[str] | None | Unset
         if isinstance(self.svc_codes, Unset):
@@ -130,9 +153,19 @@ class StoreDetailResponse:
         if not isinstance(self.available_slots, Unset):
             available_slots = self.available_slots
 
+        rating_idx: float | None | Unset
+        if isinstance(self.rating_idx, Unset):
+            rating_idx = UNSET
+        else:
+            rating_idx = self.rating_idx
+
+        review_count = self.review_count
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
+        if shop_seq is not UNSET:
+            field_dict["shop_seq"] = shop_seq
         if shop_nm is not UNSET:
             field_dict["shop_nm"] = shop_nm
         if tel_no is not UNSET:
@@ -145,6 +178,10 @@ class StoreDetailResponse:
             field_dict["is_tna_delivery"] = is_tna_delivery
         if is_imported_car is not UNSET:
             field_dict["is_imported_car"] = is_imported_car
+        if is_ev_specialty is not UNSET:
+            field_dict["is_ev_specialty"] = is_ev_specialty
+        if is_ev_charge_available is not UNSET:
+            field_dict["is_ev_charge_available"] = is_ev_charge_available
         if svc_codes is not UNSET:
             field_dict["svc_codes"] = svc_codes
         if holiday is not UNSET:
@@ -163,12 +200,25 @@ class StoreDetailResponse:
             field_dict["shop_sat_end_time"] = shop_sat_end_time
         if available_slots is not UNSET:
             field_dict["available_slots"] = available_slots
+        if rating_idx is not UNSET:
+            field_dict["rating_idx"] = rating_idx
+        if review_count is not UNSET:
+            field_dict["review_count"] = review_count
 
         return field_dict
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+
+        def _parse_shop_seq(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_seq = _parse_shop_seq(d.pop("shop_seq", UNSET))
 
         def _parse_shop_nm(data: object) -> None | str | Unset:
             if data is None:
@@ -195,6 +245,10 @@ class StoreDetailResponse:
         is_tna_delivery = d.pop("is_tna_delivery", UNSET)
 
         is_imported_car = d.pop("is_imported_car", UNSET)
+
+        is_ev_specialty = d.pop("is_ev_specialty", UNSET)
+
+        is_ev_charge_available = d.pop("is_ev_charge_available", UNSET)
 
         def _parse_svc_codes(data: object) -> list[str] | None | Unset:
             if data is None:
@@ -278,13 +332,27 @@ class StoreDetailResponse:
 
         available_slots = cast(list[str], d.pop("available_slots", UNSET))
 
+        def _parse_rating_idx(data: object) -> float | None | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(float | None | Unset, data)
+
+        rating_idx = _parse_rating_idx(d.pop("rating_idx", UNSET))
+
+        review_count = d.pop("review_count", UNSET)
+
         store_detail_response = cls(
+            shop_seq=shop_seq,
             shop_nm=shop_nm,
             tel_no=tel_no,
             is_all_my_t=is_all_my_t,
             is_installable=is_installable,
             is_tna_delivery=is_tna_delivery,
             is_imported_car=is_imported_car,
+            is_ev_specialty=is_ev_specialty,
+            is_ev_charge_available=is_ev_charge_available,
             svc_codes=svc_codes,
             holiday=holiday,
             shop_biz_strt_time=shop_biz_strt_time,
@@ -294,6 +362,8 @@ class StoreDetailResponse:
             shop_sat_strt_time=shop_sat_strt_time,
             shop_sat_end_time=shop_sat_end_time,
             available_slots=available_slots,
+            rating_idx=rating_idx,
+            review_count=review_count,
         )
 
         store_detail_response.additional_properties = d

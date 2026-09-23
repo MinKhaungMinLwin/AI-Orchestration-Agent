@@ -1,0 +1,2359 @@
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+
+_TEST_ENV_DEFAULTS = {
+    "PROJECT_NAME": "test",
+    "ROOT_PATH": "",
+    "API_SECRET_KEY": "secret",
+    "TSTATION_BE_API": "http://localhost",
+    "TSTATION_BE_MCP": "http://localhost",
+    "AI_DEFAULT_PROVIDER": "openai",
+    "AI_GATEWAY_BASE_URL": "http://localhost/v1",
+    "AI_GATEWAY_API_KEY": "test",
+    "AI_MODEL": "gpt-test",
+    "AI_MODEL_REASONING": "gpt-test",
+    "AI_MODEL_MINI": "gpt-test",
+    "AI_MODEL_LEADING_AGENT": "gpt-test",
+    "AI_MODEL_QC_AGENT": "gpt-test",
+    "AI_MODEL_TRANSACTION_AGENT": "gpt-test",
+    "UPSTAGE_API_KEY": "test",
+    "OPENAI_API_KEY": "test",
+    "REDIS_CONVERSATION_MANAGEMENT_PASSWORD": "",
+    "REDIS_CONVERSATION_MANAGEMENT_URL": "redis://localhost:6379/0",
+    "REDIS_QUEUE_URL": "redis://localhost:6379/1",
+    "REDIS_PASSWORD": "",
+    "REDIS_URL": "redis://localhost:6379/0",
+    "RABBITMQ_NODENAME": "rabbit@test",
+    "RABBITMQ_USERNAME": "guest",
+    "RABBITMQ_PASSWORD": "guest",
+    "RABBITMQ_URL": "amqp://guest:guest@localhost:5672/",
+    "RABBITMQ_URL_MANAGEMENT": "http://localhost:15672",
+    "AWS_ACCESS_KEY_ID": "test",
+    "AWS_SECRET_ACCESS_KEY": "test",
+    "AWS_DEFAULT_REGION": "ap-northeast-2",
+    "S3_BUCKET_NAME": "test",
+    "GF_SECURITY_ADMIN_USER": "admin",
+    "GF_SECURITY_ADMIN_PASSWORD": "admin",
+    "LOKI_URL": "http://localhost",
+    "PROMETHEUS_URL": "http://localhost",
+    "LANGFUSE_HOST": "http://localhost",
+    "LANGFUSE_PROJECT_NAME": "test",
+    "LANGFUSE_SECRET_KEY": "test",
+    "LANGFUSE_PUBLIC_KEY": "test",
+}
+
+for key, value in _TEST_ENV_DEFAULTS.items():
+    os.environ.setdefault(key, value)
+
+from services.tstation.agents.templates.schemas import DatepickTemplate, LocationTemplate, ProductTemplate  # noqa: E402
+from schemas.tstation.chat import TStationChatRequest  # noqa: E402
+from schemas.tstation.slots import ConversationSlots  # noqa: E402
+from services.tstation.chat_v3 import service  # noqa: E402
+from services.tstation.chat_v3 import templates  # noqa: E402
+from services.tstation.chat_v3.router.schemas import Domain, GuardId, RouteDecision  # noqa: E402
+from services.tstation.common.cta_urls import CTAUrls  # noqa: E402
+
+
+def _wrap_relevant(struct_llm):
+    """Adapt a fake that returns a bare template into the current relevance-wrapper
+    contract ({applicable, payload}) that build_rich_data_event now expects."""
+
+    class _RelevanceAdapter:
+        async def ainvoke(self, messages, config=None):
+            payload = await struct_llm.ainvoke(messages)
+            wrapper = templates._relevance_wrapper(type(payload))  # noqa: SLF001
+            return wrapper(applicable=True, payload=payload)
+
+    return _RelevanceAdapter()
+
+
+class _FakeStructuredLLM:
+    async def ainvoke(self, messages):
+        return LocationTemplate(
+            assistantResponse="경기권 보관서비스 매장입니다.",
+            stores=[
+                {
+                    "nameAddress": "티스테이션 안양호계점 · 경기도 안양시 동안구",
+                    "distance": "",
+                    "detailAddress": "귀인로 76 (호계동)",
+                    "isAllMyT": True,
+                    "todayInstall": False,
+                    "tnaDelivery": False,
+                    "description": "전화: 031-458-2288",
+                }
+            ],
+            metadata=[
+                {
+                    "shopId": "wrong",
+                    "shopName": "티스테이션 안양호계점 · 경기도 안양시 동안구",
+                    "isInstallable": True,
+                }
+            ],
+        )
+
+
+class _FakeRouterLLM:
+    def with_structured_output(self, model, method):
+        return _wrap_relevant(_FakeStructuredLLM())
+
+
+class _FakeToolLoopExecutor:
+    def __init__(self, *args, **kwargs):
+        self.final_text = "Ready to confirm this order."
+        self.tool_calls = [
+            {
+                "name": "get_final_price_tool",
+                "args": {},
+                "output": json.dumps({"status": "success", "data": {"extra_fvr_sale_prc": 77050}}),
+            }
+        ]
+
+    async def stream(self):
+        if False:
+            yield None
+
+    async def run_required_tool(self, name, args):
+        self.tool_calls.append({
+            "name": name,
+            "args": args,
+            "output": json.dumps({
+                "status": "success",
+                "data": {
+                    "items": [{
+                        "shop_id": "F00721",
+                        "status": "available",
+                        "slots": [{"cal_day": "20260708", "tm": "1400"}],
+                    }],
+                },
+            }),
+        })
+        if False:
+            yield None
+
+
+class _FakeDatepickStructuredLLM:
+    async def ainvoke(self, messages):
+        return DatepickTemplate(
+            assistantResponse="예약 가능한 날짜를 확인해 주세요.",
+            dates=[
+                {"date": "20260710", "available": True, "availableTimes": [10, 11], "index": 0},
+                {"date": "이미 포맷됨", "available": False, "availableTimes": [], "index": 1},
+            ],
+            selectedDate=0,
+            metadata={"shopId": "F00721"},
+        )
+
+
+class _FakeDatepickRouterLLM:
+    def with_structured_output(self, model, method):
+        return _wrap_relevant(_FakeDatepickStructuredLLM())
+
+
+class _FakeProductStructuredLLM:
+    async def ainvoke(self, messages):
+        return ProductTemplate(
+            assistantResponse="추천 상품입니다.",
+            products=[
+                {
+                    "imageUrl": "",
+                    "title": "벤투스 S2 AS",
+                    "tires": "",
+                    "titleProductName": "사계절",
+                    "titleTires": "COMFORT",
+                    "brandName": "",
+                    "oeBadgeYn": "",
+                    "price": 180000,
+                    "originalPrice": 200000,
+                    "discountRate": 10,
+                    "discountAmount": 20000,
+                    "rate": 4.5,
+                    "totalQuantity": 7,
+                    "tags": [
+                        {"text": "프리미엄+", "primary": True},
+                        {"text": "사계절", "primary": False},
+                        {"text": "조용함", "primary": False},
+                    ],
+                }
+            ],
+            metadata=[{"goodsId": "G0001"}],
+        )
+
+
+class _FakeProductRouterLLM:
+    def with_structured_output(self, model, method):
+        return _wrap_relevant(_FakeProductStructuredLLM())
+
+
+class _FakeShortProductStructuredLLM:
+    async def ainvoke(self, messages):
+        return ProductTemplate(
+            assistantResponse="두 개만 언급한 답변입니다.",
+            products=[
+                {
+                    "imageUrl": "",
+                    "title": "임의 상품 1",
+                    "tires": "",
+                    "titleProductName": "임의 상품 1",
+                    "titleTires": "",
+                    "brandName": "",
+                    "oeBadgeYn": "",
+                    "price": 1,
+                    "originalPrice": 1,
+                    "discountRate": 0,
+                    "discountAmount": 0,
+                    "rate": 0,
+                    "totalQuantity": 0,
+                    "tags": [],
+                },
+                {
+                    "imageUrl": "",
+                    "title": "임의 상품 2",
+                    "tires": "",
+                    "titleProductName": "임의 상품 2",
+                    "titleTires": "",
+                    "brandName": "",
+                    "oeBadgeYn": "",
+                    "price": 1,
+                    "originalPrice": 1,
+                    "discountRate": 0,
+                    "discountAmount": 0,
+                    "rate": 0,
+                    "totalQuantity": 0,
+                    "tags": [],
+                },
+            ],
+            metadata=[{"goodsId": "TEMP1"}, {"goodsId": "TEMP2"}],
+        )
+
+
+class _FakeShortProductRouterLLM:
+    def with_structured_output(self, model, method):
+        return _wrap_relevant(_FakeShortProductStructuredLLM())
+
+
+class _PoisonRouterLLM:
+    """Fails loudly if the LLM is ever reached — used to prove the deterministic
+    product path never calls get_router_llm() when rows carry a goods_no."""
+
+    def with_structured_output(self, model, method):
+        raise AssertionError("get_router_llm() should not be called for the deterministic product path")
+
+
+class _FakeQuantitySignalLLM:
+    def __init__(self, asks_quantity: bool, states_staggered_max_two: bool = False):
+        self._asks_quantity = asks_quantity
+        self._states_staggered_max_two = states_staggered_max_two
+
+    async def ainvoke(self, messages):
+        return templates._AnswerUiSignals(  # noqa: SLF001
+            requests_store_selection=False,
+            requests_datepick=False,
+            asks_quantity=self._asks_quantity,
+            states_staggered_max_two=self._states_staggered_max_two,
+        )
+
+
+class _FakeQuantitySignalRouterLLM:
+    def __init__(self, asks_quantity: bool, states_staggered_max_two: bool = False):
+        self._asks_quantity = asks_quantity
+        self._states_staggered_max_two = states_staggered_max_two
+
+    def with_structured_output(self, model, method):
+        return _FakeQuantitySignalLLM(self._asks_quantity, self._states_staggered_max_two)
+
+
+def test_plain_store_search_does_not_emit_location_template(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
+    tool_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "C01410",
+                    "shop_nm": "티스테이션 안양호계점",
+                    "addr_base": "경기도 안양시 동안구",
+                    "addr_dtl": "귀인로 76 (호계동)",
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "경기권 보관서비스 매장입니다.",
+            [{"name": "get_store_list_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is None
+
+
+def test_location_template_normalizes_store_name_and_address_from_tool_output(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
+    tool_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "C01410",
+                    "shop_nm": "티스테이션 안양호계점",
+                    "addr_base": "경기도 안양시 동안구",
+                    "addr_dtl": "귀인로 76 (호계동)",
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "경기권 보관서비스 매장입니다.",
+            [{"name": "get_store_list_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+            slots=ConversationSlots(goods_no="G000000309783", ord_qty=2, pending_intent="order"),
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    store = event["data"]["stores"][0]
+    meta = event["data"]["metadata"][0]
+    assert store["nameAddress"] == "티스테이션 안양호계점"
+    assert store["detailAddress"] == "경기도 안양시 동안구 귀인로 76 (호계동)"
+    assert store["description"] == (
+        "주소: 경기도 안양시 동안구 귀인로 76 (호계동)\n"
+        "연락처: -\n"
+        "평일: -\n"
+        "토요일: -\n"
+        "휴무일: -\n"
+        "특징: -\n"
+        "서비스: -"
+    )
+    assert meta["shopId"] == "C01410"
+    assert meta["shopName"] == "티스테이션 안양호계점"
+
+
+def test_location_template_marks_booking_flow_from_order_slots(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeRouterLLM())
+    tool_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F00721",
+                    "shop_nm": "T-Station Hannam Branch",
+                    "addr_base": "80, Hannam-daero, Yongsan-gu, Seoul",
+                    "addr_dtl": "",
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "I checked. It can be installed at T-Station Hannam Branch.",
+            [{"name": "get_store_list_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+            slots=ConversationSlots(
+                goods_no="G000000309783",
+                ord_qty=2,
+                pending_intent="order",
+                goal_type="place_order",
+            ),
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["data"]["isBookingFlow"] is True
+    assert event["data"]["metadata"][0]["shopId"] == "F00721"
+
+
+def test_location_template_builds_directly_from_tool_items(monkeypatch):
+    def fail_if_llm_builder_is_used():
+        raise AssertionError("location template should be built directly from store tool output")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_if_llm_builder_is_used)
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "shop_id": "F09090",
+                    "shop_nm": "T-Station Hannam",
+                    "addr_base": "Seoul Yongsan-gu",
+                    "addr_dtl": "Hannam-daero 80",
+                    "tel_no": "02-790-2921",
+                    "is_all_my_t": True,
+                    "is_installable": True,
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "Here are matching stores.",
+            [{"name": "search_stores_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+            slots=ConversationSlots(goods_no="G000000309783", ord_qty=4, pending_intent="order"),
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["data"]["stores"][0]["nameAddress"] == "T-Station Hannam"
+    assert event["data"]["stores"][0]["detailAddress"] == "Seoul Yongsan-gu Hannam-daero 80"
+    assert event["data"]["metadata"][0]["shopId"] == "F09090"
+    assert event["data"]["metadata"][0]["sourceTool"] == "search_stores_tool"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["shop_id"] == "F09090"
+
+
+def test_listcar_template_builds_directly_from_registered_car_tool(monkeypatch):
+    def fail_if_llm_builder_is_used():
+        raise AssertionError("listCar template should be built directly from registered-car tool output")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_if_llm_builder_is_used)
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "12가3456",
+                    "car_lnc_cd": "W000001",
+                    "mbr_car_unif_no": "1001",
+                    "car_maker": "Hyundai",
+                    "car_nm": "Tucson",
+                    "car_model_det": "Tucson Diesel",
+                    "tire_size_fr": "225/55R18",
+                    "tire_size_re": "225/55R18",
+                },
+                {
+                    "car_no": "34나5678",
+                    "car_lnc_cd": "W000002",
+                    "mbr_car_unif_no": "1002",
+                    "car_maker": "Volkswagen",
+                    "car_nm": "Jetta",
+                    "car_model_det": "Jetta 2.0 TDI",
+                    "tire_size_fr": "245/45R17",
+                    "tire_size_re": "245/45R17",
+                },
+                {
+                    "car_no": "56다9012",
+                    "car_lnc_cd": "W000003",
+                    "mbr_car_unif_no": "1003",
+                    "car_maker": "Genesis",
+                    "car_nm": "GV70",
+                    "car_model_det": "GV70 AWD",
+                    "tire_size_fr": "235/55R19",
+                    "tire_size_re": "235/55R19",
+                },
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "Registered cars found. Please select one.",
+            [
+                {
+                    "name": "get_my_cars_tool",
+                    "args": {"mbr_no": "M123"},
+                    "output": json.dumps(tool_output, ensure_ascii=False),
+                }
+            ],
+            slots=ConversationSlots(pending_intent="stock", goal_type="store_with_stock"),
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "listCar"
+    assert [item["licensePlate"] for item in event["data"]["listCar"]] == ["12가3456", "34나5678", "56다9012"]
+    assert event["data"]["metadata"][0]["carLncCd"] == "W000001"
+    assert event["data"]["metadata"][0]["tireSize"] == "225/55R18"
+    assert event["data"]["metadata"][0]["ctaAction"] == "select_vehicle_candidate"
+    assert event["data"]["metadata"][0]["sourceIntent"] == "stock_store_search"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["carLncCd"] == "W000001"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["tireSize"] == "225/55R18"
+
+
+def test_listcar_template_preserves_staggered_front_rear_sizes(monkeypatch):
+    def fail_if_llm_builder_is_used():
+        raise AssertionError("listCar template should be built directly from registered-car tool output")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_if_llm_builder_is_used)
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "56모2162",
+                    "car_lnc_cd": "W000003",
+                    "car_maker": "BMW",
+                    "car_nm": "3 Series",
+                    "car_model_det": "3 Series GT",
+                    "tire_size_fr": "225/50R18",
+                    "tire_size_re": "255/50R18",
+                }
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "Registered cars found. Please select one.",
+            [{"name": "get_my_cars_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "listCar"
+    assert event["data"]["metadata"][0]["tireSize"] == "225/50R18"
+    assert event["data"]["metadata"][0]["tireSizeRe"] == "255/50R18"
+    assert event["data"]["metadata"][0]["availableSizes"] == ["225/50R18", "255/50R18"]
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["tireSize"] == "225/50R18"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["tireSizeRe"] == "255/50R18"
+    assert event["data"]["metadata"][0]["ui_action"]["slots"]["carModelDet"] == "3 Series GT"
+
+
+def test_datepick_template_normalizes_raw_yyyymmdd_date(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "예약 가능한 날짜를 확인해 주세요.",
+            [{"name": "get_store_schedule_tool", "args": {"shop_id": "F00721"}, "output": json.dumps({"data": {"stores": []}}, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["data"]["dates"][0]["date"] == "2026년 07월 10일"
+    assert event["data"]["dates"][1]["date"] == "이미 포맷됨"
+
+
+def test_product_template_normalizes_tags_from_tool_output(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    tool_output = {
+        "status": "success",
+        "items": [
+            {
+                "goods_no": "G0001",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+                "brand_nm": "HANKOOK",
+                "image_url": "https://example.com/tire.png",
+                "prc_grd_nm": "프리미엄+",
+                "goods_pfm_nm": "COMFORT",
+                "goods_dtl_pfm_nm": "흡음재 적용",
+                "sound_absorber_yn": "Y",
+                "oe_badge_yn": "Y",
+                "extra_fvr_sale_prc": 180000,
+                "sale_prc": 200000,
+                "rating_avg": 4.5,
+                "total_qty": 7,
+            }
+        ],
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "추천 상품입니다.",
+            # recommend tool (always-card) so this render/normalization test is unaffected
+            # by the search_product selection gate (issue 3).
+            [{"name": "get_products_recommendations_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    product = event["data"]["products"][0]
+    assert product["title"] == "벤투스 S2 AS 245/45R19"
+    assert product["titleProductName"] == "벤투스 S2 AS"
+    assert product["titleTires"] == "245/45R19"
+    assert product["tires"] == "245/45R19"
+    assert product["brandName"] == "HANKOOK"
+    assert product["imageUrl"] == "https://example.com/tire.png"
+    assert product["price"] == 180000
+    assert product["originalPrice"] == 200000
+    assert product["discountAmount"] == 20000
+    assert product["discountRate"] == 10.0
+    assert product["rate"] == 4.5
+    assert product["totalQuantity"] == 7
+    assert product["tags"] == [
+        {"text": "프리미엄", "primary": True},
+        {"text": "정숙/승차감", "primary": False},
+        {"text": "흡음재", "primary": False},
+    ]
+    assert product["oeBadgeYn"] == "Y"
+
+
+def test_product_card_uses_general_benefit_price_when_personalized_price_is_higher():
+    product = templates._product_item_from_row(
+        {
+            "goods_no": "G000000320103",
+            "goods_nm": "벤투스 에보",
+            "tire_size_1": "225/40R19",
+            "sale_prc": 295900,
+            "extra_fvr_sale_prc": 222100,
+            "extra_fvr_sale_per": 25.0,
+            "cheapest_final_prc": 281100,
+        }
+    )
+
+    assert product.price == 222100
+    assert product.originalPrice == 295900
+    assert product.discountAmount == 73800
+    assert product.discountRate == 24.9
+
+
+def test_product_card_discount_rate_keeps_extra_benefit_fallback_consistent():
+    product = templates._product_item_from_row(
+        {
+            "goods_no": "G0001",
+            "goods_nm": "테스트 타이어",
+            "tire_size_1": "225/40R19",
+            "sale_prc": 200000,
+            "extra_fvr_sale_prc": 180000,
+            "extra_fvr_sale_per": 10.0,
+        }
+    )
+
+    assert product.price == 180000
+    assert product.discountAmount == 20000
+    assert product.discountRate == 10.0
+
+
+def test_product_template_rebuilds_card_count_from_tool_rows(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeShortProductRouterLLM())
+    tool_output = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "goods_no": f"G{i:04d}",
+                    "goods_nm": f"상품{i}",
+                    "tire_size_1": f"22{i}/45R17",
+                    "brand_nm": "HANKOOK",
+                    "extra_fvr_sale_prc": 199_000 - i,
+                    "sale_prc": 210_000 - i,
+                    "rating_avg": 4.0,
+                    "review_count": i,
+                }
+                for i in range(1, 7)
+            ]
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "답변에는 2개만 언급됐지만 도구 결과는 6개입니다.",
+            [{"name": "search_product_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert len(event["data"]["products"]) == 6
+    assert len(event["data"]["metadata"]) == 6
+    assert event["data"]["products"][0]["titleProductName"] == "상품1"
+    assert event["data"]["products"][5]["titleProductName"] == "상품6"
+    assert [meta["goodsId"] for meta in event["data"]["metadata"]] == [f"G{i:04d}" for i in range(1, 7)]
+    assert [meta["slots"]["tire_size"] for meta in event["data"]["metadata"]] == [
+        f"22{i}/45R17" for i in range(1, 7)
+    ]
+
+
+def test_product_template_builds_without_llm_when_rows_have_goods_no(monkeypatch):
+    """Happy path: rows carry a goods_no, so build_product_data_event() must never
+    reach get_router_llm() — the deterministic row->field mapping owns this case."""
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _PoisonRouterLLM())
+    tool_output = {
+        "status": "success",
+        "items": [
+            {
+                "goods_no": "G0001",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+                "brand_nm": "HANKOOK",
+                "extra_fvr_sale_prc": 180000,
+                "sale_prc": 200000,
+                "rating_avg": 4.5,
+                "total_qty": 7,
+            }
+        ],
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "추천 상품입니다.",
+            [{"name": "get_products_recommendations_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["data"]["products"][0]["titleProductName"] == "벤투스 S2 AS"
+    assert event["data"]["metadata"][0]["goodsId"] == "G0001"
+    assert event["data"]["metadata"][0]["slots"]["tire_size"] == "245/45R19"
+
+
+def test_product_template_falls_back_to_llm_when_rows_have_no_goods_no(monkeypatch):
+    """Parse-failure fallback: rows exist but none carry a resolvable goods_no, so
+    build_product_data_event() must fall back to the LLM extraction+relevance call —
+    the one remaining LLM usage for this template."""
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    tool_output = {
+        "status": "success",
+        "items": [
+            {
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+            }
+        ],
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "추천 상품입니다.",
+            [{"name": "get_products_recommendations_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    # Comes from _FakeProductStructuredLLM's fixed payload — proves the LLM fallback ran.
+    assert event["data"]["metadata"][0]["goodsId"] == "G0001"
+    assert event["data"]["metadata"][0]["slots"]["tire_size"] == "245/45R19"
+    assert event["data"]["products"][0]["title"] == "벤투스 S2 AS 245/45R19"
+
+
+def test_location_answer_uses_fixed_store_info_labels():
+    tool_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F07779",
+                    "shop_nm": "티스테이션 방배점",
+                    "is_all_my_t": True,
+                    "is_installable": True,
+                    "is_imported_car": True,
+                    "is_ev_specialty": True,
+                    "is_ev_charge_available": False,
+                    "svc_codes": ["113", "119", "121", "124", "126"],
+                    "addr_base": "서울특별시 서초구",
+                    "addr_dtl": "효령로 225 (서초동)",
+                    "tel_no": "02-3471-1918",
+                    "shop_biz_strt_time": "09",
+                    "shop_biz_end_time": "19",
+                    "shop_biz_end_wday": "토요일",
+                    "shop_sat_strt_time": "09:00",
+                    "shop_sat_end_time": "16:00",
+                }
+            ]
+        },
+    }
+
+    answer = templates.format_location_answer(
+        "서초구에 **타이어 보관서비스 가능한 매장**은 1곳이 확인됩니다.",
+        [{"name": "get_store_list_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+    )
+
+    assert answer == (
+        "서초구에 **타이어 보관서비스 가능한 매장**은 1곳이 확인됩니다.\n\n"
+        "1. **티스테이션 방배점**\n"
+        "   주소: 서울특별시 서초구 효령로 225 (서초동)\n"
+        "   연락처: 02-3471-1918\n"
+        "   평일: 09:00~19:00\n"
+        "   토요일: 09:00~16:00\n"
+        "   휴무일: 일요일\n"
+        "   특징: all my T, 온라인 장착 가능, 수입차 특화점, 전기차 특화점\n"
+        "   서비스: 타이어, 타이어 보관서비스, 경정비, 휠얼라이먼트, 무상점검"
+    )
+
+
+def _store_row(shop_id: str, shop_nm: str, **overrides) -> dict:
+    row = {
+        "shop_id": shop_id,
+        "shop_nm": shop_nm,
+        "addr_base": "전라남도 여수시",
+        "addr_dtl": "여수로 1",
+        "tel_no": "061-000-0000",
+        "shop_biz_strt_time": "09",
+        "shop_biz_end_time": "19",
+        "shop_biz_end_wday": "토요일",
+    }
+    row.update(overrides)
+    return row
+
+
+def test_location_answer_shows_customer_rating_when_store_has_one():
+    # Without a visible rating the "highest rated first" ordering is invisible to the user.
+    tool_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                _store_row("F001", "티스테이션 여수점", rating_idx=4.8),
+                _store_row("F002", "티스테이션 여천점", rating_idx=4.2),
+            ]
+        },
+    }
+
+    answer = templates.format_location_answer(
+        "여수 지역 매장을 평점 높은 순으로 보여드릴게요.",
+        [{
+            "name": "search_stores_tool",
+            "args": {"region_code": "여수", "sort_by": "rating"},
+            "output": json.dumps(tool_output, ensure_ascii=False),
+        }],
+    )
+
+    assert "평점: 4.8" in answer
+    assert "평점: 4.2" in answer
+    assert answer.index("평점: 4.8") < answer.index("평점: 4.2")
+
+
+def test_location_answer_omits_rating_line_when_store_has_no_rating():
+    # rating_idx is None for stores with no reviews — it must never render as "평점: 0.0".
+    tool_output = {
+        "status": "success",
+        "data": {"stores": [_store_row("F003", "티스테이션 돌산점", rating_idx=None)]},
+    }
+
+    answer = templates.format_location_answer(
+        "여수 지역 매장입니다.",
+        [{"name": "search_stores_tool", "args": {}, "output": json.dumps(tool_output, ensure_ascii=False)}],
+    )
+
+    assert "평점" not in answer
+
+
+def test_compact_answer_spacing_reduces_blank_lines_to_single_newline():
+    answer = templates.compact_answer_spacing(
+        "좋아요 😊 T’Bot과 함께 타이어 쇼핑을 도와드릴게요.\n\n"
+        "원하시는 방식으로 시작할 수 있어요.\n\n"
+        "1. **내 차에 맞는 타이어 추천**\n"
+        "   - 등록된 차량 기준으로 찾아드릴 수 있어요.  \n"
+        "   \n"
+        "원하시면 바로 추천해드릴게요."
+    )
+
+    assert "\n\n" not in answer
+    assert answer == (
+        "좋아요 😊 T’Bot과 함께 타이어 쇼핑을 도와드릴게요.\n"
+        "원하시는 방식으로 시작할 수 있어요.\n"
+        "1. **내 차에 맞는 타이어 추천**\n"
+        "   - 등록된 차량 기준으로 찾아드릴 수 있어요.\n"
+        "원하시면 바로 추천해드릴게요."
+    )
+
+
+def test_get_events_tool_builds_deterministic_quickreply_without_new_badges():
+    tool_calls = [
+        {
+            "name": "get_events_tool",
+            "output": json.dumps({
+                "status": "success",
+                "http_status": 200,
+                "data": {
+                    "total": 2,
+                    "items": [
+                        {
+                            "evt_nm": "2026 안심서비스 퀴즈 이벤트",
+                            "evt_strt_dtime": "2026-06-24 16:00:00",
+                            "evt_end_dtime": "2026-07-22 23:59:59",
+                            "new_evt_yn": "Y",
+                        },
+                        {
+                            "evt_nm": "새롭게 바뀐 리뷰이벤트!",
+                            "evt_strt_dtime": "2024-09-05 08:30:00",
+                            "evt_end_dtime": "2026-12-31 23:59:59",
+                            "new_evt_yn": "Y",
+                        },
+                    ],
+                },
+            }),
+        }
+    ]
+
+    event = templates.build_current_events_quickreply_event(tool_calls)
+
+    assert event is not None
+    data = event["data"]
+    assistant = data["assistantResponse"]
+    assert "현재 진행 중인 이벤트는 총 2개입니다." in assistant
+    assert "\n\n진행 중인 이벤트\n" in assistant
+    assert "1. **2026 안심서비스 퀴즈 이벤트**" in assistant
+    assert "2. **새롭게 바뀐 리뷰이벤트!**" in assistant
+    assert "기간: 2024-09-05 ~ 2026-12-31" in assistant
+    assert "신규 이벤트" not in assistant
+    assert "\n\n원하시면 특정 이벤트의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요." in assistant
+    assert assistant.endswith("원하시면 특정 이벤트의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요.")
+    assert data["quickReplies"][0]["label"] == "진행 중인 이벤트"
+
+
+def test_get_deals_tool_builds_same_deterministic_quickreply_format():
+    tool_calls = [
+        {
+            "name": "get_deals_tool",
+            "output": json.dumps({
+                "status": "success",
+                "http_status": 200,
+                "data": {
+                    "total": 1,
+                    "items": [
+                        {
+                            "deal_nm": "여름맞이 기획전",
+                            "deal_strt_dtime": "2026-06-01 00:00:00",
+                            "deal_end_dtime": "2026-07-15 23:59:59",
+                            "deal_badge_nm": "신규",
+                        },
+                    ],
+                },
+            }),
+        }
+    ]
+
+    event = templates.build_current_events_quickreply_event(tool_calls)
+
+    assert event is not None
+    data = event["data"]
+    assistant = data["assistantResponse"]
+    assert "현재 진행 중인 기획전은 총 1개입니다." in assistant
+    assert "\n\n진행 중인 기획전\n" in assistant
+    assert "1. **여름맞이 기획전**" in assistant
+    assert "기간: 2026-06-01 ~ 2026-07-15" in assistant
+    assert "신규 이벤트" not in assistant
+    assert "신규 기획전" not in assistant
+    assert "\n\n원하시면 특정 기획전의 대상 상품이나 적용 가능한 혜택도 확인해드릴게요." in assistant
+    assert data["quickReplies"] == [
+        {"label": "진행 중인 기획전", "url": "https://www.tstation.com/promotion/deal-list", "domain": "DISCOVERY"}
+    ]
+
+
+def test_events_and_deals_emit_both_ctas():
+    tool_calls = [
+        {
+            "name": "get_events_tool",
+            "output": json.dumps({
+                "status": "success",
+                "data": {"items": [{"evt_nm": "이벤트 A", "evt_strt_dtime": "2026-07-01", "evt_end_dtime": "2026-07-31"}]},
+            }),
+        },
+        {
+            "name": "get_deals_tool",
+            "output": json.dumps({
+                "status": "success",
+                "data": {"items": [{"deal_nm": "기획전 B", "deal_strt_dtime": "2026-08-01", "deal_end_dtime": "2026-08-31"}]},
+            }),
+        },
+    ]
+
+    event = templates.build_current_events_quickreply_event(tool_calls)
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "\n\n진행 중인 이벤트\n" in assistant
+    assert "\n\n진행 중인 기획전\n" in assistant
+    assert "\n\n원하시면 특정 이벤트나 기획전의 대상 상품과 적용 가능한 혜택도 확인해드릴게요." in assistant
+    assert [chip["label"] for chip in event["data"]["quickReplies"]] == ["진행 중인 이벤트", "진행 중인 기획전"]
+
+
+def test_order_history_tool_builds_history_quickreply_instead_of_quantity_chips():
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "주문내역을 확인했어요.",
+            [
+                {
+                    "name": "get_orders_of_user_tool",
+                    "args": {},
+                    "output": json.dumps(
+                        {
+                            "status": "success",
+                            "data": {
+                                "items": [
+                                    {
+                                        "ord_no": "O202604080001",
+                                        "ord_prgs_stat_nm": "출고완료",
+                                        "goods_nm": "Ventus S2 AS",
+                                        "ord_qty": "2",
+                                        "sys_reg_dtime": "2026-04-08",
+                                    }
+                                ]
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+            slots=ConversationSlots(goods_no="G000000309783", pending_intent="order", goal_type="place_order"),
+            user_text="내 주문내역 보여줘",
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    quick_replies = event["data"]["quickReplies"]
+    assert any(chip.get("url") == CTAUrls.ORDER_HISTORY for chip in quick_replies)
+    assert [chip["label"] for chip in quick_replies] != ["1개", "2개", "3개", "4개"]
+
+
+def test_my_coupons_tool_builds_quickreply_when_discount_value_is_null():
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "보유 쿠폰을 확인했어요.",
+            [
+                {
+                    "name": "get_my_coupons_tool",
+                    "args": {},
+                    "output": json.dumps(
+                        {
+                            "status": "success",
+                            "data": {
+                                "coupons": [
+                                    {
+                                        "cpn_no": "C000000001",
+                                        "cpn_nm": "할인 조건 확인 필요 쿠폰",
+                                        "rt_amt_val": None,
+                                    },
+                                    {
+                                        "cpn_no": "C000000002",
+                                        "cpn_nm": "30% 할인쿠폰",
+                                        "rt_amt_val": 30,
+                                    },
+                                ]
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+            user_text="내 30% 할인 쿠폰 어디있어?",
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_my_coupons_lookup"
+    assert "할인 조건 확인 필요 쿠폰" in event["data"]["assistantResponse"]
+    assert "30% 할인쿠폰 (30% 할인)" in event["data"]["assistantResponse"]
+
+
+def test_maintenance_history_tool_builds_lookup_quickreply_with_service_history_cta():
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정비이력을 확인했어요.",
+            [
+                {
+                    "name": "get_maintenance_history_tool",
+                    "args": {"limit": 5},
+                    "output": json.dumps(
+                        {
+                            "status": "success",
+                            "data": {
+                                "items": [
+                                    {
+                                        "car_svc_dt": "2026-04-18",
+                                        "shop_nm": "티스테이션 고양시청점",
+                                        "car_svc_info": "타이어 장착",
+                                        "car_svc_qty": "2",
+                                    }
+                                ]
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+            user_text="내차 정비내역 보여줘",
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_maintenance_history_lookup"
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
+    assert "티스테이션 고양시청점" in event["data"]["assistantResponse"]
+
+
+def test_static_faq_policy_tool_preserves_official_quick_replies():
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정비이력과 매장서비스 내역은 마이페이지에서 확인할 수 있어요.",
+            [
+                {
+                    "name": "get_static_faq_policy_tool",
+                    "args": {"policy_key": "maintenance_history_access_policy"},
+                    "output": json.dumps(
+                        {
+                            "status": "success",
+                            "data": {
+                                "policy_key": "maintenance_history_access_policy",
+                                "answer": "정비이력과 매장서비스 내역은 마이페이지의 매장서비스 내역에서 확인할 수 있어요.",
+                                "quick_replies": [
+                                    {
+                                        "label": "매장서비스 내역",
+                                        "url": CTAUrls.STORE_SERVICE_HISTORY,
+                                        "domain": "SUPPORT",
+                                    },
+                                    {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+                                ],
+                                "predicted_domains": ["SUPPORT", "TRANSACTION"],
+                            },
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ],
+            user_text="정비이력은 어디서 확인해?",
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_static_faq_policy"
+    quick_replies = event["data"]["quickReplies"]
+    assert quick_replies[0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
+    assert all(chip.get("url") != CTAUrls.MY_COUPON_LIST_PC for chip in quick_replies)
+
+
+def test_quantity_required_flow_uses_fixed_quantity_quick_replies():
+    slots = ConversationSlots(goods_no="G000000309783", pending_intent="order", goal_type="place_order")
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+
+    chips = templates.quantity_quick_replies(slots, decision)
+
+    assert chips == [
+        {"label": "1개", "domain": "TRANSACTION"},
+        {"label": "2개", "domain": "TRANSACTION"},
+        {"label": "3개", "domain": "TRANSACTION"},
+        {"label": "4개", "domain": "TRANSACTION"},
+    ]
+
+
+def test_quantity_options_are_added_to_quantity_required_answer():
+    slots = ConversationSlots(goods_no="G000000309783", pending_intent="order", goal_type="place_order")
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+
+    answer = templates.ensure_quantity_options("구매 진행을 위해 타이어 수량을 선택해 주세요.", slots, decision)
+
+    assert "1개, 2개, 3개, 4개" in answer
+
+
+def test_confirmed_quantity_does_not_use_quantity_quick_replies():
+    slots = ConversationSlots(goods_no="G000000309783", ord_qty=2, pending_intent="order", goal_type="place_order")
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["place_order"])
+
+    assert templates.quantity_quick_replies(slots, decision) == []
+
+
+def test_staggered_vehicle_quantity_quick_replies_offer_only_one_and_two():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        pending_intent="cart",
+        goal_type="add_to_cart",
+        tire_size="225/40R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"])
+
+    chips = templates.quantity_quick_replies(slots, decision)
+
+    assert chips == [
+        {"label": "1개", "domain": "TRANSACTION"},
+        {"label": "2개", "domain": "TRANSACTION"},
+    ]
+
+
+def test_staggered_vehicle_quantity_options_text_lists_one_and_two():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        pending_intent="cart",
+        goal_type="add_to_cart",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+    )
+    decision = RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"])
+
+    answer = templates.ensure_quantity_options("수량을 선택해 주세요.", slots, decision)
+
+    assert "1개, 2개 중에서 선택해 주세요" in answer
+    assert "3개" not in answer
+
+
+def test_enforce_quantity_chips_replaces_off_topic_chips_when_answer_asks_quantity(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeQuantitySignalRouterLLM(asks_quantity=True))
+    answer = (
+        "확인했습니다. **벤투스 S2 AS 245/45R18** 상품이 있습니다.\n"
+        "장바구니에 담으려면 수량이 필요해요.\n"
+        "보통 승용차는 **4개**를 많이 담는데, **4개로 장바구니에 담아드릴까요?**"
+    )
+    store_chips = [
+        {"label": "서울 강남점", "domain": "TRANSACTION"},
+        {"label": "부산 해운대점", "domain": "TRANSACTION"},
+    ]
+
+    chips = asyncio.run(templates.enforce_quantity_chips(answer, store_chips))
+
+    assert [chip["label"] for chip in chips] == ["1개", "2개", "3개", "4개"]
+
+
+def test_enforce_quantity_chips_keeps_chips_when_answer_is_not_asking_quantity(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeQuantitySignalRouterLLM(asks_quantity=False))
+    chips = [{"label": "장바구니 확인", "domain": "TRANSACTION"}]
+
+    assert asyncio.run(templates.enforce_quantity_chips("이미 장바구니에 담겨있는 상품이에요.", chips)) is chips
+    assert (
+        asyncio.run(
+            templates.enforce_quantity_chips("수량 4개로 확정했어요. 이제 장착할 매장을 알려주세요.", chips)
+        )
+        is chips
+    )
+
+
+def test_enforce_quantity_chips_keeps_region_chips_when_quantity_is_confirmed(monkeypatch):
+    def fail_if_llm_used():
+        raise AssertionError("enforce_quantity_chips should not call the LLM once quantity is already confirmed")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_if_llm_used)
+    slots = ConversationSlots(
+        goods_no="G000000317719",
+        tire_size="255/35R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    region_chips = [
+        {"label": "강남 근처", "domain": "TRANSACTION"},
+        {"label": "서울 송파", "domain": "TRANSACTION"},
+    ]
+    answer = "- 수량: 2개\n장착 예약까지 진행하시려면 원하시는 지역이나 매장명을 알려주세요."
+
+    chips = asyncio.run(templates.enforce_quantity_chips(answer, region_chips, slots))
+
+    assert chips is region_chips
+
+
+def test_enforce_quantity_chips_limits_to_two_for_staggered_fitment(monkeypatch):
+    monkeypatch.setattr(
+        templates,
+        "get_router_llm",
+        lambda: _FakeQuantitySignalRouterLLM(asks_quantity=True, states_staggered_max_two=True),
+    )
+    answer = "앞/뒤 규격이 달라 축당 최대 2개까지 가능해요. 몇 개 주문하시겠어요?"
+
+    chips = asyncio.run(templates.enforce_quantity_chips(answer, []))
+
+    assert [chip["label"] for chip in chips] == ["1개", "2개"]
+
+
+def test_enforce_quantity_chips_uses_staggered_slots_when_answer_omits_limit(monkeypatch):
+    monkeypatch.setattr(
+        templates,
+        "get_router_llm",
+        lambda: _FakeQuantitySignalRouterLLM(asks_quantity=True, states_staggered_max_two=False),
+    )
+    slots = ConversationSlots(
+        goods_no="G000000319580",
+        tire_size="255/35R19",
+        tire_size_front="225/40R19",
+        tire_size_rear="255/35R19",
+    )
+    answer = "구매를 진행하시려면 수량을 선택해 주세요. 뒤 타이어만 교체하실 경우 보통 2개를 선택합니다."
+    composer_chips = [
+        {"label": "1개", "domain": "TRANSACTION"},
+        {"label": "2개", "domain": "TRANSACTION"},
+        {"label": "3개", "domain": "TRANSACTION"},
+        {"label": "4개", "domain": "TRANSACTION"},
+    ]
+
+    chips = asyncio.run(templates.enforce_quantity_chips(answer, composer_chips, slots))
+
+    assert [chip["label"] for chip in chips] == ["1개", "2개"]
+
+
+def test_preorder_fallback_builds_ready_order_card_from_slots():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        payment_amount=308200,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["place_order"],
+        slots_patch={"rsv_hour": "14"},
+    )
+
+    event = templates.build_preorder_fallback(
+        "아래 내용으로 구매 진행해도 될까요?",
+        slots,
+        decision,
+        schedule_verified=True,
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["isReadyToOrder"] is True
+    assert event["data"]["metadata"]["goodsId"] == "G000000309783"
+    assert event["data"]["metadata"]["tireSize"] == "245/45R19"
+    assert event["data"]["metadata"]["tire_size"] == "245/45R19"
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 308200
+    assert event["data"]["orderInfo"]["storeName"] == "티스테이션 한남점"
+    assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
+
+
+def test_preorder_fallback_requires_matching_schedule_evidence():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        payment_amount=308200,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["place_order"],
+        slots_patch={"rsv_hour": "14"},
+    )
+
+    event = templates.build_preorder_fallback(
+        "아래 내용으로 구매 진행해도 될까요?",
+        slots,
+        decision,
+    )
+
+    assert event is None
+
+
+def test_preorder_always_uses_order_action_even_with_stale_cart_state():
+    event = templates.build_preorder_data_event(
+        "아래 내용으로 구매 진행해도 될까요?",
+        {
+            "goods_no": "G000000309783",
+            "ord_qty": 4,
+            "pending_intent": "cart",
+            "goal_type": "add_to_cart",
+            "is_ready_to_add_to_cart": True,
+        },
+        source="test",
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["isReadyToOrder"] is True
+    assert event["data"]["isReadyToAddToCart"] is False
+
+
+def test_get_final_price_tool_builds_preorder_without_llm(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("get_final_price_tool preOrder should be built without LLM")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    price_output = {
+        "status": "success",
+        "data": {
+            "cheapest_final_prc": 150000,
+            "extra_fvr_sale_prc": 180000,
+            "wage_prc": 4100,
+            "sale_prc": 200000,
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "아래 내용으로 구매 진행해도 될까요?",
+            [
+                {
+                    "name": "get_final_price_tool",
+                    "args": {"goods_no": "G000000309783"},
+                    "output": json.dumps(price_output),
+                }
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["metadata"]["source"] == "chat_v3_final_price_preorder"
+    assert event["data"]["metadata"]["goodsId"] == "G000000309783"
+    assert event["data"]["metadata"]["tireSize"] == "245/45R19"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 368200
+    assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
+
+
+def test_present_order_preview_uses_slot_tire_size_when_tool_output_omits_it(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("present_order_preview_tool preOrder should be built without LLM")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        payment_amount=616400,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    preview_output = {
+        "status": "ok",
+        "goods_no": "G000000309783",
+        "ord_qty": 4,
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 한남점",
+        "requested_cal_day": "20260708",
+        "rsv_hour": "14",
+        "payment_amount": 616400,
+        "product_name": "벤투스 S2 AS",
+        "is_ready_to_order": True,
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "아래 내용으로 구매 진행해도 될까요?",
+            [
+                {
+                    "name": "present_order_preview_tool",
+                    "args": {"goods_no": "G000000309783", "ord_qty": 4},
+                    "output": json.dumps(preview_output),
+                }
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["metadata"]["source"] == "chat_v3_k1_order_preview"
+    assert event["data"]["metadata"]["tireSize"] == "245/45R19"
+    assert event["data"]["metadata"]["tire_size"] == "245/45R19"
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 616400
+
+
+def test_get_final_price_tool_does_not_build_preorder_without_schedule():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    price_output = {"status": "success", "data": {"extra_fvr_sale_prc": 180000, "wage_prc": 4100}}
+
+    event = templates.build_final_price_preorder_event(
+        "아래 내용으로 구매 진행해도 될까요?",
+        slots,
+        {
+            "name": "get_final_price_tool",
+            "args": {"goods_no": "G000000309783"},
+            "output": json.dumps(price_output),
+        },
+    )
+
+    assert event is None
+
+
+async def _collect_turn_events(request: TStationChatRequest) -> list[str]:
+    events = []
+    async for event in service._run_turn(request, {}):  # noqa: SLF001
+        events.append(event)
+    return events
+
+
+def _parse_sse_event(event: str) -> dict:
+    payload = event.removeprefix("data: ").strip()
+    return json.loads(payload) if payload.startswith("{") else {}
+
+
+def test_repeated_guard_still_terminates_without_executor(monkeypatch):
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(domain=Domain.LEADING, guard_id=GuardId.OUT_OF_SCOPE)
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots(last_guard_id=GuardId.OUT_OF_SCOPE.value, guard_repeat_count=1)
+
+    async def fake_save_slots(*args, **kwargs):
+        return None
+
+    async def fake_record_usage(*args, **kwargs):
+        return None
+
+    class ForbiddenToolLoopExecutor:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("guarded requests must not reach the normal executor")
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", ForbiddenToolLoopExecutor)
+    monkeypatch.setattr(service, "_record_real_usage", fake_record_usage)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "아이에게 들려줄 타이어의 역사에 대한 이야기를 짜줄래?"}],
+        user_id="test-user",
+        session_id="test-repeated-guard-no-executor",
+    )
+
+    events = asyncio.run(_collect_turn_events(request))
+    data_events = [_parse_sse_event(event) for event in events if event.startswith("data: {")]
+    quick_reply_events = [event for event in data_events if event.get("type") == "data"]
+
+    assert quick_reply_events
+    assert quick_reply_events[0]["template"] == "quickReply"
+    assert quick_reply_events[0]["assistant_response_source"] == "llm_guard_out_of_scope"
+
+
+def test_support_grounding_contract_requires_tool_or_clarification():
+    decision = RouteDecision(domain=Domain.SUPPORT, guard_id=GuardId.NONE)
+
+    assert service._support_answer_is_ungrounded(decision, []) is True  # noqa: SLF001
+
+    clarification = RouteDecision(
+        domain=Domain.SUPPORT,
+        guard_id=GuardId.NONE,
+        support_needs_clarification=True,
+    )
+    assert service._support_answer_is_ungrounded(clarification, []) is False  # noqa: SLF001
+
+    grounded = [
+        {
+            "name": "search_faq_hybrid_tool",
+            "args": {},
+            "output": json.dumps({"status": "success", "data": {"answer": "공식 FAQ 답변"}}),
+        }
+    ]
+    assert service._support_answer_is_ungrounded(decision, grounded) is False  # noqa: SLF001
+
+
+def test_ungrounded_support_answer_returns_out_of_scope_guard(monkeypatch):
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(domain=Domain.SUPPORT, guard_id=GuardId.NONE)
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots()
+
+    async def fake_save_slots(*args, **kwargs):
+        return None
+
+    async def fake_record_usage(*args, **kwargs):
+        return None
+
+    async def fake_load_tool_context(*args, **kwargs):
+        return []
+
+    class UngroundedSupportExecutor:
+        def __init__(self, *args, **kwargs):
+            self.final_text = "삼성화재 다이렉트 자동차 사고 접수 전화번호는 1588-5114입니다."
+            self.tool_calls = []
+            self.stopped_after_tool = False
+
+        async def stream(self):
+            if False:
+                yield None
+
+    async def fail_qc(*args, **kwargs):
+        raise AssertionError("ungrounded SUPPORT answers must be blocked before QC")
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "save_slots", fake_save_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", UngroundedSupportExecutor)
+    monkeypatch.setattr(service, "_record_real_usage", fake_record_usage)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_load_tool_context)
+    monkeypatch.setattr(service.qc, "verify_answer", fail_qc)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "삼성화재 다이렉트 전화번호좀 알려줘"}],
+        user_id="test-user",
+        session_id="test-ungrounded-support-guard",
+    )
+
+    events = asyncio.run(_collect_turn_events(request))
+    data_events = [_parse_sse_event(event) for event in events if event.startswith("data: {")]
+    quick_reply_events = [event for event in data_events if event.get("type") == "data"]
+
+    assert quick_reply_events
+    assert quick_reply_events[0]["template"] == "quickReply"
+    assert quick_reply_events[0]["assistant_response_source"] == "llm_guard_out_of_scope"
+    assert "삼성화재" not in quick_reply_events[0]["data"]["assistantResponse"]
+
+
+def test_ready_preorder_takes_priority_over_generic_price_template(monkeypatch):
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(
+            domain=Domain.TRANSACTION,
+            intents=["place_order"],
+            slots_patch={"rsv_hour": "14"},
+        )
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots(
+            goods_no="G000000309783",
+            tire_model="Ventus S2 AS",
+            tire_size="245/45R19",
+            ord_qty=2,
+            shop_id="F00721",
+            shop_name="T-Station Hannam",
+            requested_cal_day="20260708",
+            rsv_hour="14",
+            payment_amount=154100,
+            pending_intent="order",
+            goal_type="place_order",
+        )
+
+    async def fake_verify_answer(answer, *args, **kwargs):
+        return answer
+
+    async def fake_build_rich_data_event(*args, **kwargs):
+        raise AssertionError("generic rich template should not run when preOrder is ready")
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", _FakeToolLoopExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service.templates, "build_rich_data_event", fake_build_rich_data_event)
+    monkeypatch.setattr(service, "save_slots", fake_noop)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "order"}],
+        user_id="test-user",
+        session_id="test-ready-preorder-priority",
+    )
+
+    events = asyncio.run(_collect_turn_events(request))
+    data_events = [_parse_sse_event(event) for event in events if event.startswith("data: {")]
+    templates_seen = [event.get("template") for event in data_events if event.get("type") == "data"]
+
+    assert "preOrder" in templates_seen
+    assert "cheapestProduct" not in templates_seen
+
+
+def test_present_order_preview_price_takes_priority_over_slot_fallback(monkeypatch):
+    async def fake_route_request(*args, **kwargs):
+        return RouteDecision(
+            domain=Domain.TRANSACTION,
+            intents=["place_order"],
+            slots_patch={"shop_id": "F07782", "shop_name": "티스테이션 한남점"},
+        )
+
+    async def fake_load_slots(session_id):
+        return ConversationSlots(
+            goods_no="G000000309698",
+            tire_model="키너지 GT",
+            tire_size="245/45R19",
+            ord_qty=2,
+            shop_id="F07782",
+            shop_name="티스테이션 한남점",
+            requested_cal_day="20260731",
+            rsv_hour="09",
+            pending_intent="order",
+            goal_type="place_order",
+        )
+
+    class PreviewExecutor:
+        def __init__(self, *args, **kwargs):
+            self.final_text = "주문 확인 부탁드립니다."
+            self.tool_calls = [
+                {
+                    "name": "present_order_preview_tool",
+                    "args": {
+                        "goods_no": "G000000309698",
+                        "ord_qty": 2,
+                        "payment_amount": 253400,
+                    },
+                    "output": json.dumps(
+                        {
+                            "status": "ok",
+                            "goods_no": "G000000309698",
+                            "ord_qty": 2,
+                            "shop_id": "F07782",
+                            "shop_name": "티스테이션 한남점",
+                            "requested_cal_day": "20260731",
+                            "rsv_hour": "09",
+                            "payment_amount": 253400,
+                            "product_name": "키너지 GT",
+                            "tire_size": "245/45R19",
+                            "is_ready_to_order": True,
+                        },
+                        ensure_ascii=False,
+                    ),
+                }
+            ]
+
+        async def stream(self):
+            if False:
+                yield None
+
+        async def run_required_tool(self, name, args):
+            self.tool_calls.append({
+                "name": name,
+                "args": args,
+                "output": json.dumps({
+                    "status": "success",
+                    "data": {
+                        "items": [{
+                            "shop_id": "F07782",
+                            "status": "available",
+                            "slots": [{"cal_day": "20260731", "tm": "0900"}],
+                        }],
+                    },
+                }),
+            })
+            if False:
+                yield None
+
+    async def fake_verify_answer(answer, *args, **kwargs):
+        return answer
+
+    async def fake_noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(service, "route_request", fake_route_request)
+    monkeypatch.setattr(service, "load_slots", fake_load_slots)
+    monkeypatch.setattr(service, "ToolLoopExecutor", PreviewExecutor)
+    monkeypatch.setattr(service.qc, "verify_answer", fake_verify_answer)
+    monkeypatch.setattr(service, "save_slots", fake_noop)
+    monkeypatch.setattr(service.memory, "load_tool_context", fake_noop)
+    monkeypatch.setattr(service.memory, "persist_turn_context", fake_noop)
+    monkeypatch.setattr(service, "_record_real_usage", fake_noop)
+    monkeypatch.setattr(service, "_tokens_enabled", lambda: False)
+    monkeypatch.setattr(service, "_flush_trace", lambda: None)
+
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2개 한남점에서 구매"}],
+        user_id="M200012931",
+        session_id="02215199-87c4-4ca2-922b-61aa305d0049",
+    )
+
+    events = asyncio.run(_collect_turn_events(request))
+    data_events = [_parse_sse_event(event) for event in events if event.startswith("data: {")]
+    preorder = next(event for event in data_events if event.get("template") == "preOrder")
+
+    assert preorder["data"]["metadata"]["source"] == "chat_v3_k1_order_preview"
+    assert preorder["data"]["orderInfo"]["paymentAmount"] == 253400
+
+
+def test_preorder_fallback_skips_irrelevant_followup_even_with_ready_slots():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        ord_qty=2,
+        shop_id="F00721",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    event = templates.build_preorder_fallback(
+        "무이자 할부도 되나요?",
+        slots,
+        RouteDecision(domain=Domain.TRANSACTION, intents=["installment"]),
+    )
+
+    assert event is None
+
+
+def test_preorder_fallback_skips_ready_add_to_cart_flow():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        ord_qty=4,
+        pending_intent="cart",
+        goal_type="add_to_cart",
+    )
+
+    event = templates.build_preorder_fallback(
+        "장바구니에 담아줘",
+        slots,
+        RouteDecision(domain=Domain.TRANSACTION, intents=["add_to_cart"], slots_patch={"ord_qty": 4}),
+    )
+
+    assert event is None
+
+
+def test_transaction_preview_source_maps_to_location_not_preorder():
+    source = templates._pick_source(  # noqa: SLF001
+        [{"name": "transaction_store_preview_tool", "args": {}, "output": json.dumps({"data": {"stores": [{}]}})}]
+    )
+
+    assert source is not None
+    assert source[0] == "location"
+
+
+def test_product_template_is_skipped_when_answer_asks_for_store_selection(monkeypatch):
+    class _FakeStoreSelectionSignalLLM:
+        async def ainvoke(self, messages):
+            return templates._AnswerUiSignals(  # noqa: SLF001
+                requests_store_selection=True,
+                requests_datepick=False,
+                asks_quantity=False,
+                states_staggered_max_two=False,
+            )
+
+    class _FakeStoreSelectionSignalRouterLLM:
+        def with_structured_output(self, model, method):
+            if model is templates._AnswerUiSignals:  # noqa: SLF001
+                return _FakeStoreSelectionSignalLLM()
+            raise AssertionError("product relevance LLM should not run when answer asks for store selection")
+
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeStoreSelectionSignalRouterLLM())
+    slots = ConversationSlots(goods_no="G0001", ord_qty=2, pending_intent="order", goal_type="place_order")
+    previous_slots = ConversationSlots(pending_intent="order", goal_type="place_order")
+    tool_calls = [{
+        "name": "search_product_tool",
+        "args": {"query": "벤투스"},
+        "output": json.dumps({
+            "status": "success",
+            "data": {
+                "items": [{
+                    "goods_no": "G0001",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "245/45R19",
+                    "extra_fvr_sale_prc": 180000,
+                }]
+            },
+        }),
+    }]
+
+    event = asyncio.run(templates.build_rich_data_event(
+        "상품은 확인했습니다. 장착할 지역이나 매장을 선택해 주세요.",
+        tool_calls,
+        slots=slots,
+        previous_slots=previous_slots,
+        allow_selection_cards=True,
+    ))
+
+    assert event is None
+
+
+def test_save_to_cart_does_not_emit_order_complete_rich_template():
+    source = templates._pick_source(  # noqa: SLF001
+        [{"name": "save_to_cart_tool", "args": {}, "output": json.dumps({"status": "success", "data": {"result": True}})}]
+    )
+
+    assert source is None
+
+
+def test_qna_complete_event_uses_redirect_link_without_exposing_url_in_answer():
+    tool_output = {
+        "status": "success",
+        "response": "[open](https://csexample.com/cs/chat?summary=raw)",
+        "redictLink": {
+            "pc": "https://www.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+            "mobile": "https://m.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+        },
+        "cnsl_clss_seq": "10019",
+        "inq_tit_nm": "Need help",
+        "ai_summary": "Need help with my order",
+    }
+
+    event = templates.build_qna_complete_event(
+        "Please continue here.\n[open](https://csexample.com/cs/chat?summary=raw)",
+        [{"name": "transfer_to_qna_tool", "args": {}, "output": json.dumps(tool_output)}],
+    )
+
+    assert event is not None
+    assert event["template"] == "qnaComplete"
+    assert event["source_tool"] == "transfer_to_qna_tool"
+    assert event["data"]["redictLink"] == tool_output["redictLink"]
+    assert event["data"]["cnslType"] == "\uae30\ud0c0"
+    assert event["data"]["title"] == "Need help"
+    assert event["data"]["summary"] == "Need help with my order"
+    assert event["data"]["assistantResponse"] == "Please continue here."
+    assert "http" not in event["data"]["assistantResponse"]
+
+
+def test_qna_complete_event_maps_consultation_category_code_to_label():
+    tool_output = {
+        "status": "success",
+        "redictLink": {
+            "pc": "https://www.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+            "mobile": "https://m.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+        },
+        "cnsl_clss_seq": "10002",
+        "inq_tit_nm": "Product question",
+        "ai_summary": "Product question summary",
+    }
+
+    event = templates.build_qna_complete_event(
+        "Please submit the 1:1 inquiry.",
+        [{"name": "transfer_to_qna_tool", "args": {}, "output": json.dumps(tool_output)}],
+    )
+
+    assert event is not None
+    assert event["data"]["cnslType"] == "\uc0c1\ud488\ubb38\uc758"
+    assert event["data"]["cnslType"] != "10002"
+
+
+def test_v3_support_tools_use_qna_handoff_instead_of_legacy_escalation():
+    from services.tstation.chat_v3.tools.support import SUPPORT_TOOLS
+
+    tool_names = {tool.name for tool in SUPPORT_TOOLS}
+
+    assert "transfer_to_qna_tool" in tool_names
+    assert "escalate_tool" not in tool_names
+
+
+def test_transfer_to_qna_tool_defaults_missing_consultation_category_to_etc(monkeypatch):
+    from services.tstation.agents.e_support_agent import tools as support_tools
+
+    captured = {}
+
+    def fake_make_qna_payload_urls(cnsl_clss_seq=None, inq_tit_nm=None, ai_summary=None):
+        captured["cnsl_clss_seq"] = cnsl_clss_seq
+        captured["inq_tit_nm"] = inq_tit_nm
+        captured["ai_summary"] = ai_summary
+        return {
+            "pc": "https://www.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+            "mobile": "https://m.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+        }
+
+    monkeypatch.setattr(support_tools, "make_qna_payload_urls", fake_make_qna_payload_urls)
+
+    result = support_tools.transfer_to_qna_tool.func(
+        cnsl_clss_seq=None,
+        inq_tit_nm="1:1 inquiry",
+        ai_summary="Generic handoff request",
+    )
+
+    assert captured["cnsl_clss_seq"] == "10019"
+    assert result["cnsl_clss_seq"] == "10019"
+
+    result = support_tools.transfer_to_qna_tool.func(
+        cnsl_clss_seq="99999",
+        inq_tit_nm="1:1 inquiry",
+        ai_summary="Generic handoff request",
+    )
+
+    assert captured["cnsl_clss_seq"] == "10019"
+    assert result["cnsl_clss_seq"] == "10019"
+
+
+# ── Issue 3: conditional product cards (needs_selection_card) ──────────────────
+
+_PRODUCT_ROWS = json.dumps(
+    {
+        "data": {
+            "items": [
+                {"goods_no": "G0001", "goods_nm": "벤투스 S2 AS"},
+                {"goods_no": "G0002", "goods_nm": "벤투스 S1 evo3"},
+            ]
+        }
+    },
+    ensure_ascii=False,
+)
+
+
+def test_info_search_suppresses_product_card_when_selection_not_needed():
+    # Review of a specific product → router set needs_selection_card=false.
+    # search_product is dual-use, so the card is suppressed (no LLM call reached).
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "벤투스 S2 AS 리뷰는 전반적으로 좋은 편입니다.",
+            [{"name": "search_product_tool", "args": {"keyword": "벤투스 S2 AS"}, "output": _PRODUCT_ROWS}],
+            allow_selection_cards=False,
+        )
+    )
+    assert event is None
+
+
+def test_search_product_shows_card_when_selection_needed(monkeypatch):
+    # search_product with a selection intent → card shows.
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "이 사이즈에 맞는 모델입니다.",
+            [{"name": "search_product_tool", "args": {"size": "245/45R18"}, "output": _PRODUCT_ROWS}],
+            allow_selection_cards=True,
+        )
+    )
+    assert event is not None and event["template"] == "product"
+
+
+def test_quantity_required_order_flow_suppresses_product_card(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    slots = ConversationSlots(goods_no="G0001", pending_intent="order", goal_type="place_order")
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "구매를 진행하려면 수량이 필요해요.",
+            [{"name": "search_product_tool", "args": {"size": "245/45R18"}, "output": _PRODUCT_ROWS}],
+            slots=slots,
+            allow_selection_cards=True,
+        )
+    )
+
+    assert event is None
+
+
+def test_recommend_card_always_shown_even_when_selection_flag_false(monkeypatch):
+    # Note: recommend/bestseller must ALWAYS show a card — they are outside the gate.
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "추천 상품입니다.",
+            [{"name": "get_products_recommendations_tool", "args": {}, "output": _PRODUCT_ROWS}],
+            allow_selection_cards=False,
+        )
+    )
+    assert event is not None and event["template"] == "product"
+
+
+def test_price_range_search_shows_card_even_when_flag_false(monkeypatch):
+    # "product by price range" (min/max_price) → deterministic selection, ignores the router flag.
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeProductRouterLLM())
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "20만원대 타이어입니다.",
+            [{"name": "search_product_tool", "args": {"max_price": 300000}, "output": _PRODUCT_ROWS}],
+            allow_selection_cards=False,
+        )
+    )
+    assert event is not None and event["template"] == "product"
+
+
+def test_is_selection_search_detects_price_range_args():
+    assert templates._is_selection_search({"args": {"min_price": 100000}}) is True
+    assert templates._is_selection_search({"args": {"max_price": 300000}}) is True
+    assert templates._is_selection_search({"args": {"keyword": "벤투스"}}) is False
+    assert templates._is_selection_search({"args": {}}) is False
+
+
+def test_info_gated_tools_scope_excludes_recommend_and_bestseller():
+    assert "search_product_tool" in templates._INFO_GATED_TOOLS
+    assert "search_product_summary_tool" in templates._INFO_GATED_TOOLS
+    assert "get_products_recommendations_tool" not in templates._INFO_GATED_TOOLS
+    assert "get_best_selling_products_tool" not in templates._INFO_GATED_TOOLS
+
+
+def test_allow_selection_cards_honors_router_flag_and_order_flow():
+    # None decision (router failed) → cards allowed (no regression).
+    assert service._allow_selection_cards(None) is True
+    # Pure info turn → suppressed.
+    assert service._allow_selection_cards(RouteDecision(needs_selection_card=False)) is False
+    # Explicit selection intent → allowed.
+    assert service._allow_selection_cards(RouteDecision(needs_selection_card=True)) is True
+    # Multi-domain order ("벤투스 주문해줘"): DISCOVERY as secondary domain forces cards on
+    # even if the router mislabeled the turn as info — the user must pick a product.
+    order_flow = RouteDecision(
+        domain=Domain.TRANSACTION,
+        extra_domains=[Domain.DISCOVERY],
+        needs_selection_card=False,
+    )
+    assert service._allow_selection_cards(order_flow) is True
+
+
+# ── Issue 4: booking flow hint must not skip the store step ────────────────────
+
+def test_booking_flow_hint_asks_for_store_before_schedule():
+    # Product + qty + order intent, but NO store yet → hint region/store, not date/time.
+    slots = ConversationSlots(goods_no="G0001", ord_qty=2, pending_intent="order")
+    hint = templates.booking_flow_hint(slots)
+    assert hint is not None
+    assert "지역/매장" in hint
+    assert "날짜" not in hint or "제안하지 마세요" in hint  # date/time must not be offered here
+
+
+def test_booking_flow_hint_offers_schedule_once_store_chosen():
+    slots = ConversationSlots(goods_no="G0001", ord_qty=2, shop_id="F00721", pending_intent="order")
+    hint = templates.booking_flow_hint(slots)
+    assert hint is not None
+    assert "일정" in hint and "매장까지 정했고" in hint
+
+
+def test_booking_flow_hint_offers_order_when_all_slots_ready():
+    slots = ConversationSlots(
+        goods_no="G0001", ord_qty=2, shop_id="F00721",
+        requested_cal_day="20260710", rsv_hour="14", pending_intent="order",
+    )
+    hint = templates.booking_flow_hint(slots)
+    assert hint is not None and "주문 진행" in hint
+
+
+def test_booking_flow_hint_does_not_infer_store_step_from_product_and_quantity_only():
+    slots = ConversationSlots(goods_no="G0001", tire_size="255/35R19", ord_qty=2)
+
+    assert templates.booking_flow_hint(slots) is None
+
+
+def test_booking_flow_hint_does_not_override_add_to_cart_target():
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="255/35R19",
+        ord_qty=2,
+        pending_intent="cart",
+        goal_type="add_to_cart",
+    )
+
+    assert templates.booking_flow_hint(slots) is None
+
+
+def test_booking_flow_hint_does_not_override_price_inquiry_target():
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="255/35R19",
+        ord_qty=2,
+        pending_intent="price",
+        goal_type="price_inquiry",
+    )
+
+    assert templates.booking_flow_hint(slots) is None
+
+
+def test_booking_flow_hint_none_outside_booking_context():
+    assert templates.booking_flow_hint(ConversationSlots()) is None
+    assert templates.booking_flow_hint(None) is None
+
+
+def test_booking_flow_with_product_size_quantity_prioritizes_store_list_before_schedule(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        pending_intent="order",
+    )
+    store_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F00721",
+                    "shop_nm": "티스테이션 정발산점",
+                    "addr_base": "경기도 고양시 일산동구",
+                    "addr_dtl": "대산로 15",
+                    "is_installable": True,
+                }
+            ]
+        },
+    }
+    schedule_output = {
+        "status": "success",
+        "data": {"dates": [{"date": "20260709", "available": True, "availableTimes": [9, 10]}]},
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "고양시에서 구매/장착 가능한 매장 후보를 확인했어요.",
+            [
+                {"name": "search_stores_tool", "args": {"region": "고양시"}, "output": json.dumps(store_output)},
+                {"name": "get_multi_store_schedule_tool", "args": {}, "output": json.dumps(schedule_output)},
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["source_tool"] == "search_stores_tool"
+    assert event["data"]["metadata"][0]["shopId"] == "F00721"
+
+
+def test_booking_flow_with_store_selected_prioritizes_schedule_template(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F00721",
+        pending_intent="order",
+    )
+    store_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F00721",
+                    "shop_nm": "티스테이션 정발산점",
+                    "addr_base": "경기도 고양시 일산동구",
+                    "addr_dtl": "대산로 15",
+                }
+            ]
+        },
+    }
+    schedule_output = {
+        "status": "success",
+        "data": {"dates": [{"date": "20260709", "available": True, "availableTimes": [9, 10]}]},
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정발산점에서 예약 가능한 일정을 확인했어요.",
+            [
+                {"name": "get_multi_store_schedule_tool", "args": {"shop_id": "F00721"}, "output": json.dumps(schedule_output)},
+                {"name": "search_stores_tool", "args": {"region": "고양시"}, "output": json.dumps(store_output)},
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["source_tool"] == "get_multi_store_schedule_tool"
+    assert event["data"]["metadata"]["slots"]["shop_id"] == "F00721"
+
+
+def test_get_store_schedule_tool_builds_datepick_without_llm(monkeypatch):
+    def fail_get_router_llm():
+        raise AssertionError("get_store_schedule_tool datepick should be built without LLM")
+
+    monkeypatch.setattr(templates, "get_router_llm", fail_get_router_llm)
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_name="티스테이션 정발산점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    schedule_output = {
+        "status": "success",
+        "data": {
+            "shop_id": "F00721",
+            "shop_nm": "티스테이션 정발산점",
+            "slots": [
+                {"cal_day": "20260709", "tm": "0900"},
+                {"cal_day": "20260709", "tm": "1000"},
+                {"cal_day": "20260709", "tm": "1200"},
+                {"cal_day": "20260710", "tm": "13"},
+            ],
+        },
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정발산점 예약 가능한 일정을 확인했어요.",
+            [
+                {
+                    "name": "get_store_schedule_tool",
+                    "args": {"shop_id": "F00721", "mode": "general"},
+                    "output": json.dumps(schedule_output, ensure_ascii=False),
+                }
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["source_tool"] == "get_store_schedule_tool"
+    assert event["assistant_response_source"] == "code_chat_v3_get_store_schedule"
+    assert event["data"]["dates"][0]["date"] == "2026년 07월 09일"
+    assert event["data"]["dates"][0]["availableTimes"] == [9, 10]
+    assert event["data"]["dates"][1]["availableTimes"] == [13]
+    assert event["data"]["selectedDate"] == 0
+    assert event["data"]["metadata"]["slots"]["shop_id"] == "F00721"
+    assert event["data"]["metadata"]["ui_action"]["fills_slot"] == "requested_cal_day,rsv_hour"
+
+
+def test_preorder_card_shows_car_name_from_my_cars_selection():
+    # Reported bug: 차량정보 rendered "—" (or a bare plate) because the builder read
+    # only car_no. The name picked from the my-cars list lands in the car_model slot
+    # (slots/derive.py maps car_nm/carName/carModel/car_model_det -> car_model).
+    event = templates.build_preorder_data_event(
+        "주문 정보를 확인해 주세요.",
+        {
+            "goods_no": "G000000332840",
+            "ord_qty": 4,
+            "car_no": "14다5499",
+            "car_model": "뉴 투싼 iX",
+            "shop_name": "티스테이션 판교점",
+        },
+        source="test",
+    )
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["carInfo"] == "뉴 투싼 iX (14다5499)"
+
+
+def test_preorder_car_info_falls_back_across_name_and_plate():
+    def car_info(**snapshot):
+        event = templates.build_preorder_data_event(
+            "주문 정보를 확인해 주세요.",
+            {"goods_no": "G1", "ord_qty": 1, **snapshot},
+            source="test",
+        )
+        assert event is not None
+        # None is dropped from the serialized payload, so an absent key is the
+        # "unknown vehicle" case the FE renders as "—".
+        return event["data"]["orderInfo"].get("carInfo")
+
+    # Tool-output key spellings still resolve to the name.
+    assert car_info(car_nm="쏘나타", car_no="12가3456") == "쏘나타 (12가3456)"
+    # Name only / plate only still render something useful.
+    assert car_info(car_model="뉴 투싼 iX") == "뉴 투싼 iX"
+    assert car_info(car_no="14다5499") == "14다5499"
+    # Nothing known -> None, so the FE renders its "—" placeholder.
+    assert car_info() is None
+
+
+def test_preorder_car_info_never_renders_a_product_code_as_the_vehicle():
+    # Some snapshots carry goods_no in car_no. The plate must be dropped so a
+    # product code never surfaces as 차량정보 (guard from PR #457), while the
+    # car name still renders.
+    event = templates.build_preorder_data_event(
+        "주문 정보를 확인해 주세요.",
+        {
+            "goods_no": "G000000332840",
+            "ord_qty": 4,
+            "car_no": "G000000332840",
+            "car_model": "뉴 투싼 iX",
+        },
+        source="test",
+    )
+
+    assert event is not None
+    order_info = event["data"]["orderInfo"]
+    assert order_info["carInfo"] == "뉴 투싼 iX"
+    assert "G000000332840" not in str(order_info["carInfo"])
+    # metadata.carNo is sanitized by the same guard.
+    assert event["data"]["metadata"].get("carNo") is None

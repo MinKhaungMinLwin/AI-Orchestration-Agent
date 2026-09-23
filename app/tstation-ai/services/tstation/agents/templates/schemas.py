@@ -4,9 +4,72 @@ Each migrated domain agent should use a structured response schema so the model
 returns the final FE payload in a guaranteed shape.
 """
 
-from typing import Annotated, ClassVar, Literal, Optional
+import logging
+import re
+from typing import Annotated, Any, ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
+
+# Deterministic enforcement for qty-question quickReplies.
+# LLM 가 "타이어 수량을 알려주세요" 류 질문을 emit 하면서 chip 에 1개/3개 등을
+# 누락하는 휘발성 버그를 막기 위함. c_transaction_agent prompt 룰(L461 / L1310~)
+# 이 두 번 보강된 뒤에도 재발해서 schema 측에서 결정적으로 차단.
+_QTY_QUESTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"몇\s*개"),
+    re.compile(r"몇\s*본"),
+    re.compile(r"(?:타이어\s*)?수량.{0,15}?(?:알려|말씀|선택|골라|어떻게)"),
+)
+_QTY_CONFIRM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"맞으시"),
+)
+# Skip qty enforcement when the response asks about OTHER slots (product/size)
+# in addition to qty. Pure qty-only questions still trigger chip enforcement.
+# Buggy false-positive case: "어떤 상품과 수량인지 알려주세요" — response is asking
+# product AND qty together, so forcing qty chips strips the user's chance to
+# pick a product first.
+_QTY_QUESTION_SKIP_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"어떤\s*상품"),
+    re.compile(r"상품과\s*(?:수량|사이즈)"),
+    re.compile(r"사이즈와\s*수량"),
+    re.compile(r"상품(?:명|을)?\s*(?:알려|말씀|선택|입력)"),
+)
+_REQUIRED_QTY_CHIPS: tuple[str, ...] = ("1개", "2개", "3개", "4개")
+
+# Deterministic enforcement for satisfaction / repurchase / greeting quickReplies.
+# LLM 이 사용자 호감/재구매 의도 발화 ("원주점에서 구매해서 너무 만족했어. 다음에도 또…")
+# 또는 단순 인사 ("하이", "안녕") 에 대해 `["다시 시도", "상담사 연결", "처음으로"]`
+# 같은 failure/fallback chip 을 휘발성으로 emit 하는 버그가 a_leading_agent prompt
+# 보강(L577~) 후에도 재발해서 schema 측에서 결정적으로 차단. assistantResponse 가
+# 아래 패턴 중 하나 이상 매칭 + chip 에 FORBIDDEN chip 중 하나 이상 포함될 때만
+# 발동(false-positive 최소화).
+_SATISFACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # 만족 / 재구매 의도
+    re.compile(r"만족하"),
+    re.compile(r"기쁩니다|기쁘네요|기쁘게"),
+    re.compile(r"다음에도\s*(?:이용|구매|찾)"),
+    re.compile(r"또\s*(?:이용|찾아|구매)"),
+    re.compile(r"잘\s*(?:받으셨|받으신|구매하셨)"),
+    # 인사 / 환영 / 일반 도움 안내 (LEADING agent 의 전형 오프닝 멘트)
+    re.compile(r"안녕하세요.*도와드릴"),
+    re.compile(r"반갑습니다.*도와드릴"),
+    re.compile(r"무엇을\s*도와드릴"),
+    re.compile(r"어떻게\s*도와드릴"),
+    re.compile(r"어떤\s*도움.*드릴"),
+    re.compile(r"편하게\s*(?:말씀|도와)"),
+    # 답례 / 감사 표현 (LEADING 의 "고마워" 응답)
+    re.compile(r"감사드립니다|감사합니다"),
+    re.compile(r"별말씀"),
+)
+_FORBIDDEN_SATISFACTION_CHIPS: frozenset[str] = frozenset({
+    "구매하기", "다시 시도", "상담사 연결", "1:1 문의하기",
+})
+_DEFAULT_SATISFACTION_CHIPS: tuple[tuple[str, str], ...] = (
+    ("상품 검색", "DISCOVERY"),
+    ("타이어 추천", "DISCOVERY"),
+)
+_HOME_QUICK_REPLY_LABEL: str = "처음으로"
 
 
 class TemplatePayload(BaseModel):
@@ -68,6 +131,12 @@ class QuickReplyChip(BaseModel):
         description="Target domain for this chip. One of: DISCOVERY, TRANSACTION, SUPPORT, LEADING. "
                     "Set by the emitting agent so the backend can skip the LLM classifier on the next turn.",
     )
+    url: Optional[str] = Field(
+        default=None,
+        description="Optional external URL. When set, the FE opens this URL in a new tab on click "
+                    "instead of sending a chat message. Used for store-detail-page redirects and "
+                    "similar out-of-conversation navigation.",
+    )
 
 
 class QuickReplyTemplate(TemplatePayload):
@@ -75,9 +144,98 @@ class QuickReplyTemplate(TemplatePayload):
 
     TEMPLATE_NAME: ClassVar[str] = "quickReply"
 
+    _MAX_QUICK_REPLIES: ClassVar[int] = 4
+
     assistantResponse: str = Field(..., min_length=1)
-    quickReplies: list[QuickReplyChip] = Field(default_factory=list, max_length=4)
+    quickReplies: list[QuickReplyChip] = Field(default_factory=list)
     predictedDomains: list[str] = Field(default_factory=list, max_length=4)
+
+    @field_validator("quickReplies")
+    @classmethod
+    def truncate_quick_replies(cls, v: list[QuickReplyChip]) -> list[QuickReplyChip]:
+        if len(v) > cls._MAX_QUICK_REPLIES:
+            logger.warning("quickReplies has %d chips, truncating to %d", len(v), cls._MAX_QUICK_REPLIES)
+            return v[: cls._MAX_QUICK_REPLIES]
+        return v
+
+    @model_validator(mode="after")
+    def enforce_quantity_chips(self) -> "QuickReplyTemplate":
+        text = self.assistantResponse or ""
+        if any(p.search(text) for p in _QTY_CONFIRM_PATTERNS):
+            return self
+        if not any(p.search(text) for p in _QTY_QUESTION_PATTERNS):
+            return self
+        # Skip if the response asks about other slots (product/size) too —
+        # forcing qty chips would strip the user's chance to pick those first.
+        if any(p.search(text) for p in _QTY_QUESTION_SKIP_PATTERNS):
+            return self
+        chip_labels = {c.label for c in self.quickReplies}
+        if chip_labels == set(_REQUIRED_QTY_CHIPS[:2]) and len(self.quickReplies) == 2:
+            return self
+        if all(req in chip_labels for req in _REQUIRED_QTY_CHIPS):
+            return self
+        missing = [r for r in _REQUIRED_QTY_CHIPS if r not in chip_labels]
+        logger.warning(
+            "QuickReplyTemplate qty-question auto-fix: original=%s missing=%s; replacing with %s",
+            [c.label for c in self.quickReplies],
+            missing,
+            list(_REQUIRED_QTY_CHIPS),
+        )
+        self.quickReplies = [
+            QuickReplyChip(label=label, domain="TRANSACTION") for label in _REQUIRED_QTY_CHIPS
+        ]
+        return self
+
+    @model_validator(mode="after")
+    def enforce_satisfaction_chips(self) -> "QuickReplyTemplate":
+        """Replace failure/fallback chips with progress chips on satisfaction messages.
+
+        Trigger: assistantResponse 가 만족·기쁨·재구매 응답 패턴 매칭 AND quickReplies 에
+        FORBIDDEN chip(구매하기/다시 시도/상담사 연결/1:1 문의하기) 중 하나 이상 포함.
+        그 경우에만 전체 chip 셋을 `[상품 검색, 타이어 추천, 처음으로]` 디폴트로 교체.
+        FORBIDDEN chip 이 하나도 없으면 그대로 통과(prompt 가 이미 잘 emit 한 경우).
+        """
+        text = self.assistantResponse or ""
+        if not any(p.search(text) for p in _SATISFACTION_PATTERNS):
+            return self
+        if any(c.url for c in self.quickReplies):
+            return self
+        existing_labels = {c.label for c in self.quickReplies}
+        if not (existing_labels & _FORBIDDEN_SATISFACTION_CHIPS):
+            return self
+        logger.warning(
+            "QuickReplyTemplate satisfaction auto-fix: original=%s; replacing with %s",
+            [c.label for c in self.quickReplies],
+            [label for label, _ in _DEFAULT_SATISFACTION_CHIPS],
+        )
+        self.quickReplies = [
+            QuickReplyChip(label=label, domain=domain)
+            for label, domain in _DEFAULT_SATISFACTION_CHIPS
+        ]
+        return self
+
+    @model_validator(mode="after")
+    def remove_home_chip(self) -> "QuickReplyTemplate":
+        """Do not expose the global "처음으로" quick button."""
+        if not self.quickReplies:
+            return self
+        filtered = [
+            chip for chip in self.quickReplies
+            if chip.label.strip() != _HOME_QUICK_REPLY_LABEL
+        ]
+        if len(filtered) == len(self.quickReplies):
+            return self
+        logger.info(
+            "QuickReplyTemplate removed home chip: original=%s",
+            [chip.label for chip in self.quickReplies],
+        )
+        self.quickReplies = filtered
+        if not any((chip.domain or "").upper() == "LEADING" for chip in self.quickReplies):
+            self.predictedDomains = [
+                domain for domain in self.predictedDomains
+                if str(domain).upper() != "LEADING"
+            ]
+        return self
 
 
 class QuickReplyDataEvent(BaseModel):
@@ -180,6 +338,50 @@ class LocationMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     shopId: str = Field(..., min_length=1)
+    shopName: Optional[str] = None
+    ctaAction: Optional[str] = None
+    cta_action: Optional[str] = None
+    fillsSlot: Optional[str] = None
+    fills_slot: Optional[str] = None
+    sourceTool: Optional[str] = None
+    source_tool: Optional[str] = None
+    stockCheckMode: Optional[str] = None
+    stock_check_mode: Optional[str] = None
+    scheduleMode: Optional[str] = None
+    schedule_mode: Optional[str] = None
+    inventoryMode: Optional[str] = None
+    inventory_mode: Optional[str] = None
+    scheduleTier: Optional[str] = None
+    schedule_tier: Optional[str] = None
+    todayInstall: Optional[Any] = None
+    tnaDelivery: Optional[Any] = None
+    isInstallable: Optional[Any] = None
+    shopName: str | None = None
+    ctaAction: str | None = None
+    cta_action: str | None = None
+    fillsSlot: str | None = None
+    fills_slot: str | None = None
+    sourceTool: str | None = None
+    source_tool: str | None = None
+    stockCheckMode: str | None = None
+    stock_check_mode: str | None = None
+    scheduleMode: str | None = None
+    schedule_mode: str | None = None
+    inventoryMode: str | None = None
+    inventory_mode: str | None = None
+    scheduleTier: str | None = None
+    schedule_tier: str | None = None
+    todayInstall: bool | str | None = None
+    tnaDelivery: bool | str | None = None
+    isInstallable: bool | str | None = None
+    domain: str | None = None
+    source_intent: str | None = None
+    expected_contract_intent: str | None = None
+    expected_behavior: str | None = None
+    entity_id: str | None = None
+    entity_label: str | None = None
+    slots: dict | None = None
+    ui_action: dict | None = None
 
 
 class LocationItem(BaseModel):
@@ -279,7 +481,7 @@ class OrderInfo(BaseModel):
     # LLM이 cart-save 단계에서 null을 emit해 schema validation 실패 → silent
     # terminator(\n\n) + fallback chips만 사용자에게 보여 cart 진행이 막힌다.
     carInfo: str | None = None
-    product: str = Field(..., min_length=1)
+    product: str | None = None
     quantity: int = Field(..., ge=0)
     storeName: str | None = None
     bookingDateTime: str | None = None
@@ -301,12 +503,27 @@ class PreOrderMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     goodsId: str = Field(..., min_length=1)
+    goodsNo: str | None = None
+    goods_no: str | None = None
+    productName: str | None = None
+    tireSize: str | None = None
+    tire_size: str | None = None
+    quantity: int | None = None
+    ordQty: int | None = None
+    ord_qty: int | None = None
     # shopId: optional during cart-save flow (before store selection). Same
     # rationale as OrderInfo.storeName / carInfo — required would fail
     # validation and show fallback chips to the user instead of the cart card.
     shopId: str | None = None
+    shop_id: str | None = None
+    storeName: str | None = None
+    requestedCalDay: str | None = None
+    requested_cal_day: str | None = None
+    rsvHour: str | None = None
+    rsv_hour: str | None = None
     carNo: str | None = None
     carLncCd: str | None = None
+    source: str | None = None
 
 
 class PreOrderTemplate(TemplatePayload):
@@ -314,7 +531,7 @@ class PreOrderTemplate(TemplatePayload):
 
     TEMPLATE_NAME: ClassVar[str] = "preOrder"
 
-    assistantResponse: str = Field(..., min_length=1)
+    assistantResponse: str | None = None
     orderInfo: OrderInfo
     isReadyToOrder: bool
     isReadyToAddToCart: bool
@@ -357,6 +574,8 @@ class OrderCompleteMeta(BaseModel):
     # base_agent fell back to quickReply + ["다시 시도", "상담사 연결", "처음으로"]
     # chips. Aligning the two metas eliminates that silent fallback path.
     shopId: str | None = None
+    source: str | None = None
+    called_tools: list[str] | None = None
 
 
 class OrderCompleteTemplate(TemplatePayload):
@@ -406,11 +625,15 @@ class TransactionAgentOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_transaction_payload(self):
-        TypeAdapter(TransactionDataEvent).validate_python({
+        event = TypeAdapter(TransactionDataEvent).validate_python({
             "type": self.type,
             "template": self.template,
             "data": self.data,
         })
+        # validator 가 mutate 한 결과 (예: QuickReplyTemplate.enforce_quantity_chips
+        # 의 수량 chip 자동 보정) 를 self.data 에 반영. 단순 validate_python 만 호출하면
+        # 보정 결과가 throw away 되어 LLM 휘발성 누락이 wire 로 그대로 새어 나간다.
+        self.data = event.data.model_dump()
         return self
 
 
@@ -420,6 +643,21 @@ class ProductMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     goodsId: str = Field(..., min_length=1)
+    goodsNo: str | None = None
+    goods_no: str | None = None
+    productName: str | None = None
+    product_name: str | None = None
+    tireSize: str | None = None
+    tire_size: str | None = None
+    domain: str | None = None
+    cta_action: str | None = None
+    fills_slot: str | None = None
+    entity_id: str | None = None
+    source_intent: str | None = None
+    expected_contract_intent: str | None = None
+    expected_behavior: str | None = None
+    slots: dict | None = None
+    ui_action: dict | None = None
 
 
 class ProductTag(BaseModel):
@@ -451,6 +689,12 @@ class ProductItem(BaseModel):
     imageUrl: str
     title: str = Field(..., min_length=1)
     tires: str
+    titleProductName: str = ""
+    titleTires: str = ""
+    brandName: str = ""
+    oeBadgeYn: str = Field("", description="OE badge flag from oe_badge_yn. Use Y/N string, empty if missing.")
+    oeMaker: str = Field("", description="OE maker value from t_oe_maker_1, empty if missing.")
+    smrtPayYn: str = Field("", description="Smart pay availability flag from smrt_pay_yn. Use Y/N string.")
     price: Optional[int] = Field(None, ge=0)
     originalPrice: Optional[int] = Field(None, ge=0)
     discountRate: Optional[float] = Field(None, ge=0)
@@ -508,9 +752,35 @@ class CarMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     carNo: str = Field(..., min_length=1)
+    car_no: str | None = None
     carLncCd: str | None = None
+    car_lnc_cd: str | None = None
+    mbrCarRegSeq: str | None = None
+    mbr_car_reg_seq: str | None = None
+    carMaker: str | None = None
+    carModelDet: str | None = None
+    car_model_det: str | None = None
+    carName: str | None = None
+    car_nm: str | None = None
+    carTrim: str | None = None
+    carEngine: str | None = None
+    carType: str | None = None
+    car_type: str | None = None
+    vehicleType: str | None = None
+    vehicle_type: str | None = None
     tireSize: str | None = None
+    tire_size_fr: str | None = None
     tireSizeRe: str | None = None
+    tire_size_re: str | None = None
+    availableSizes: list[str] | None = None
+    available_sizes: list[str] | None = None
+    ctaAction: str | None = None
+    cta_action: str | None = None
+    sourceIntent: str | None = None
+    source_intent: str | None = None
+    expectedContractIntent: str | None = None
+    expected_contract_intent: str | None = None
+    ui_action: dict | None = None
 
 
 class CarItem(BaseModel):
@@ -638,9 +908,13 @@ class DiscoveryAgentOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_discovery_payload(self):
-        TypeAdapter(DiscoveryDataEvent).validate_python({
+        event = TypeAdapter(DiscoveryDataEvent).validate_python({
             "type": self.type,
             "template": self.template,
             "data": self.data,
         })
+        # validator 가 mutate 한 결과 (예: QuickReplyTemplate.enforce_quantity_chips
+        # 의 수량 chip 자동 보정) 를 self.data 에 반영. validate_python 만 호출하면
+        # 보정 결과가 throw away 되어 LLM 휘발성 누락이 wire 로 그대로 새어 나간다.
+        self.data = event.data.model_dump()
         return self

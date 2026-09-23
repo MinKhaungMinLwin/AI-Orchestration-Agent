@@ -1,17 +1,30 @@
 import logging
+import contextvars
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
-from services.tstation.common.tstation_be_client import get_tstation_be_client
-from langchain.tools import tool
+from services.tstation.common.tstation_be_client import (
+    get_client,
+    _error_response,
+    _success_response as _common_success_response,
+    _to_dict,
+)
+from langchain_core.tools import tool
 from common.tool_cache import tool_cache
 
-logger = logging.getLogger(__name__)
+from services.tstation.agents.b_discovery_agent._car_no_audit import (
+    detect_car_no_mismatch,
+    set_registered_car_nos,
+)
+from services.tstation.policies.product_name_normalization import preferred_product_search_keyword
+from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
 
 # Product Compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync_detailed as search_product
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_summary_api_product_search_summary_get import sync_detailed as search_product_summary
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync_detailed as get_user_vehicles
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_api_vehicle_search_get import sync_detailed as search_car_model
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_groups_api_vehicle_models_get import sync_detailed as search_car_model_groups
@@ -22,9 +35,11 @@ from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상
 
 # Product Recommendation
 from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync_detailed as get_products_recommendations
-from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_best_sellers_api_product_best_sellers_get import sync_detailed as get_best_sellers
-from common.tstation_be_api_client.hkt_api_client.models import BestSellerPeriod
+from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.search_best_sellers_api_product_best_sellers_search_post import sync_detailed as search_best_sellers
+from common.tstation_be_api_client.hkt_api_client.models import BestSellerSearchRequest
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
+from common.tstation_be_api_client.hkt_api_client.models import VehicleType
+from common.tstation_be_api_client.hkt_api_client.types import UNSET
 
 
 # Event/Deal
@@ -32,18 +47,184 @@ from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_�
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_api_events_deals_get import sync_detailed as get_deals
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_event_applicable_products_multi_api_events_applicable_products_get import sync_detailed as get_event_applicable_products
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_product_applicable_events_api_events_applicable_events_get import sync_detailed as get_product_applicable_events
+from common.tstation_be_api_client.hkt_api_client.api.benefit_af_혜택_통합_조회.search_benefit_applicable_products_api_benefits_applicable_products_search_get import sync_detailed as search_benefit_applicable_products
 
 # Price
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
+from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_cheapest_by_coupon_api_prices_cheapest_by_coupon_get import sync_detailed as get_cheapest_by_coupon
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_price_api_prices_final_get import sync_detailed as get_price
 
 # Member Car Info
 from common.tstation_be_api_client.hkt_api_client.api.member_af_회원_정보_조회.get_member_cars_api_member_cars_get import sync_detailed as get_member_cars
 
+logger = logging.getLogger(__name__)
+current_confirmed_tire_size: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "current_confirmed_tire_size", default=None
+)
+current_discovery_recommendation_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_discovery_recommendation_tool_patch", default={}
+)
+current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_discovery_search_tool_patch", default={}
+)
 
-def get_client() -> AuthenticatedClient:
-    """Get authenticated client for tstation-be API."""
-    return get_tstation_be_client()
+_RECOMMENDATION_LIMIT_CAP = 10
+_THREE_PMSF_DESCRIPTION = "3PMSF 인증으로 눈길 성능 기준을 충족해 올웨더 주행 신뢰도를 높인 타이어입니다."
+_AGENT_EXCLUDED_FIELDS = frozenset(
+    {
+        "orpl_nm",
+        "cheapest_final_prc",
+        "cheapest_total_discount",
+        "cheapest_applied_coupons",
+        "cheapest_goods_no",
+        "cheapest_price",
+    }
+)
+
+
+def _sanitize_agent_tool_data(value: Any) -> Any:
+    """Remove fields that no Agent discovery flow may use or persist."""
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_agent_tool_data(item)
+            for key, item in value.items()
+            if key.lower() not in _AGENT_EXCLUDED_FIELDS
+        }
+    if isinstance(value, list):
+        return [_sanitize_agent_tool_data(item) for item in value]
+    return value
+
+
+def _success_response(status_code: int, data: Any) -> dict[str, Any]:
+    return _common_success_response(status_code, _sanitize_agent_tool_data(data))
+
+
+def _truthy_flag(value: Any) -> bool:
+    return str(value or "").strip().upper() in {"Y", "O", "TRUE", "1"}
+
+
+def _append_three_pmsf_description(data: dict[str, Any]) -> dict[str, Any]:
+    if not _truthy_flag(data.get("three_pmsf_yn")):
+        return {k: v for k, v in data.items() if k not in {"three_pmsf_yn", "three_pmsf_description"}}
+    enriched = dict(data)
+    searchable_text = " ".join(str(enriched.get(key) or "") for key in ("slogan", "pc_prod_remark_desc", "pc_prod_tech_desc"))
+    if "3PMS" not in searchable_text.upper() and "삼봉" not in searchable_text:
+        current = str(enriched.get("pc_prod_remark_desc") or "").strip()
+        enriched["pc_prod_remark_desc"] = f"{current} {_THREE_PMSF_DESCRIPTION}".strip()
+    enriched["three_pmsf_description"] = _THREE_PMSF_DESCRIPTION
+    return enriched
+
+
+def _attach_vehicle_type_to_vehicle_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    existing_vehicle_type = str(enriched.get("vehicle_type") or enriched.get("vehicleType") or "").strip()
+    if existing_vehicle_type:
+        return enriched
+
+    fallback_text = " ".join(
+        part
+        for part in (
+            str(enriched.get("car_model_det") or enriched.get("carModelDet") or "").strip(),
+            str(enriched.get("car_nm") or enriched.get("carNm") or "").strip(),
+            str(enriched.get("car_model") or enriched.get("carModel") or "").strip(),
+        )
+        if part
+    )
+    vehicle_type = normalize_vehicle_type_from_car_type(
+        enriched.get("car_type") or enriched.get("carType"),
+        fallback_text=fallback_text,
+    )
+    if vehicle_type:
+        enriched["vehicle_type"] = vehicle_type
+        enriched["vehicleType"] = vehicle_type
+    return enriched
+
+
+def _attach_vehicle_type_to_vehicle_payload(data: Any) -> Any:
+    if isinstance(data, dict):
+        enriched = dict(data)
+        items = enriched.get("items")
+        if isinstance(items, list):
+            enriched["items"] = [
+                _attach_vehicle_type_to_vehicle_row(item) if isinstance(item, dict) else item
+                for item in items
+            ]
+            return enriched
+        return _attach_vehicle_type_to_vehicle_row(enriched)
+    if isinstance(data, list):
+        return [
+            _attach_vehicle_type_to_vehicle_row(item) if isinstance(item, dict) else item
+            for item in data
+        ]
+    return data
+
+def _apply_recommendation_policy_patch(
+    *,
+    patch: dict[str, Any],
+    rcmd_type: RcmdType,
+    brand_cd: str,
+    tire_size: str | None,
+    sort_by: str | None,
+    season_nm: str | None,
+    pfm_nm: str | None,
+    prc_grd: str | None,
+    vehicle_type: str | None,
+    car_lnc_cd: str | None,
+    min_price: int | None,
+    max_price: int | None,
+) -> tuple[
+    RcmdType,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int | None,
+    int | None,
+]:
+    """Apply deterministic Discovery policy arguments to recommendation calls.
+
+    This is intentionally conservative: only Discovery policy keys produced
+    from the current user text are considered, and tire_size is not injected
+    over an explicit vehicle/size argument.
+    """
+    if not patch:
+        return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price
+
+    suppress_vehicle_type_filter = bool(patch.get("suppress_vehicle_type_filter"))
+    suppress_season_filter = bool(patch.get("suppress_season_filter"))
+
+    if patch.get("brand_cd"):
+        brand_cd = str(patch["brand_cd"])
+    if not tire_size and not car_lnc_cd and patch.get("tire_size"):
+        tire_size = str(patch["tire_size"])
+    if patch.get("sort_by"):
+        sort_by = str(patch["sort_by"])
+    if patch.get("season_nm"):
+        season_nm = str(patch["season_nm"])
+    if patch.get("pfm_nm"):
+        pfm_nm = str(patch["pfm_nm"])
+    if patch.get("prc_grd"):
+        prc_grd = str(patch["prc_grd"])
+    if patch.get("vehicle_type"):
+        vehicle_type = str(patch["vehicle_type"])
+    if patch.get("min_price") is not None:
+        min_price = int(patch["min_price"])
+    if patch.get("max_price") is not None:
+        max_price = int(patch["max_price"])
+    if suppress_season_filter:
+        season_nm = None
+    if suppress_vehicle_type_filter:
+        vehicle_type = None
+    return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price
+
+
+_WINTER_RECOMMENDATION_FALLBACKS: tuple[tuple[RcmdType, str, str], ...] = (
+    (RcmdType.ALL_WEATHER, "올웨더", "올웨더"),
+    (RcmdType.TSTATION, "사계절", "사계절"),
+)
 
 
 DOMAIN_TOOL_MAP = {
@@ -66,6 +247,7 @@ DOMAIN_TOOL_MAP = {
         "get_deals",
         "get_event_applicable_products",
         "get_product_applicable_events",
+        "search_benefit_applicable_products",
     },
     "transaction": {
         # Price
@@ -103,29 +285,22 @@ DOMAIN_TOOL_MAP = {
 }
 
 
-def _to_dict(res: Any) -> Any:
-    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
-
-
-def _error_response(http_status: int | None, reason: str, message: str) -> dict:
-    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
-
-
-def _success_response(http_status: int, data: Any) -> dict:
-    return {"status": "success", "http_status": http_status, "data": data}
-
-
 # Whitelist of fields kept in product items returned to the LLM. Everything
 # else is stripped to keep tool-result payload compact (~10x reduction on a
-# 5-item recommendation turn). Detail content (descriptions, full reviews) is
-# still reachable via get_product_description_tool when the user explicitly asks.
+# 5-item recommendation turn). Full detail content remains reachable via
+# get_product_description_tool when the user explicitly asks.
 _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Identity
-    "goods_no", "goods_nm", "title",
+    "goods_no", "ptrn_cd", "goods_nm", "title",
+    # Product recency
+    "sys_reg_dtime",
     # Tire size — used by the agent to differentiate same-name SKUs in card titles
     "tire_size_1", "tire_size_2",
+    # Unsized search_product responses may carry grouped representative sizes.
+    "available_sizes",
     # Visual / pricing
     "image_url", "price", "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
+    "min_sale_prc", "max_sale_prc", "min_extra_fvr_sale_prc", "max_extra_fvr_sale_prc", "max_extra_fvr_sale_per",
     # Scoring used for sort priority and rcmd_type matching
     "tot_scr",
     "t_comfort", "t_silence", "t_life_span", "t_fuel_eff_convert",
@@ -133,12 +308,28 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_highspd", "t_highspd_cd", "t_high_hand_avg",
     "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
+    "goods_dtl_pfm_nm", "sound_absorber_yn", "three_pmsf_yn", "three_pmsf_description",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
+    "t_oe_maker_1", "oe_badge_yn",
     # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
-    # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
-    "rating_avg", "rate", "review_count",
+    # Rating / review (used for cards, sort_by, and concise search-result summaries)
+    "rating_avg", "rate", "review_count", "review_summary",
+    # 상품 등록 일시 — used to identify newest product among same-keyword results
+    "sys_reg_dtime",
+    # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/출시/성능/라벨/공임·보증)
+    "big_goods_nm", "ptrn_d_nm",
+    "tire_width", "tire_series", "inch",
+    "t_wgt_spd",
+    "brand_nm", "certify_brand_nm",
+    "t_rls_yearmon",
+    "t_high_perform", "t_handling", "t_dryroad_brk",
+    "rr",
+    "wage_prc", "wage_today_prc",
+    "free_guarantee_yn",
+    # Size-less product summary endpoint fields.
+    "goods_no_count", "smrt_pay_yn", "warranty", "slogan", "pc_prod_remark_desc", "pc_prod_tech_desc",
 })
 
 
@@ -158,6 +349,26 @@ _SORT_KEY_FUNCS: dict[str, Any] = {
 }
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        if value in (None, ""):
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fuel_efficiency_sort_key(item: dict[str, Any]) -> tuple[float, float, str]:
+    """Prefer higher fuel-efficiency score, then lower RR grade."""
+    fuel_score = _float_or_none(item.get("t_fuel_eff_convert"))
+    rr_grade = _float_or_none(item.get("rr"))
+    return (
+        -(fuel_score if fuel_score is not None else -1.0),
+        rr_grade if rr_grade is not None else float("inf"),
+        str(item.get("goods_no") or ""),
+    )
+
+
 def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
     """Sort product items based on user intent.
 
@@ -173,6 +384,10 @@ def _sort_items(items: list[dict], sort_by: str | None) -> list[dict]:
     """
     if not sort_by or not items:
         return items
+    if sort_by == "newest_desc":
+        return sorted(items, key=lambda x: x.get("sys_reg_dtime") or "", reverse=True)
+    if sort_by == "fuel_efficiency_desc":
+        return sorted(items, key=_fuel_efficiency_sort_key)
     key_func = _SORT_KEY_FUNCS.get(sort_by)
     if key_func is None:
         logger.warning("[_sort_items] Unknown sort_by=%s; passing through", sort_by)
@@ -185,20 +400,19 @@ def _filter_by_price(
     min_price: int | None,
     max_price: int | None,
 ) -> list[dict]:
-    """Filter items by effective price (sale price preferred over original).
+    """Filter items by user-facing final price.
 
     Items with no price information are excluded when a price filter is active —
     we cannot verify they are within budget.
 
-    Applied BEFORE _enrich_items_with_descriptions to avoid fetching descriptions
-    for items that will be discarded. extra_fvr_sale_prc comes from the main
-    search/recommendation BE response so it is available on raw items.
+    Product cards use extra_fvr_sale_prc as the visible price, so filtering
+    must use the same basis.
     """
     if not min_price and not max_price:
         return items
     result = []
     for item in items:
-        effective_price = item.get("extra_fvr_sale_prc") or item.get("price") or 0
+        effective_price = _price_filter_basis(item)
         if not effective_price:
             continue
         if min_price and effective_price < min_price:
@@ -209,6 +423,34 @@ def _filter_by_price(
     return result
 
 
+def _normalize_search_price_args(
+    min_price: int | None,
+    max_price: int | None,
+    sort_by: str | None,
+) -> tuple[int | None, int | None, str | None]:
+    """Align search-product price behavior with BE budget search.
+
+    When max_price is present, BE treats it as a budget ceiling: min_price is
+    ignored, the range starts at 0, and results are returned price-desc.
+    """
+    if max_price is not None:
+        return None, max_price, "price_desc"
+    return min_price, max_price, sort_by
+
+
+def _price_filter_basis(item: dict) -> int:
+    """Visible price basis for min_price/max_price filters."""
+    for key in ("extra_fvr_sale_prc", "sale_prc"):
+        value = item.get(key)
+        if value in (None, "", 0):
+            continue
+        try:
+            return int(str(value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
 def _slim_product_item(item: dict) -> dict:
     """Strip noise fields from a product item before returning to the LLM.
 
@@ -216,7 +458,32 @@ def _slim_product_item(item: dict) -> dict:
     reviews, nested rating object, and any unknown future bloat. Keeps only
     fields in _TRIM_KEEP_FIELDS.
     """
-    return {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
+    slim = {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
+    if not _truthy_flag(slim.get("three_pmsf_yn")):
+        slim.pop("three_pmsf_yn", None)
+        slim.pop("three_pmsf_description", None)
+    return slim
+
+
+def _compact_html_text(value: Any, *, max_chars: int = 600) -> str | None:
+    text = re.sub(r"<[^>]+>", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return None
+    return text[:max_chars].rstrip()
+
+
+def _slim_product_summary_item(item: dict) -> dict:
+    slim = _slim_product_item(item)
+    for key in ("goods_no", "tire_size_1", "tire_size_2"):
+        slim.pop(key, None)
+    for key in ("pc_prod_remark_desc", "pc_prod_tech_desc"):
+        compacted = _compact_html_text(slim.get(key))
+        if compacted:
+            slim[key] = compacted
+        else:
+            slim.pop(key, None)
+    return slim
 
 
 # brand_cd 가 이미 브랜드 필터링을 수행하는데 keyword 에도 한글 브랜드명을
@@ -257,15 +524,39 @@ def _strip_brand_only_keyword(keyword: str | None) -> str | None:
     return keyword
 
 
+def _summarize_reviews(reviews: Any, *, max_reviews: int = 3, max_chars_each: int = 90) -> str | None:
+    if not isinstance(reviews, list):
+        return None
+
+    snippets: list[str] = []
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+        content = _compact_html_text(review.get("gdas_cont"), max_chars=max_chars_each)
+        if not content:
+            continue
+        score = review.get("gdas_score")
+        prefix = f"{score}점: " if score not in (None, "") else ""
+        snippets.append(f"{prefix}{content}")
+        if len(snippets) >= max_reviews:
+            break
+
+    if not snippets:
+        return None
+    return " / ".join(snippets)
+
+
 def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
     """Fetch product description and return flat fields the LLM whitelist keeps.
 
     The description endpoint returns nested `images: [{img_path_nm, thnl_path_nm}, ...]`
-    and `rating: {review_count, rating_avg}` objects. The LLM whitelist
-    (`_TRIM_KEEP_FIELDS`) keeps only flat fields, so we flatten here:
+    and `rating: {review_count, rating_avg}` objects plus latest review rows.
+    The LLM whitelist (`_TRIM_KEEP_FIELDS`) keeps only flat fields, so we flatten here:
       - `image_url` ← first image's full URL (img_path_nm > thnl_path_nm fallback)
       - `rating_avg` / `rate` ← rating.rating_avg (rate is the FE alias)
       - `review_count` ← rating.review_count (used for sort_by="review_desc")
+      - `review_summary` ← up to three short review snippets, not the full review array
+      - card display fields such as `prc_grd_nm`, when available from detail
     """
     try:
         response = get_product_description(client=client, goods_no=goods_no)
@@ -278,15 +569,87 @@ def _fetch_description(goods_no: str, client: AuthenticatedClient) -> dict:
         rating = desc.get("rating") or {}
         rating_avg = rating.get("rating_avg") or 0
         review_count = rating.get("review_count") or 0
-        return {
+        flattened = {
             "image_url": image_url,
             "rating_avg": rating_avg,
             "rate": rating_avg,
             "review_count": review_count,
         }
+        review_summary = _summarize_reviews(desc.get("reviews"))
+        if review_summary:
+            flattened["review_summary"] = review_summary
+        for key in (
+            "prc_grd_nm",
+            "goods_pfm_nm",
+            "three_pmsf_yn",
+            "brand_nm",
+            "oe_badge_yn",
+            "t_oe_maker_1",
+            "smrt_pay_yn",
+            "pc_prod_remark_desc",
+            "pc_prod_tech_desc",
+            "slogan",
+        ):
+            if desc.get(key) not in (None, ""):
+                flattened[key] = desc[key]
+        return _append_three_pmsf_description(flattened)
     except Exception:
         logger.warning("[_fetch_description] Failed for goods_no=%s", goods_no)
         return {}
+
+
+def _fetch_price_fields(goods_no: str, client: AuthenticatedClient) -> dict:
+    """Fetch price fields needed to display discount-card backup data."""
+    try:
+        response = get_price(client=client, goods_no=goods_no, member_type=None)
+        if response.parsed is None:
+            return {}
+        price = _to_dict(response.parsed)
+        return {
+            key: price[key]
+            for key in ("sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per")
+            if price.get(key) not in (None, "", 0)
+        }
+    except Exception:
+        logger.warning("[_fetch_price_fields] Failed for goods_no=%s", goods_no)
+        return {}
+
+
+def _enrich_items_with_price_fields(items: list[dict]) -> list[dict]:
+    """Fill missing sale_prc for discount recommendations.
+
+    Recommendation rows already provide discount price/rate, but not always the
+    base sale_prc. The product card needs sale_prc to expose originalPrice and
+    discountAmount, so enrich only this narrow discount-card path.
+    """
+    if not items:
+        return items
+
+    goods_nos = [
+        item.get("goods_no")
+        for item in items
+        if item.get("goods_no") and not item.get("sale_prc")
+    ]
+    if not goods_nos:
+        return items
+
+    price_map: dict[str, dict] = {}
+    client = get_client()
+    with ThreadPoolExecutor(max_workers=min(len(goods_nos), 10)) as executor:
+        futures = {executor.submit(_fetch_price_fields, gno, client): gno for gno in goods_nos}
+        for future in as_completed(futures):
+            gno = futures[future]
+            price_map[gno] = future.result()
+
+    enriched: list[dict] = []
+    for item in items:
+        goods_no = item.get("goods_no")
+        merged = dict(item)
+        for key, value in price_map.get(goods_no, {}).items():
+            if merged.get(key) in (None, "", 0):
+                merged[key] = value
+        enriched.append(merged)
+    return enriched
 
 
 def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
@@ -294,7 +657,7 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
 
     Enrichment fetch is preserved so future field needs can be served by
     widening _TRIM_KEEP_FIELDS — the LLM-visible payload is filtered to
-    that whitelist to prevent context bloat (HTML descs, reviews, etc.).
+    that whitelist to prevent context bloat (HTML descs, full review arrays, etc.).
     """
     if not items:
         return items
@@ -315,6 +678,13 @@ def _enrich_items_with_descriptions(items: list[dict]) -> list[dict]:
         _slim_product_item({**item, **desc_map.get(item.get("goods_no"), {})})
         for item in items
     ]
+
+
+def enrich_product_card_items(items: list[dict]) -> list[dict]:
+    """Enrich raw product rows with the fields required by product cards."""
+    if not isinstance(items, list):
+        return items
+    return _enrich_items_with_descriptions(_enrich_items_with_price_fields(items))
 
 
 @tool
@@ -358,9 +728,10 @@ def check_compatibility_tool(goods_no: str, car_no: str, owner_nm: str):
 @tool_cache(ttl=600)
 def search_product_tool(
     keyword: str | None = None,
-    limit: int = 5,
+    limit: int = 10,
     size: str | None = None,
-    brand_cd: str = "HK",
+    brand_cd: str | None = None,
+    three_pmsf_yn: str | None = None,
     sort_by: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
@@ -372,6 +743,7 @@ def search_product_tool(
     - User searches for a specific tire by name/keyword
     - Resolving goods_no for price/stock/order handoff (Flow C/D)
     - User mentions ONLY a brand name with size → keyword=None, use brand_cd + size
+    - User asks for 3PMSF / 3PMS / 삼봉마크 certified tires → pass three_pmsf_yn="Y"
 
     Important: keyword는 **한글로 전달**한다. BE는 한글 GOODS_NM에 LIKE 매칭하고
     alias.json으로 한글→영문을 자동 확장한다 (영문→한글 역확장은 없음).
@@ -382,17 +754,19 @@ def search_product_tool(
     - ❌ NEVER translate Korean → English
     - ❌ NEVER put a brand name into keyword — use brand_cd instead
 
-    Brand codes: HK=Hankook (default), LF=Laufenn, MC=Michelin, PI=Pirelli,
+    Brand codes: HK=Hankook, LF=Laufenn, MC=Michelin, PI=Pirelli,
                  BS=Bridgestone, CT=Continental, GY=Goodyear.
-    Unsupported brands (금호, 넥센 etc.) → decline, do not search.
+    If the user did not specify a brand, omit brand_cd and search all brands.
+    Unsupported brands (금호/Kumho, 넥센/Nexen, Dunlop, Yokohama, Toyo, Maxxis,
+    Cooper, BFGoodrich, Falken, Vredestein, Linglong, Sailun) → decline, do not search.
 
     Args:
         keyword (str | None): 검색할 제품명 키워드 — Korean preferred (예: '벤투스 S2', '다이나프로 HPX', '키너지 EX').
             브랜드명만 있는 경우 None 으로 두고 brand_cd 로 필터링한다.
             방어적으로, 브랜드명만 들어오면 자동으로 None 으로 정규화된다.
-        limit (int): 반환할 최대 상품 수 Default: 5.
+        limit (int): 반환할 최대 상품 수 Default: 10.
         size (str | None): 타이어 사이즈 필터 (예: '225/45R17' 또는 '2254517'). Optional.
-        brand_cd (str): 브랜드 코드. Default: HK.
+        brand_cd (str | None): 브랜드 코드. 미지정 시 전체 브랜드 검색.
             - HK: Hankook 한국타이어
             - LF: Laufenn 라우펜
             - MC: Michelin 미쉐린
@@ -400,6 +774,8 @@ def search_product_tool(
             - BS: Bridgestone 브리지스톤
             - CT: Continental 콘티넨탈
             - GY: Goodyear 굿이어
+        three_pmsf_yn (str | None): 3PMSF/3PMS/삼봉마크 인증 타이어만 검색하려면 "Y".
+            "눈길 인증", "스노우플레이크", "Three-Peak Mountain Snowflake" 요청도 "Y"로 전달한다.
         sort_by (str | None): 정렬 의도. 사용자가 정렬을 명시하면 전달한다. Optional.
             - "price_asc": 가장 저렴한 순 (가장 저렴한, 제일 싼, 최저가, 싼 것부터)
             - "price_desc": 비싼 순 (비싼 것부터, 고가, 프리미엄 순)
@@ -412,8 +788,9 @@ def search_product_tool(
             예: 300_000 ("30만원 이하")
 
     Notes:
-        - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
-        - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
+        - 가격 필터는 BE /api/compatibility/product/search 에 전달한다.
+        - max_price 가 있으면 BE와 동일하게 min_price 를 무시하고 0~max_price 가격 내림차순으로 조회한다.
+        - BE 응답 후에도 표시 가격 기준으로 한 번 더 방어 필터링한다.
         - 가격 정보 없는 상품은 필터 적용 시 제외됨.
 
     Examples:
@@ -426,27 +803,96 @@ def search_product_tool(
         - {"keyword": "벤투스", "size": "225/45R17", "sort_by": "rating_desc"}  # 평점 높은 순
         - {"brand_cd": "HK", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 한국타이어
         - {"keyword": "벤투스 S2", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
+        - {"three_pmsf_yn": "Y", "limit": 10}  # 삼봉마크/3PMSF 인증 타이어 검색
+        - {"size": "235/55R19", "three_pmsf_yn": "Y"}  # 특정 규격의 삼봉마크 인증 타이어 검색
 
     Returns:
         dict: {"status": "success", "http_status": ..., "data": ...}
               or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
               or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+
+    Item field hints (사용자 질문 → 참조 필드):
+        - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
+        - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn, three_pmsf_yn
+        - 브랜드/출시: brand_nm, certify_brand_nm, t_rls_yearmon
+        - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
+        - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심서비스)
     """
-    normalized_keyword = _strip_brand_only_keyword(keyword)
+    policy_patch = current_discovery_search_tool_patch.get()
+    if policy_patch:
+        before_policy = {
+            "keyword": keyword,
+            "size": size,
+            "brand_cd": brand_cd,
+            "three_pmsf_yn": three_pmsf_yn,
+            "sort_by": sort_by,
+            "min_price": min_price,
+            "max_price": max_price,
+        }
+        if not size and policy_patch.get("size"):
+            size = str(policy_patch["size"])
+        if not three_pmsf_yn and policy_patch.get("three_pmsf_yn"):
+            three_pmsf_yn = str(policy_patch["three_pmsf_yn"])
+        logger.info(
+            "[TOOL][search_product_tool] Applied discovery policy patch=%s before=%s after=%s",
+            policy_patch,
+            before_policy,
+            {
+                "keyword": keyword,
+                "size": size,
+                "brand_cd": brand_cd,
+                "three_pmsf_yn": three_pmsf_yn,
+                "sort_by": sort_by,
+                "min_price": min_price,
+                "max_price": max_price,
+            },
+        )
+    preferred_keyword = preferred_product_search_keyword(keyword)
+    normalized_keyword = _strip_brand_only_keyword(preferred_keyword)
     if normalized_keyword != keyword:
         logger.debug(
-            "[TOOL][search_product_tool] Stripped brand-only keyword: %r → None (brand_cd=%s)",
-            keyword, brand_cd,
+            "[TOOL][search_product_tool] Normalized keyword: %r → %r (brand_cd=%s)",
+            keyword, normalized_keyword, brand_cd,
         )
-    has_price_filter = bool(min_price or max_price)
-    fetch_limit = limit * 4 if has_price_filter else limit
+    effective_min_price, effective_max_price, effective_sort_by = _normalize_search_price_args(
+        min_price,
+        max_price,
+        sort_by,
+    )
+    has_price_filter = bool(effective_min_price or effective_max_price)
+    has_newest_sort = sort_by == "newest_desc"
+    effective_limit = 10 if has_price_filter else limit
+    fetch_limit = effective_limit
+    if has_newest_sort:
+        fetch_limit = max(fetch_limit, 100)
+    normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
+    brand_arg = normalized_brand_cd if normalized_brand_cd else UNSET
+    three_pmsf_arg = str(three_pmsf_yn).strip().upper() if three_pmsf_yn else UNSET
     logger.debug(
-        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, sort_by=%s, min_price=%s, max_price=%s",
-        normalized_keyword, limit, size, brand_cd, sort_by, min_price, max_price,
+        "[TOOL][search_product_tool] Called with: keyword=%s, limit=%s, size=%s, brand_cd=%s, three_pmsf_yn=%s, sort_by=%s, min_price=%s, max_price=%s",
+        normalized_keyword,
+        limit,
+        size,
+        normalized_brand_cd,
+        three_pmsf_arg,
+        effective_sort_by,
+        effective_min_price,
+        effective_max_price,
     )
 
     try:
-        response = search_product(client=get_client(), keyword=normalized_keyword, limit=fetch_limit, size=size, brand_cd=brand_cd)
+        response = search_product(
+            client=get_client(),
+            keyword=normalized_keyword,
+            limit=fetch_limit,
+            size=size,
+            brand_cd=brand_arg,
+            three_pmsf_yn=three_pmsf_arg,
+            min_price=effective_min_price,
+            max_price=effective_max_price,
+            sort_by=effective_sort_by,
+        )
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -457,17 +903,83 @@ def search_product_tool(
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
             if has_price_filter:
-                data["items"] = _filter_by_price(data["items"], min_price, max_price)
+                data["items"] = _filter_by_price(data["items"], effective_min_price, effective_max_price)
                 if not data["items"]:
-                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
+                    return {
+                        "status": "no_results",
+                        "reason": "no_products_in_price_range",
+                        "min_price": effective_min_price,
+                        "max_price": effective_max_price,
+                    }
             data["items"] = _enrich_items_with_descriptions(data["items"])
-            data["items"] = _sort_items(data["items"], sort_by)
-            if has_price_filter:
-                data["items"] = data["items"][:limit]
+            data["items"] = _sort_items(data["items"], effective_sort_by)
+            if has_price_filter or has_newest_sort:
+                data["items"] = data["items"][:effective_limit]
         return _success_response(response.status_code, data)
     except Exception as e:
         logger.exception("[TOOL][search_product_tool] Failed")
         return _error_response(None, str(e), "Failed to search products")
+
+
+@tool
+@tool_cache(ttl=600)
+def search_product_summary_tool(
+    keyword: str | None = None,
+    limit: int = 5,
+    brand_cd: str | None = None,
+):
+    """
+    사이즈 미지정 상품군 검색.
+
+    When to use:
+    - User asks for product explanation, grade/features, warranty, available sizes, or product-to-product comparison
+      by product name only.
+    - User did NOT provide a tire size and the current turn does NOT need a concrete SKU for purchase/stock/order.
+
+    When NOT to use:
+    - User provided tire size.
+    - Purchase, stock, reservation, cart, final price, coupon issuance, or any flow that requires goods_no/SKU.
+      Use search_product_tool in those flows.
+
+    Args:
+        keyword (str | None): 상품명/모델명 키워드.
+        limit (int): 반환할 최대 상품군 수. 기본 5.
+        brand_cd (str | None): 브랜드 코드. 미지정 시 전체 브랜드 검색.
+
+    Returns:
+        dict: {"status": "success", "data": {"items": [...]}}. Items are pattern-level and intentionally do not
+        contain goods_no.
+    """
+    normalized_keyword = _strip_brand_only_keyword(keyword)
+    normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
+    brand_arg = normalized_brand_cd if normalized_brand_cd else UNSET
+    logger.debug(
+        "[TOOL][search_product_summary_tool] Called with: keyword=%s, limit=%s, brand_cd=%s",
+        normalized_keyword,
+        limit,
+        normalized_brand_cd,
+    )
+
+    try:
+        response = search_product_summary(
+            client=get_client(),
+            keyword=normalized_keyword,
+            limit=min(max(int(limit or 5), 1), 20),
+            brand_cd=brand_arg,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search product summaries",
+            )
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = [_slim_product_summary_item(item) for item in data["items"] if isinstance(item, dict)]
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][search_product_summary_tool] Failed")
+        return _error_response(None, str(e), "Failed to search product summaries")
 
 
 @tool
@@ -477,11 +989,11 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
     차량번호+소유주명으로 차량 조회.
 
     When to use:
-    - FALLBACK only: after get_my_cars_tool returns 0 cars AND user provides car_no + owner_nm
+    - DIRECTLY when the same user message provides car_no + owner_nm
     - Also when user provides someone else's vehicle number
 
     When NOT to use:
-    - Do NOT use before trying get_my_cars_tool first
+    - Do NOT call get_my_cars_tool first when car_no + owner_nm are already present
     - Do NOT use if tire_size is already confirmed
 
     Args:
@@ -501,32 +1013,15 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
                 response.content.decode(errors="ignore") or "Failed to get user vehicles"
             )
         # logger.debug("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _attach_vehicle_type_to_vehicle_payload(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
         return _error_response(None, str(e), "Failed to get user vehicles")
 
 
-@tool
 @tool_cache(ttl=600)
-def get_my_cars_tool(mbr_no: str):
-    """
-    사용자 등록 차량 조회 (회원번호 기준).
-
-    When to use:
-    - FIRST step for ANY vehicle-related request (tire recommendation, compatibility, price by vehicle)
-    - Call immediately using mbr_no from JWT — do NOT ask user questions first
-
-    Result handling:
-    - 1 car → auto-select, use tire_size_fr and car_lnc_cd
-    - 2+ cars → show ALL in numbered list, wait for user to select
-    - 0 cars → guide user to provide car_no+owner_nm or car model name
-
-    Args:
-        mbr_no (str): 회원번호 (from user context).
-
-    Example: {"mbr_no": "MXXXXXXXXX"}
-    """
+def _get_my_cars_cached(mbr_no: str):
+    """Internal cached BE call. Public wrapper applies the audit hook below."""
     logger.debug("[TOOL][get_my_cars_tool] Called with: mbr_no=%s", mbr_no)
 
     try:
@@ -538,10 +1033,45 @@ def get_my_cars_tool(mbr_no: str):
                 response.content.decode(errors="ignore") or "Failed to get member cars"
             )
         # logger.debug("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _attach_vehicle_type_to_vehicle_payload(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_my_cars_tool] Failed")
         return _error_response(None, str(e), "Failed to get member cars")
+
+
+@tool
+def get_my_cars_tool(mbr_no: str):
+    """
+    사용자 등록 차량 조회 (회원번호 기준).
+
+    When to use:
+    - FIRST step for vehicle-related request when the user asks for their registered cars/my car
+    - Call immediately using mbr_no from JWT — do NOT ask user questions first
+
+    When NOT to use:
+    - If the same user message already includes car_no + owner_nm, do NOT call this tool.
+      Use get_user_vehicles_tool(car_no, owner_nm) directly.
+
+    Result handling:
+    - 1 car → auto-select, use tire_size_fr and car_lnc_cd
+    - 2+ cars → show ALL in numbered list, wait for user to select
+    - 0 cars → guide user to provide car_no+owner_nm or car model name
+
+    Args:
+        mbr_no (str): 회원번호 (from user context).
+
+    Example: {"mbr_no": "MXXXXXXXXX"}
+    """
+    result = _get_my_cars_cached(mbr_no)
+    # Record registered car_no list for downstream mismatch audit. Runs on
+    # cache hit as well, so subsequent tools in the same turn always see it.
+    if isinstance(result, dict) and result.get("status") == "success":
+        data = result.get("data") or {}
+        items = data.get("items") if isinstance(data, dict) else None
+        if isinstance(items, list):
+            car_nos = [it.get("car_no", "") for it in items if isinstance(it, dict)]
+            set_registered_car_nos(car_nos)
+    return result
 
 
 @tool
@@ -658,7 +1188,27 @@ def get_car_trims_tool(car_model_det: str):
 @tool_cache(ttl=600)
 def get_product_description_tool(goods_no: str):
     """
-    Get detailed product information (features, tech description, slogan, images, rating, reviews).
+    Get detailed product information.
+
+    Response covers (사용자 질문 → 참조 필드):
+        - 마케팅 텍스트: pc_prod_remark_desc (특장점), pc_prod_tech_desc (기술력), slogan
+        - 이미지/리뷰: images, rating, reviews
+        - 식별/표기: goods_nm, big_goods_nm, ptrn_d_nm
+        - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
+        - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn
+        - 브랜드/출시: brand_nm, certify_brand_nm, t_rls_yearmon
+        - 성능 점수: t_comfort, t_silence, t_high_perform, t_handling, t_life_span,
+          t_snow, t_ice, t_dryroad_brk
+        - EU 라벨: rr, wet, label_pndb
+        - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn, t_rlx_isn_yn
+        - 가격: sale_prc (기본가), extra_fvr_sale_prc (사이트 일반 노출 혜택가)
+
+    Price fields are reference facts, not a default narration target. Use
+    `extra_fvr_sale_prc` and `sale_prc` only when the current turn explicitly
+    asks for price or when a downstream price flow requested those values.
+    For normal product explanation turns, prefer feature / review / rating
+    summary and leave price handling to price tools.
 
     Args:
         goods_no (str): Product number.
@@ -676,7 +1226,7 @@ def get_product_description_tool(goods_no: str):
                 response.content.decode(errors="ignore") or "Failed to get product description"
             )
         # logger.debug("[TOOL][get_product_description_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _append_three_pmsf_description(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_product_description_tool] Failed")
         return _error_response(None, str(e), "Failed to get product description")
@@ -686,15 +1236,19 @@ def get_product_description_tool(goods_no: str):
 @tool_cache(ttl=300)
 def get_products_recommendations_tool(
     rcmd_type: RcmdType,
-    limit: int = 10,
+    limit: int = 3,
     brand_cd: str = "HK",
+    allow_cross_brand_fill: bool = True,
     car_lnc_cd: str | None = None,
     tire_size: str | None = None,
     sort_by: str | None = None,
     season_nm: str | None = None,
     pfm_nm: str | None = None,
+    prc_grd: str | None = None,
+    vehicle_type: str | None = None,
     min_price: int | None = None,
     max_price: int | None = None,
+    ignore_policy_patch: bool = False,
 ):
     """
     Product Recommendation — top N products by rcmd_type.
@@ -722,10 +1276,13 @@ def get_products_recommendations_tool(
     - all_weather: 전천후 (WET, T_SNOW, T_ICE 높은 순)
     - warranty: 워런티 가능 (WRT_GRTE_TERM 긴 순)
     - summer: 여름용 (SEASON_NM='여름', WET·T_HIGH_HAND_AVG 높은 순)
+    - sound_absorber: 흡음재 적용 (GOODS_DTL_PFM_NM LIKE '%흡음%' — 흡음재/흡음제(오타)/복합 모두 포함, 정숙성 점수 정렬). low_vibration 과 직교: 흡음재는 기술 사양, low_vibration 은 점수 기반.
 
     Args:
         rcmd_type (RcmdType): Recommendation type.
-        limit (int, optional): Number of products to return. Default is 10, maximum is 100.
+        limit (int, optional): Number of products to return. Default is 3, maximum is 10.
+            If the user requests more than 10, call with limit=10 and explain that
+            recommendations are available up to 10 items.
         brand_cd (str, optional): Brand code. Default is HK.
             - HK: Hankook 한국타이어 (Hankook Tire)
             - LF: Laufenn 라우펜
@@ -734,27 +1291,55 @@ def get_products_recommendations_tool(
             - BS: Bridgestone 브리지스톤
             - CT: Continental 콘티넨탈
             - GY: Goodyear 굿이어
+        allow_cross_brand_fill (bool, optional): HK 추천 결과가 부족할 때 타 브랜드로 보충할지 여부.
+            기본값은 True. 멀티 브랜드/브랜드별 추천처럼 요청 브랜드를 엄격히 분리해야 할 때만 False 사용.
         car_lnc_cd (str | None, optional): 차량 런칭 코드. 입력 시 타이어 사이즈보다 우선 적용
         tire_size (str | None, optional): 타이어 사이즈 문자열 (예: "245/45R18", 공백/소문자 허용)
         sort_by (str | None, optional): 사용자 의도 기반 정렬. rcmd_type 과 독립적으로 동작하며,
             BE 응답 + description enrichment 후 클라이언트 측에서 정렬한다.
             - "price_asc": 가장 저렴한 순 (가장 저렴한, 제일 싼, 최저가, 싼 것부터)
-            - "price_desc": 비싼 순 (비싼 것부터, 고가, 프리미엄 순)
+            - "price_desc": 비싼 순 (비싼 것부터, 고가)
             - "rating_desc": 평점 높은 순 (별점 좋은, 평점순)
             - "review_desc": 리뷰 많은 순 (후기 많은, 리뷰순)
             None 이면 rcmd_type 의 BE 정렬 그대로 유지.
+            ⚠️ "프리미엄" / "프리미엄급" 의도는 `sort_by` 가 아니라 아래 `prc_grd` 파라미터로 처리.
         season_nm (str | None, optional): 계절 직교 필터. rcmd_type 과 직교로 적용된다.
-            - "여름": 여름용 타이어만
-            - "겨울": 겨울용 타이어만
-            - "사계절": 사계절 타이어만
+            - "여름": 여름용 타이어만 (PR_GOODS_BASE.SEASON_NM='여름')
+            - "겨울": 겨울용 타이어만 (PR_GOODS_BASE.SEASON_NM='겨울')
+            - "사계절": 사계절 타이어만 (PR_GOODS_BASE.SEASON_NM='사계절')
+            - "올웨더": 올웨더 패턴만 (PR_PATTERN_BASE.ALLWEATHER_YN='Y')
+              ⚠️ 사용자가 "올웨더 / all-weather / 전천후" 라고 명시하면
+              `season_nm="올웨더"` 사용. "사계절 / 올시즌 / all-season" 이라고 명시하면
+              `season_nm="사계절"`.
             ⚠️ 신규(동적) rcmd_type 에만 적용됨 (tstation/discount/value 제외).
             "여름용 타이어 추천" 단일 의도면 rcmd_type="summer" 사용 (필터 불필요).
         pfm_nm (str | None, optional): 성능 등급 직교 필터. rcmd_type 과 직교로 적용된다.
             - "SPORT": 스포츠/퍼포먼스
             - "COMFORT": 편안한 승차감
             - "RUNFLAT": 런플랫
-            ⚠️ 신규(동적) rcmd_type 에만 적용됨.
+            ⚠️ 신규(동적) rcmd_type + "tstation" 에 적용됨 (discount/value 는 미적용).
             "퍼포먼스 타이어 추천" 단일 의도면 rcmd_type="performance" 사용 (필터 불필요).
+            "런플랫 타이어 추천" 단일 의도면 rcmd_type="tstation" + pfm_nm="RUNFLAT" 사용
+              (rcmd_type="family" 는 데이터상 RUNFLAT 결과 0건이므로 사용 금지).
+        prc_grd (str | None, optional): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM).
+            - "프리미엄": 최상위 프리미엄 계열
+            - "스탠다드": 스탠다드 등급
+            - "이코노미": 이코노미 등급
+            ⚠️ 신규(동적) rcmd_type + "tstation" 에 적용됨 (discount/value 는 미적용).
+            "프리미엄 타이어 추천" / "프리미엄급으로 추천" 의도면 prc_grd="프리미엄" 사용.
+            sort_by="price_desc" 는 "비싼 순" (정렬) 일 뿐 등급 필터가 아님 — 헷갈리지 말 것.
+        vehicle_type (str | None, optional): 차량 타입 직교 필터. rcmd_type 과 별도로 적용한다.
+            - "ev": 전기차용 (CAR_KND_NM='전기차')
+            - "suv": SUV용 (CAR_KND_NM='SUV')
+            - "passenger": 승용/세단/스포츠카용
+            - "truck_van": 경트럭/밴/트럭용
+            ⚠️ "전기차 저소음" 같은 복합 의도는 rcmd_type="low_vibration", vehicle_type="ev" 로 전달한다.
+            기존 rcmd_type="ev" 는 하위 호환용 단일 전기차 추천일 때만 사용한다.
+            ⚠️ 사용자가 차종명만 말한 경우(미등록 차량, 사이즈 미확보)에도 차종 지식으로 타입을 추론해
+            전달한다: "E클래스" → "passenger", "G바겐" → "suv", "포터" → "truck_van". EV 전용 모델
+            (모델Y, 아이오닉5 등)이 아니면 "ev" 를 추론값으로 쓰지 마라(코나·니로·G80 등 겸용 모델은 차체
+            타입 기준). 이때 tire_size 는 전달하지 않는다. 결과 0건이면 도구가 자동으로 vehicle_type
+            필터를 풀고 1회 재시도한다(응답의 `recommendation_fallback.assistant_response_hint` 반영).
         min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
             예: 200_000 ("20만원 이상")
         max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
@@ -766,20 +1351,30 @@ def get_products_recommendations_tool(
         - "런플랫 중에 빗길 강한" → rcmd_type="wet", pfm_nm="RUNFLAT"
         - "30만원 이하 사계절 타이어" → rcmd_type="all_weather", max_price=300_000
         - "20만원~30만원 가성비 타이어" → rcmd_type="value", min_price=200_000, max_price=300_000
+        - "프리미엄급으로 추천" → rcmd_type="tstation", prc_grd="프리미엄"
+        - "올웨더 말고 프리미엄급으로" (직전 올웨더 추천 후 redo) → rcmd_type="tstation", prc_grd="프리미엄"
+        - "프리미엄 사계절" → rcmd_type="tstation", prc_grd="프리미엄", season_nm="사계절"
+        - "전기차 저소음" → rcmd_type="low_vibration", vehicle_type="ev"
+        - "SUV 가성비" → rcmd_type="value", vehicle_type="suv"
+        - "G바겐 타이어 추천해줘" (미등록 차종명) → rcmd_type="tstation", vehicle_type="suv" (tire_size 생략)
+        - "E클래스 타이어 추천" (미등록 차종명) → rcmd_type="tstation", vehicle_type="passenger" (tire_size 생략)
 
     Notes:
         - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
         - 가격 필터 활성 시 BE에서 limit×4 개 fetch 후 필터링하여 limit 개 반환.
 
     Examples:
-        - {"rcmd_type": "tstation", "limit": 10, "brand_cd": "HK"}
+        - {"rcmd_type": "tstation", "limit": 3, "brand_cd": "HK"}
         - {"rcmd_type": "wet", "limit": 5, "brand_cd": "HK", "tire_size": "245/45R18"}
         - {"rcmd_type": "ev", "limit": 5, "brand_cd": "HK", "car_lnc_cd": "LNCXXXXXX"}
         - {"rcmd_type": "warranty", "limit": 5, "brand_cd": "HK"}
         - {"rcmd_type": "all_weather", "tire_size": "245/45R18", "sort_by": "price_asc"}  # 가장 저렴한 사계절 타이어
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "sort_by": "rating_desc"}   # 평점 높은 순
         - {"rcmd_type": "performance", "season_nm": "여름"}  # 퍼포먼스 좋은 여름용
+        - {"rcmd_type": "tstation", "pfm_nm": "RUNFLAT", "limit": 3}  # 런플랫 단독 추천
         - {"rcmd_type": "wet", "pfm_nm": "RUNFLAT"}        # 런플랫 중 빗길 강한 것
+        - {"rcmd_type": "low_vibration", "vehicle_type": "ev"}  # 전기차 저소음
+        - {"rcmd_type": "value", "vehicle_type": "suv"}  # SUV 가성비
         - {"rcmd_type": "value", "max_price": 300_000, "sort_by": "price_asc"}  # 30만원 이하 가성비
         - {"rcmd_type": "tstation", "tire_size": "225/45R17", "min_price": 200_000, "max_price": 300_000}  # 20~30만원 사이
 
@@ -787,43 +1382,258 @@ def get_products_recommendations_tool(
         dict: {"status": "success", "http_status": ..., "data": ...}
               or {"status": "no_results", "reason": "no_products_in_price_range", "min_price": ..., "max_price": ...}
               or {"status": "error", "http_status": ..., "reason": ..., "message": ...}
+
+    Item field hints (사용자 질문 → 참조 필드, search_product_tool 과 동일):
+        - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
+        - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
+        - 브랜드/출시: brand_nm, certify_brand_nm, t_rls_yearmon
+        - 추가 성능: t_high_perform, t_handling, t_dryroad_brk
+        - EU 라벨: rr (회전저항), wet, label_pndb (소음 dB)
+        - 공임/보증: wage_prc, wage_today_prc, free_guarantee_yn
+        - 가격: extra_fvr_sale_prc (사이트 일반 노출 혜택가), sale_prc (기본가)
+        Tip: 사용자에게 가격을 안내할 때 extra_fvr_sale_prc 를 우선하고,
+        값이 없을 때만 sale_prc 를 인용한다.
     """
-    has_price_filter = bool(min_price or max_price)
-    fetch_limit = limit * 4 if has_price_filter else limit
+    # Deterministic guard: if the user named a car_no in this turn and it
+    # does not match any registered car, short-circuit before issuing the
+    # BE call. The LLM has repeatedly ignored prompt-only rules and proceeded
+    # to recommend tires for an unrelated registered car.
+    mismatched_plate = detect_car_no_mismatch()
+    if mismatched_plate is not None:
+        logger.info(
+            "[TOOL][get_products_recommendations_tool] BLOCKED by car_no audit: "
+            "user requested %s but it is not in get_my_cars_tool result",
+            mismatched_plate,
+        )
+        return _error_response(
+            http_status=412,
+            reason="CAR_NO_MISMATCH",
+            message=(
+                f"유저가 명시한 차량번호 '{mismatched_plate}' 가 get_my_cars_tool 의 등록 차량 목록에 없습니다. "
+                "이 차량에 대해 추천을 진행하지 마세요. 대신 listCar 템플릿으로 등록된 차량만 노출하고 "
+                f"assistantResponse 를 정확히 다음과 같이 작성하세요: "
+                f"\"**{mismatched_plate}** 은(는) 등록된 차량 목록에 없어요. "
+                "등록된 차량 중에서 골라주시거나, 정확한 차량번호+소유주명을 다시 알려주세요 😊\""
+            ),
+        )
+
+    policy_patch = {} if ignore_policy_patch else current_discovery_recommendation_tool_patch.get()
+    if policy_patch:
+        before_policy = {
+            "rcmd_type": rcmd_type,
+            "brand_cd": brand_cd,
+            "tire_size": tire_size,
+            "sort_by": sort_by,
+            "season_nm": season_nm,
+            "pfm_nm": pfm_nm,
+            "prc_grd": prc_grd,
+            "vehicle_type": vehicle_type,
+            "min_price": min_price,
+            "max_price": max_price,
+        }
+        rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price = (
+            _apply_recommendation_policy_patch(
+                patch=policy_patch,
+                rcmd_type=rcmd_type,
+                brand_cd=brand_cd,
+                tire_size=tire_size,
+                sort_by=sort_by,
+                season_nm=season_nm,
+                pfm_nm=pfm_nm,
+                prc_grd=prc_grd,
+                vehicle_type=vehicle_type,
+                car_lnc_cd=car_lnc_cd,
+                min_price=min_price,
+                max_price=max_price,
+            )
+        )
+        logger.info(
+            "[TOOL][get_products_recommendations_tool] Applied discovery policy patch=%s before=%s after=%s",
+            policy_patch,
+            before_policy,
+            {
+                "rcmd_type": rcmd_type,
+                "brand_cd": brand_cd,
+                "tire_size": tire_size,
+                "sort_by": sort_by,
+                "season_nm": season_nm,
+                "pfm_nm": pfm_nm,
+                "prc_grd": prc_grd,
+                "vehicle_type": vehicle_type,
+            },
+        )
+
+    if tire_size is None and car_lnc_cd is None and not (min_price or max_price):
+        confirmed_tire_size = current_confirmed_tire_size.get()
+        if confirmed_tire_size:
+            tire_size = confirmed_tire_size
+            logger.info(
+                "[TOOL][get_products_recommendations_tool] Auto-filled tire_size=%s from confirmed slot",
+                tire_size,
+            )
+
+    effective_min_price, effective_max_price, effective_sort_by = _normalize_search_price_args(
+        min_price,
+        max_price,
+        sort_by,
+    )
+    has_price_filter = bool(effective_min_price or effective_max_price)
+    requested_limit = limit
+    effective_limit = min(max(int(limit or 3), 1), _RECOMMENDATION_LIMIT_CAP)
+    if has_price_filter:
+        effective_limit = _RECOMMENDATION_LIMIT_CAP
+    limit_capped = requested_limit > effective_limit
+
+    # Price filtering is now SQL-side on BE — no client-side post-filter.
+    has_newest_sort = effective_sort_by == "newest_desc"
+    fetch_limit = effective_limit
+    requested_rcmd_type = rcmd_type.value if isinstance(rcmd_type, RcmdType) else str(rcmd_type)
+    requested_season_nm = season_nm
     logger.debug(
-        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, min_price=%s, max_price=%s",
-        rcmd_type, limit, brand_cd, car_lnc_cd, tire_size, sort_by, season_nm, pfm_nm, min_price, max_price,
+        "[TOOL][get_products_recommendations_tool] Called with: rcmd_type=%s, limit=%s, brand_cd=%s, car_lnc_cd=%s, tire_size=%s, sort_by=%s, season_nm=%s, pfm_nm=%s, prc_grd=%s, vehicle_type=%s, min_price=%s, max_price=%s",
+        rcmd_type, effective_limit, brand_cd, car_lnc_cd, tire_size, effective_sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, effective_min_price, effective_max_price,
     )
 
-    try:
+    def _fetch_recommendation_once(
+        *,
+        call_rcmd_type: RcmdType,
+        call_season_nm: str | None,
+        call_vehicle_type: str | None,
+    ) -> dict:
+        try:
+            vehicle_type_param = VehicleType(str(call_vehicle_type)) if call_vehicle_type else None
+        except ValueError:
+            return _error_response(
+                http_status=422,
+                reason="INVALID_VEHICLE_TYPE",
+                message=f"지원하지 않는 vehicle_type: {call_vehicle_type}",
+            )
+
         response = get_products_recommendations(
             client=get_client(),
-            rcmd_type=rcmd_type,
+            rcmd_type=call_rcmd_type,
             limit=fetch_limit,
             brand_cd=brand_cd,
+            allow_cross_brand_fill=allow_cross_brand_fill,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
-            season_nm=season_nm,
+            season_nm=call_season_nm,
             pfm_nm=pfm_nm,
+            prc_grd=prc_grd,
+            vehicle_type=vehicle_type_param,
+            min_price=effective_min_price,
+            max_price=effective_max_price,
         )
         if response.parsed is None:
             return _error_response(
                 response.status_code,
                 f"HTTP {response.status_code}",
-                response.content.decode(errors="ignore") or "Failed to get product recommendations"
+                response.content.decode(errors="ignore") or "Failed to get product recommendations",
             )
-        # logger.debug("[TOOL][get_products_recommendations_tool] Response: %s", response.parsed)
+
         data = _to_dict(response.parsed)
         if isinstance(data, dict) and isinstance(data.get("items"), list):
-            if has_price_filter:
-                data["items"] = _filter_by_price(data["items"], min_price, max_price)
-                if not data["items"]:
-                    return {"status": "no_results", "reason": "no_products_in_price_range", "min_price": min_price, "max_price": max_price}
+            if has_price_filter and not data["items"]:
+                return {
+                    "status": "no_results",
+                    "reason": "no_products_in_price_range",
+                    "min_price": effective_min_price,
+                    "max_price": effective_max_price,
+                }
+            if str(call_rcmd_type) == "discount":
+                data["items"] = _enrich_items_with_price_fields(data["items"])
             data["items"] = _enrich_items_with_descriptions(data["items"])
-            data["items"] = _sort_items(data["items"], sort_by)
-            if has_price_filter:
-                data["items"] = data["items"][:limit]
+            data["items"] = _sort_items(data["items"], effective_sort_by)
+            if has_newest_sort:
+                data["items"] = data["items"][:effective_limit]
+            data["requested_limit"] = requested_limit
+            data["effective_limit"] = effective_limit
+            data["limit_capped"] = limit_capped
         return _success_response(response.status_code, data)
+
+    try:
+        result = _fetch_recommendation_once(
+            call_rcmd_type=rcmd_type,
+            call_season_nm=season_nm,
+            call_vehicle_type=vehicle_type,
+        )
+        if result.get("status") != "success":
+            return result
+
+        data = result.get("data")
+        items = data.get("items") if isinstance(data, dict) else None
+        # Empty for a reason other than the price filter (price-empty has its own
+        # no_results messaging and must not be masked by a relaxed retry).
+        has_empty_items = not has_price_filter and isinstance(items, list) and not items
+        should_try_winter_fallback = (
+            has_empty_items
+            and requested_season_nm == "겨울"
+            and requested_rcmd_type in {"snow", "tstation"}
+        )
+        if should_try_winter_fallback:
+            # Winter fallback runs first and KEEPS the vehicle_type filter.
+            for fallback_rcmd_type, fallback_season_nm, fallback_label in _WINTER_RECOMMENDATION_FALLBACKS:
+                fallback_result = _fetch_recommendation_once(
+                    call_rcmd_type=fallback_rcmd_type,
+                    call_season_nm=fallback_season_nm,
+                    call_vehicle_type=vehicle_type,
+                )
+                if fallback_result.get("status") != "success":
+                    continue
+
+                fallback_data = fallback_result.get("data")
+                fallback_items = fallback_data.get("items") if isinstance(fallback_data, dict) else None
+                if not isinstance(fallback_items, list) or not fallback_items:
+                    continue
+
+                fallback_data["recommendation_fallback"] = {
+                    "requested_rcmd_type": requested_rcmd_type,
+                    "requested_season_nm": requested_season_nm,
+                    "applied_rcmd_type": fallback_rcmd_type.value,
+                    "applied_season_nm": fallback_season_nm,
+                    "assistant_response_hint": (
+                        "겨울용 상품은 현재 확인되지 않아 "
+                        f"같은 사이즈의 {fallback_label} 대안을 먼저 추천했습니다."
+                    ),
+                }
+                logger.info(
+                    "[TOOL][get_products_recommendations_tool] Applied winter fallback requested=%s/%s fallback=%s/%s items=%s",
+                    requested_rcmd_type,
+                    requested_season_nm,
+                    fallback_rcmd_type.value,
+                    fallback_season_nm,
+                    len(fallback_items),
+                )
+                return fallback_result
+
+        # vehicle_type relax runs after winter fallback: an unregistered car-model
+        # inference may over-constrain (sparse CAR_KND_NM data). Retry once without
+        # the filter so the user still sees products.
+        if has_empty_items and vehicle_type:
+            relaxed_result = _fetch_recommendation_once(
+                call_rcmd_type=rcmd_type,
+                call_season_nm=season_nm,
+                call_vehicle_type=None,
+            )
+            relaxed_data = relaxed_result.get("data") if relaxed_result.get("status") == "success" else None
+            relaxed_items = relaxed_data.get("items") if isinstance(relaxed_data, dict) else None
+            if isinstance(relaxed_items, list) and relaxed_items:
+                relaxed_data["recommendation_fallback"] = {
+                    "requested_vehicle_type": str(vehicle_type),
+                    "applied_vehicle_type": None,
+                    "assistant_response_hint": (
+                        "요청하신 차량 타입 전용 상품이 확인되지 않아 "
+                        "차량 타입 필터 없이 추천했습니다."
+                    ),
+                }
+                logger.info(
+                    "[TOOL][get_products_recommendations_tool] Relaxed empty vehicle_type filter requested=%s items=%s",
+                    vehicle_type,
+                    len(relaxed_items),
+                )
+                return relaxed_result
+
+        return result
     except Exception as e:
         logger.exception("[TOOL][get_products_recommendations_tool] Failed")
         return _error_response(None, str(e), "Failed to get product recommendations")
@@ -854,6 +1664,48 @@ def get_events_tool(lang_cd: str = "ko"):
     except Exception as e:
         logger.exception("[TOOL][get_events_tool] Failed")
         return _error_response(None, str(e), "Failed to get events")
+
+
+@tool
+@tool_cache(ttl=600)
+def search_benefit_applicable_products_tool(query: str, lang_cd: str = "ko"):
+    """쿠폰/이벤트/기획전 통합 적용 상품 검색.
+
+    Use when user asks "패밀리 쿠폰 적용 가능한 상품", "반짝블랙딜 대상 상품",
+    "한국타이어 페스타에서 살 수 있는 상품" 등 혜택명/쿠폰명/이벤트명/기획전명을
+    기준으로 적용 가능한 대표 상품/매장을 찾을 때 사용. 차량/규격 기반 상품 검색은 포함하지 않음.
+
+    Args:
+        query (str): 혜택명/쿠폰명/이벤트명/기획전명 검색어. 예: "패밀리", "30% 할인", "반짝블랙딜".
+        lang_cd (str): 언어 코드. Default 'ko'.
+
+    Example: {"query": "패밀리", "lang_cd": "ko"}
+    """
+    normalized_query = re.sub(r"\s+", " ", str(query or "")).strip()
+    logger.debug(
+        "[TOOL][search_benefit_applicable_products_tool] Called with: query=%s, lang_cd=%s",
+        normalized_query, lang_cd,
+    )
+
+    if not normalized_query:
+        return _error_response(None, "query is empty", "검색어는 최소 1자 이상 필요합니다.")
+
+    try:
+        response = search_benefit_applicable_products(
+            client=get_client(),
+            query=normalized_query,
+            lang_cd=lang_cd or "ko",
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search benefit applicable products",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][search_benefit_applicable_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to search benefit applicable products")
 
 
 @tool
@@ -893,7 +1745,7 @@ def get_event_applicable_products_tool(evt_no_list: list[str]):
 
 @tool
 @tool_cache(ttl=600)
-def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
+def get_product_applicable_events_tool(ptrn_cd: str, lang_cd: str = "ko"):
     """상품 적용 가능 이벤트 조회 — 특정 상품에 적용 가능한 진행 중 이벤트 목록.
 
     Use when user asks "이 상품에 어떤 이벤트가 적용돼?", "이 상품에 적용 가능한 이벤트 알려줘",
@@ -901,18 +1753,18 @@ def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
     이벤트만 반환되며 50(상품 매핑) / 80(패턴 매핑) 양쪽 모두 포함.
 
     Args:
-        goods_no (str): 상품 번호 (예: 'G000000317693').
+        ptrn_cd (str): 상품 패턴 코드 (예: 'H462').
         lang_cd (str): 이벤트명 언어 코드. Default 'ko'.
 
-    Example: {"goods_no": "G000000317693", "lang_cd": "ko"}
+    Example: {"ptrn_cd": "H462", "lang_cd": "ko"}
     """
     logger.debug(
-        "[TOOL][get_product_applicable_events_tool] Called with: goods_no=%s, lang_cd=%s",
-        goods_no, lang_cd,
+        "[TOOL][get_product_applicable_events_tool] Called with: ptrn_cd=%s, lang_cd=%s",
+        ptrn_cd, lang_cd,
     )
 
     try:
-        response = get_product_applicable_events(client=get_client(), goods_no=goods_no, lang_cd=lang_cd)
+        response = get_product_applicable_events(client=get_client(), ptrn_cd=ptrn_cd, lang_cd=lang_cd)
         if response.parsed is None:
             return _error_response(
                 response.status_code,
@@ -947,11 +1799,46 @@ def get_deals_tool():
 
 
 @tool
+@tool_cache(ttl=600)
+def get_benefit_event_deal_list_tool(lang_cd: str = "ko"):
+    """이벤트/기획전 통합 목록 조회 — generic 혜택/프로모션/기획전/이벤트 질문용."""
+    logger.debug("[TOOL][get_benefit_event_deal_list_tool] Called with: lang_cd=%s", lang_cd)
+
+    try:
+        events_response = get_events(client=get_client(), lang_cd=lang_cd)
+        deals_response = get_deals(client=get_client())
+        if events_response.parsed is None:
+            return _error_response(
+                events_response.status_code,
+                f"HTTP {events_response.status_code}",
+                events_response.content.decode(errors="ignore") or "Failed to get events",
+            )
+        if deals_response.parsed is None:
+            return _error_response(
+                deals_response.status_code,
+                f"HTTP {deals_response.status_code}",
+                deals_response.content.decode(errors="ignore") or "Failed to get deals",
+            )
+        return _success_response(
+            200,
+            {
+                "events": _to_dict(events_response.parsed),
+                "deals": _to_dict(deals_response.parsed),
+            },
+        )
+    except Exception as e:
+        logger.exception("[TOOL][get_benefit_event_deal_list_tool] Failed")
+        return _error_response(None, str(e), "Failed to get benefit event/deal list")
+
+
+@tool
 def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     """Compare discount prices across multiple products.
 
     Use when user asks to compare prices, "가장 저렴한/싼" product, or "비교".
-    Returns: sale_prc, product_discount, coupon_discount, final_unit_price, final_price, cheapest_goods_no.
+    Returns: sale_prc, product_discount, coupon_discount, final_unit_price,
+    and final_price. Use the returned general benefit price rather than
+    member-held-coupon personalized fields.
 
     Args:
         goods_no_list (list[str]): 2+ product numbers to compare.
@@ -974,6 +1861,66 @@ def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     except Exception as e:
         logger.exception("[TOOL][compare_discount_tool] Failed")
         return _error_response(None, str(e), "Failed to compare discount prices")
+
+
+@tool
+def get_cheapest_price_tool(
+    goods_no_list: list[str],
+    quantity: int = 1,
+    shop_id: str | None = None,
+    channel: str = "web",
+):
+    """회원 보유 쿠폰을 상품→결제→플러스 순으로 자동 적용한 **상품별** 최저 혜택가.
+
+    Use when the user asks the **final benefit price** for one or more
+    *specific* products — e.g. "최종 얼마", "쿠폰 다 적용하면 얼마", "혜택가",
+    "최대 할인가", "최저가" (single-product or per-product, NOT "여러 개 중 가장 싼").
+    Different from `compare_discount_tool` which picks one cheapest item across
+    products; this tool returns one simulation row per `goods_no`.
+
+    각 단계마다 회원 보유 쿠폰 중 할인금액이 가장 큰 1장을 자동 선택해 적용.
+    상품쿠폰 CPN_DUP_USE_YN='N' 이면 결제쿠폰 단계는 건너뜀. 플러스쿠폰은 항상 적용.
+
+    Returns per-item: `sale_prc`, `final_prc`, `total_discount`, and
+    `applied_coupons[]` describing `{stage, cpn_no, cpn_nm, discount_amt}`.
+    **Cite `cpn_nm` in the natural-language reply** so the user knows which
+    coupons were used. FE renders only `sale_prc`/`final_prc` via the
+    `cheapestProduct` card.
+
+    Args:
+        goods_no_list (list[str]): 1+ product numbers. **goods_no MUST be
+            confirmed** before calling — if the user has not chosen a product
+            yet, do NOT call this tool.
+        quantity (int): Order-stage → user-selected quantity; simple
+            cheapest-price inquiry → 1 (default).
+        shop_id (str | None): Pass when the store is confirmed (matters for
+            store-scoped coupons). Otherwise omit.
+        channel (str): "web" (default) or "app".
+
+    Example: {"goods_no_list": ["G000000319449"], "quantity": 1}
+    """
+    logger.debug(
+        "[TOOL][get_cheapest_price_tool] Called with: goods_no_list=%s, quantity=%s, shop_id=%s, channel=%s",
+        goods_no_list, quantity, shop_id, channel,
+    )
+    try:
+        response = get_cheapest_by_coupon(
+            client=get_client(),
+            goods_no_list=goods_no_list,
+            quantity=quantity,
+            shop_id=shop_id,
+            channel=channel,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get cheapest price",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_cheapest_price_tool] Failed")
+        return _error_response(None, str(e), "Failed to get cheapest price")
 
 
 # Add this new tool for YouTube video search related to hankook tire and tstation tv. This will allow the agent to fetch relevant videos when users ask for reviews, tests, or visual content about specific tires or brands.
@@ -1045,6 +1992,51 @@ def search_youtube_video_tool(query: str, max_results: int = 3):
 
 
 @tool
+@tool_cache(ttl=600)
+def get_newest_products_tool(brand_cd: str = "HK", limit: int = 20):
+    """
+    최신/신제품 타이어 상품 조회.
+
+    Use this tool when the user intent is to find the newest/latest/new tire
+    products in general, without naming a specific model to compare.
+    Do not use `search_product_tool` for that general newest-product intent.
+    This tool sorts product search results by `sys_reg_dtime` descending; no
+    product name is hardcoded.
+
+    Args:
+        brand_cd (str): 브랜드 코드. Default HK.
+        limit (int): 반환할 최대 상품 수. Default 20.
+
+    Returns:
+        dict: {"status": "success", "http_status": ..., "data": {"items": [...]}}
+    """
+    logger.debug("[TOOL][get_newest_products_tool] Called with: brand_cd=%s, limit=%s", brand_cd, limit)
+    if not isinstance(limit, int) or not (1 <= limit <= 50):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "limit must be an int between 1 and 50",
+        }
+
+    try:
+        response = search_product(client=get_client(), keyword=None, limit=max(limit, 100), size=None, brand_cd=brand_cd)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search newest products",
+            )
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = _enrich_items_with_descriptions(data["items"])
+            data["items"] = _sort_items(data["items"], "newest_desc")[:limit]
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][get_newest_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to search newest products")
+
+
+@tool
 @tool_cache(ttl=300)
 def get_final_price_tool(goods_no: str, member_type: str | None = None):
     """Get product final price and discount info.
@@ -1071,54 +2063,68 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         return {"status": "error", "reason": str(e), "message": "Failed to get product price"}
 
 
-_BEST_SELLER_PERIOD_MAP: dict[str, BestSellerPeriod] = {
-    "day": BestSellerPeriod.DAY,
-    "week": BestSellerPeriod.WEEK,
-    "month": BestSellerPeriod.MONTH,
-    "3months": BestSellerPeriod.VALUE_3,
-}
-
-
 @tool
 @tool_cache(ttl=600)
-def get_best_selling_products_tool(period: str = "month", limit: int = 5):
+def get_best_selling_products_tool(
+    vehicle_query: str | None = None,
+    months: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    limit: int = 5,
+):
     """
-    기간별 베스트셀러 상품 조회 (PR_GOODS_SUM 판매 수량 기준 정렬).
+    통합 베스트셀러 상품 조회.
 
-    Period mapping (사용자 표현 → period 값):
-    - "오늘 가장 많이 팔린 상품 / 오늘의 베스트" → period="day"
-    - "이번 주 / 금주 베스트" → period="week"
-    - "이번 달 / 이달의 / 월별 베스트" → period="month"
-    - "요즘 / 최근 / 인기 / 잘 나가는 / 잘 팔리는" → period="month" (모호한 최근성 표현은 month로 매핑)
-    - "최근 3개월 / 분기 베스트" → period="3months"
+    - vehicle_query 없으면 일반 베스트셀러
+    - vehicle_query 있으면 차종별 베스트셀러
+    - 기간 미지정이면 BE 기본 3개월 사용
 
     Args:
-        period (str): "day" | "week" | "month" | "3months". Default "month".
+        vehicle_query (str | None): 차종 검색어 (예: "그랜저", "벤츠 e300")
+        months (int | None): 최근 N개월
+        from_date (str | None): 조회 시작일 YYYY-MM-DD
+        to_date (str | None): 조회 종료일 YYYY-MM-DD
         limit (int): 반환 상품 수 (1-50). Default 5.
 
-    Response: BestSellerResponse — items 의 각 행에 goods_no, goods_nm,
-        tire_size_1/2, image_url, extra_fvr_sale_prc, extra_fvr_sale_per, sale_qty.
-
-    Example: {"period": "month", "limit": 5}
+    Example: {"vehicle_query": "그랜저", "months": 3, "limit": 5}
     """
-    logger.debug("[TOOL][get_best_selling_products_tool] Called with: period=%s, limit=%s", period, limit)
+    logger.debug(
+        "[TOOL][get_best_selling_products_tool] Called with: vehicle_query=%s, months=%s, from_date=%s, to_date=%s, limit=%s",
+        vehicle_query,
+        months,
+        from_date,
+        to_date,
+        limit,
+    )
 
-    period_enum = _BEST_SELLER_PERIOD_MAP.get(period)
-    if period_enum is None:
-        return {
-            "status": "error",
-            "reason": "InvalidArguments",
-            "message": f"period must be one of {sorted(_BEST_SELLER_PERIOD_MAP.keys())}; got {period!r}",
-        }
     if not isinstance(limit, int) or not (1 <= limit <= 50):
         return {
             "status": "error",
             "reason": "InvalidArguments",
             "message": "limit must be an int between 1 and 50",
         }
+    if months is not None and (not isinstance(months, int) or not (1 <= months <= 60)):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "months must be an int between 1 and 60",
+        }
+    if bool(from_date) != bool(to_date):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "from_date and to_date must be provided together",
+        }
 
     try:
-        response = get_best_sellers(client=get_client(), period=period_enum, limit=limit)
+        body = BestSellerSearchRequest(
+            vehicle_query=vehicle_query or UNSET,
+            months=months if months is not None else UNSET,
+            from_date=from_date or UNSET,
+            to_date=to_date or UNSET,
+            limit=limit,
+        )
+        response = search_best_sellers(client=get_client(), body=body)
         if response.parsed is None:
             return {
                 "status": "error",
@@ -1128,6 +2134,8 @@ def get_best_selling_products_tool(period: str = "month", limit: int = 5):
             }
         # logger.debug("[TOOL][get_best_selling_products_tool] Response: %s", response.parsed)
         data = response.parsed.to_dict() if hasattr(response.parsed, "to_dict") else dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = enrich_product_card_items(data["items"])
         return {"status": "success", "http_status": response.status_code, "data": data}
     except Exception as e:
         logger.exception("[TOOL][get_best_selling_products_tool] Failed")

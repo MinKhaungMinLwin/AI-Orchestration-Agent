@@ -1,0 +1,132 @@
+"""
+Celery Beat task: faq_fetch_task
+
+Periodically fetches all FAQ data from tstation-be (Oracle DB source of truth)
+and re-ingests it into Qdrant, keeping vector search in sync automatically.
+
+Schedule is controlled by FAQ_SYNC_INTERVAL_SECONDS (default: 25200).
+Requires TSTATION_BE_API to be set; skips silently if missing.
+"""
+
+import logging
+import uuid
+
+import httpx
+from celery_app import celery_app
+from faq_dataset import ORACLE_FAQ_SOURCE
+from tasks.faq_sync_task import _run_incremental_sync
+
+logger = logging.getLogger(__name__)
+
+_FAQ_BE_PATH = "/api/faq"
+_FAQ_FETCH_LIMIT = 200
+_FAQ_FETCH_TIMEOUT = 30
+
+
+def _stable_faq_id(question: str) -> str:
+    """Deterministic UUID5 from question text — same question maps to the same Qdrant point ID."""
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, question))
+
+
+def _fetch_faq_from_be(base_url: str, token: str = "") -> tuple[list[dict], bool]:
+    """
+    Fetch all FAQ items from tstation-be and map to the ingestion schema expected
+    by _run_ingestion (same format as faq_data.json documents).
+
+    tstation-be FaqItem fields:
+        cust_quest   → question
+        pc_ans_cont  → answer
+        lrcl_cd      → metadata.category_lv1
+        mdcl_cd      → metadata.category_lv2
+    """
+    url = base_url.rstrip("/") + _FAQ_BE_PATH
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    response = httpx.get(url, params={"limit": _FAQ_FETCH_LIMIT}, timeout=_FAQ_FETCH_TIMEOUT, headers=headers)
+    response.raise_for_status()
+
+    payload = response.json()
+    items = payload.get("items", [])
+    total = payload.get("total", len(items))
+    is_partial = isinstance(total, int) and total > len(items)
+    documents = []
+    for item in items:
+        question = (item.get("cust_quest") or "").strip()
+        if not question:
+            continue
+        documents.append(
+            {
+                "id": _stable_faq_id(question),
+                "question": question,
+                "answer": (item.get("pc_ans_cont") or "").strip(),
+                "metadata": {
+                    "category_lv1": item.get("lrcl_cd") or "",
+                    "category_lv2": item.get("mdcl_cd") or "",
+                    "source": ORACLE_FAQ_SOURCE,
+                    "lang": "ko",
+                    "document_type": "faq_qa",
+                },
+            }
+        )
+
+    logger.info(
+        "[faq_fetch_task] Fetched %d/%s FAQ documents from %s",
+        len(documents),
+        total,
+        url,
+    )
+    if is_partial:
+        logger.warning(
+            "[faq_fetch_task] Partial FAQ response detected (total=%s, items=%d); "
+            "missing-document deletes will be disabled for this sync",
+            total,
+            len(items),
+        )
+    return documents, is_partial
+
+
+@celery_app.task(
+    name="faq_fetch_task",
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    queue="faq_sync",
+)
+def faq_fetch_task(self):
+    """Periodic task: pull FAQ from tstation-be and sync into Qdrant."""
+    from config.env import settings
+
+    base_url = settings.TSTATION_BE_API
+    if not base_url:
+        logger.warning("[faq_fetch_task] TSTATION_BE_API not configured — skipping sync")
+        return
+
+    logger.info("[faq_fetch_task] Starting periodic FAQ sync from %s", base_url)
+
+    try:
+        documents, is_partial = _fetch_faq_from_be(base_url, token=settings.JWT_TOKEN)
+    except Exception as exc:
+        logger.exception("[faq_fetch_task] Failed to fetch FAQ from tstation-be")
+        raise self.retry(exc=exc)
+
+    if not documents:
+        logger.warning("[faq_fetch_task] No FAQ documents returned — skipping ingestion")
+        return
+
+    try:
+        result = _run_incremental_sync(
+            documents,
+            settings.QDRANT_COLLECTION_FAQ,
+            # This sync owns only the Oracle-sourced points. The FAQ files are
+            # merged into the incoming set by `apply_file_overlays`, and are
+            # outside this scope, so they can never be deleted here.
+            delete_scope=None if is_partial else frozenset({ORACLE_FAQ_SOURCE}),
+        )
+    except Exception as exc:
+        logger.exception("[faq_fetch_task] Ingestion failed")
+        raise self.retry(exc=exc)
+
+    logger.info(
+        "[faq_fetch_task] Sync complete: upserted=%d collection=%s",
+        result.get("upserted_count", 0),
+        result.get("collection_name", ""),
+    )

@@ -15,6 +15,7 @@ class TStationChatRequest(BaseModel):
 
     # Access token for tstation-be API (per-request, can be different each time)
     access_token: Optional[str] = Field(default=None, description="Access token for tstation-be API calls")
+    origin_host: Optional[str] = Field(default=None, description="Original T-Station access host for BE upstream calls")
 
     # Extra user info from UI (overrides JWT fields if overlap)
     user_info: Optional[dict] = Field(default=None, description="Additional user info from UI")
@@ -25,6 +26,8 @@ class TStationChatRequest(BaseModel):
 
     # Quick reply chip routing — set when user taps a chip; allows classifier skip
     chip_context: Optional[Dict[str, Any]] = Field(default=None, description="Quick reply chip routing context")
+    ui_action: Optional[Dict[str, Any]] = Field(default=None, description="Normalized UI action payload")
+    slots: Optional[Dict[str, Any]] = Field(default=None, description="Current-turn slot patch from FE")
 
     @field_validator("messages")
     def validate_messages_not_empty(cls, v):

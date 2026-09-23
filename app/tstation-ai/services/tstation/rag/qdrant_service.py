@@ -8,10 +8,11 @@ Provides interface for:
 """
 
 import logging
+import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Optional
+from typing import Optional
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
@@ -23,6 +24,15 @@ from qdrant_client.models import Distance, VectorParams, PointStruct
 # ─────────────────────────────────────────────
 _collection_size_cache: dict[str, tuple[int, float]] = {}
 _COLLECTION_CACHE_TTL: float = 3600.0
+
+# Reused across all search_multi_vector calls — avoids per-request thread create/destroy overhead
+_search_executor = ThreadPoolExecutor(max_workers=2)
+# Separate pool for outer keyword/semantic parallel dispatch in search_hybrid
+_hybrid_executor = ThreadPoolExecutor(max_workers=2)
+
+# Per-subsystem fetch budget and rerank budget for search_hybrid
+_HYBRID_FETCH_K: int = 100   # candidates fetched per subsystem (keyword + semantic)
+_HYBRID_RERANK_K: int = 50   # candidates returned per subsystem after internal rerank
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +99,7 @@ class QdrantService:
             )
             logger.info(f"Created collection: {collection_name}")
             return True
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to create collection {collection_name}")
             raise
 
@@ -142,7 +152,7 @@ class QdrantService:
                 "collection_name": collection_name,
                 "upserted_count": len(points),
             }
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to upsert documents to {collection_name}")
             raise
 
@@ -194,7 +204,7 @@ class QdrantService:
                 f"top_k={top_k}, score_threshold={score_threshold}, results={len(hits)}"
             )
             return hits
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to search in {collection_name}")
             raise
 
@@ -228,7 +238,7 @@ class QdrantService:
             )
             logger.info(f"Created multi-vector collection: {collection_name} (size={vector_size})")
             return True
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to create multi-vector collection {collection_name}")
             raise
 
@@ -292,14 +302,15 @@ class QdrantService:
         score_threshold: float = 0.6,
         question_weight: float = 0.7,
         answer_weight: float = 0.3,
+        fetch_k: int | None = None,
     ) -> list[dict]:
         """
-        Hybrid search using RRF fusion of 'question' and 'answer' named vectors.
+        RRF fusion of 'question' and 'answer' named vectors.
 
-        Retrieves top_k candidates from each vector then fuses with Reciprocal Rank Fusion.
-        The fused score is normalized to [0,1] and filtered by score_threshold.
+        Fetches fetch_k candidates from each vector (defaults to top_k), fuses via RRF,
+        normalizes scores to [0,1], filters by score_threshold, and returns top_k results.
         """
-        fetch_k = top_k
+        _fetch_k = fetch_k if fetch_k is not None else top_k
         try:
             # Run question/answer vector searches in parallel to halve network latency
             def _query(vector_name: str):
@@ -307,16 +318,15 @@ class QdrantService:
                     collection_name=collection_name,
                     query=query_vector,
                     using=vector_name,
-                    limit=fetch_k,
+                    limit=_fetch_k,
                     with_payload=True,
                 )
 
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                q_future = executor.submit(_query, "question")
-                a_future = executor.submit(_query, "answer")
-                q_results = q_future.result()
-                a_results = a_future.result()
-        except Exception as e:
+            q_future = _search_executor.submit(_query, "question")
+            a_future = _search_executor.submit(_query, "answer")
+            q_results = q_future.result()
+            a_results = a_future.result()
+        except Exception:
             logger.exception(f"Failed multi-vector search in {collection_name}")
             raise
 
@@ -349,10 +359,134 @@ class QdrantService:
                 break
 
         logger.info(
-            f"Multi-vector search in {collection_name}: fetch_k={fetch_k}, "
+            f"Multi-vector search in {collection_name}: fetch_k={_fetch_k}, "
             f"score_threshold={score_threshold}, returned={len(hits)}"
         )
         return hits
+
+    def search_hybrid(
+        self,
+        collection_name: str,
+        query_vector: list[float],
+        query_text: str,
+        top_k: int = 5,
+    ) -> list[dict]:
+        """
+        Hybrid search: pure RRF fusion of keyword search and semantic search, run in parallel.
+
+        Each subsystem fetches _HYBRID_FETCH_K candidates then reranks to _HYBRID_RERANK_K.
+        Keyword search:  BM25 on question + answer corpora, internal RRF → top _HYBRID_RERANK_K.
+        Semantic search: parallel question + answer vector search, internal RRF → top _HYBRID_RERANK_K.
+        Falls back to semantic-only if keyword search fails.
+        """
+        from services.tstation.rag.bm25_index import get_bm25_index
+
+        bm25_idx = get_bm25_index()
+        bm25_idx.ensure_built(self.client, collection_name)
+
+        def _run_keyword() -> list[dict]:
+            tid = threading.get_ident()
+            t0 = time.perf_counter()
+            logger.info("[search_hybrid] keyword  START thread=%d", tid)
+            result = bm25_idx.search(query_text, top_k=_HYBRID_RERANK_K, fetch_k=_HYBRID_FETCH_K)
+            logger.info("[search_hybrid] keyword  END   thread=%d elapsed=%.0fms results=%d", tid, (time.perf_counter() - t0) * 1000, len(result))
+            return result
+
+        def _run_semantic() -> list[dict]:
+            tid = threading.get_ident()
+            t0 = time.perf_counter()
+            logger.info("[search_hybrid] semantic START thread=%d", tid)
+            result = self.search_multi_vector(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                top_k=_HYBRID_RERANK_K,
+                score_threshold=0.0,
+                fetch_k=_HYBRID_FETCH_K,
+            )
+            logger.info("[search_hybrid] semantic END   thread=%d elapsed=%.0fms results=%d", tid, (time.perf_counter() - t0) * 1000, len(result))
+            return result
+
+        t_dispatch = time.perf_counter()
+        kw_future  = _hybrid_executor.submit(_run_keyword)
+        sem_future = _hybrid_executor.submit(_run_semantic)
+
+        keyword_results: list[dict] = []
+        try:
+            keyword_results = kw_future.result()
+        except Exception:
+            logger.warning("[QdrantService] Keyword search failed — falling back to semantic only")
+
+        semantic_results = sem_future.result()
+        logger.info("[search_hybrid] both done total=%.0fms", (time.perf_counter() - t_dispatch) * 1000)
+
+        # Pure RRF fusion (k=60, equal weights)
+        RRF_K = 60
+        rrf_scores: dict[str, float] = {}
+        semantic_rank_map: dict[str, int] = {}
+        keyword_rank_map: dict[str, int] = {}
+        semantic_score_map: dict[str, float] = {}
+        keyword_score_map: dict[str, float] = {}
+        payloads: dict[str, dict] = {}
+
+        for rank, r in enumerate(semantic_results):
+            pid = str(r["id"])
+            rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1 / (RRF_K + rank + 1)
+            semantic_rank_map[pid] = rank + 1
+            semantic_score_map[pid] = float(r.get("score", 0.0) or 0.0)
+            payloads[pid] = r["payload"]
+
+        for rank, r in enumerate(keyword_results):
+            pid = str(r["id"])
+            rrf_scores[pid] = rrf_scores.get(pid, 0.0) + 1 / (RRF_K + rank + 1)
+            keyword_rank_map[pid] = rank + 1
+            keyword_score_map[pid] = float(r.get("score", 0.0) or 0.0)
+            if pid not in payloads:
+                payloads[pid] = r["payload"]
+
+        if not rrf_scores:
+            return []
+
+        candidates = sorted(rrf_scores, key=lambda x: rrf_scores[x], reverse=True)[:top_k]
+        max_score = max(rrf_scores.values()) if rrf_scores else 1.0
+        results = [
+            {
+                "id": pid,
+                "score": (rrf_scores[pid] / max_score) if max_score else 0.0,
+                "raw_score": rrf_scores[pid],
+                "rank": rank + 1,
+                "source_rank_type": (
+                    "hybrid"
+                    if pid in semantic_rank_map and pid in keyword_rank_map
+                    else "semantic"
+                    if pid in semantic_rank_map
+                    else "keyword"
+                ),
+                "semantic_rank": semantic_rank_map.get(pid),
+                "keyword_rank": keyword_rank_map.get(pid),
+                "semantic_score": semantic_score_map.get(pid),
+                "keyword_score": keyword_score_map.get(pid),
+                "payload": payloads[pid],
+            }
+            for rank, pid in enumerate(candidates)
+        ]
+
+        logger.info(
+            "[QdrantService] search_hybrid %s: keyword=%d semantic=%d candidates=%d",
+            collection_name, len(keyword_results), len(semantic_results), len(results),
+        )
+        logger.info(
+            "[QdrantService] top3 keyword:  %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in keyword_results[:3]],
+        )
+        logger.info(
+            "[QdrantService] top3 semantic: %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in semantic_results[:3]],
+        )
+        logger.info(
+            "[QdrantService] top5 final:    %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in results[:5]],
+        )
+        return results
 
     def delete_collection(self, collection_name: str) -> bool:
         """Delete a collection."""
@@ -360,7 +494,7 @@ class QdrantService:
             self.client.delete_collection(collection_name=collection_name)
             logger.info(f"Deleted collection: {collection_name}")
             return True
-        except Exception as e:
+        except Exception:
             logger.exception(f"Failed to delete collection {collection_name}")
             raise
 

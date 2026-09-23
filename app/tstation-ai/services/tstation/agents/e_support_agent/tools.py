@@ -1,14 +1,51 @@
 import logging
 import os
+import contextvars
 from typing import Any
 
 from common.qna_payload import make_qna_payload_urls
-from common.tstation_be_api_client.hkt_api_client.client import AuthenticatedClient
-from services.tstation.common.tstation_be_client import get_tstation_be_client
+from services.tstation.common.tstation_be_client import (
+    get_client,
+    _error_response,
+    _success_response,
+    _to_dict,
+)
 from common.tstation_be_api_client.hkt_api_client.api.faq_af_일반_문의.get_faq_api_faq_get import sync_detailed as get_faq
 from common.tstation_be_api_client.hkt_api_client.api.fallback_escalation_af_상담_연결.escalate_api_escalation_post import sync_detailed as post_escalate
+from common.tstation_be_api_client.hkt_api_client.api.maintenance_d_day_af_정비_d_day_안내.get_maintenance_dday_api_member_maintenance_dday_get import (
+    sync_detailed as get_maintenance_dday,
+)
+# Cross-agent reuse: b_discovery 의 get_my_cars_tool 을 SUPPORT 에서도 호출해
+# 정비 D-day 안내 시 차량 컨텍스트가 없으면 직접 listCar 카드를 emit 한다.
+# template_mapper 가 tool name 기준으로 listCar 템플릿을 발동하므로 호출 주체가
+# SUPPORT 여도 동일하게 동작.
+from services.tstation.agents.b_discovery_agent.tools import (
+    get_my_cars_tool,  # noqa: F401  # re-exported via SupportSubAgent.tools
+    search_product_tool,  # noqa: F401  # warranty Path B 에서 상품명→goods_no 추출용
+    get_deals_tool,  # noqa: F401  # Coupon stacking Path B 에서 "반짝블랙딜" 류 자연어 매칭용
+)
+# Coupon stacking Path B — 사용자가 컨텍스트 cpn_no + "생일쿠폰" 류 자연어로 다른
+# 쿠폰을 지칭하면 보유 쿠폰에서 이름 매칭으로 cpn_no 를 찾아 stacking_check 호출.
+from services.tstation.agents.c_transaction_agent.tools import (
+    get_my_coupons_tool,  # noqa: F401  # re-exported via SupportSubAgent.tools
+)
+from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_warranties_api_member_warranties_get import (
+    sync_detailed as get_my_warranties,
+)
+from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_my_relief_services_api_member_relief_services_get import (
+    sync_detailed as get_my_relief_services,
+)
+from common.tstation_be_api_client.hkt_api_client.api.installment_af_무이자_할부_조회.get_card_installments_api_installments_cards_get import (
+    sync_detailed as get_card_installments,
+)
+from common.tstation_be_api_client.hkt_api_client.api.coupon_af_쿠폰_발급.stacking_check_api_coupons_stacking_check_get import (
+    sync_detailed as stacking_check,
+)
+from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조회.get_product_warranties_api_products_goods_no_warranties_get import (
+    sync_detailed as get_product_warranties,
+)
 from common.tstation_be_api_client.hkt_api_client.models import EscalationRequest
-from langchain.tools import tool
+from langchain_core.tools import tool
 from common.tool_cache import tool_cache
 from services.tstation.rag import (
     get_qdrant_service,
@@ -16,14 +53,244 @@ from services.tstation.rag import (
     get_reranker_service,
 )
 from services.tstation.rag.rag_config import RAGDynamicConfig
+from services.tstation.policies.static_faq_policy import get_static_faq_policy
 from config.env import settings
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_QNA_CNSL_CLSS_SEQ = "10019"
+_QNA_CNSL_CLSS_SEQS = frozenset({"10002", "10006", "10010", "10013", "10017", "10019", "10025", "10034"})
+_RELIEF_SERVICE_DATE_FIELDS = frozenset({"equp_conf_dtime", "join_dtime", "relief_svc_dtime", "relief_end_dtime"})
 
-def get_client() -> AuthenticatedClient:
-    """Get authenticated client for tstation-be API."""
-    return get_tstation_be_client()
+current_support_policy_intent: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_support_policy_intent",
+    default="none",
+)
+
+
+def _date_only(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not text:
+        return value
+    return text.replace("T", " ").partition(" ")[0]
+
+
+def _format_relief_service_dates(payload: dict[str, Any]) -> dict[str, Any]:
+    relief_services = payload.get("relief_services")
+    if not isinstance(relief_services, list):
+        return payload
+    formatted = dict(payload)
+    formatted["relief_services"] = []
+    for item in relief_services:
+        if not isinstance(item, dict):
+            formatted["relief_services"].append(item)
+            continue
+        row = dict(item)
+        for field in _RELIEF_SERVICE_DATE_FIELDS:
+            if field in row:
+                row[field] = _date_only(row[field])
+        formatted["relief_services"].append(row)
+    return formatted
+_FAQ_METADATA_ONLY_POLICY_INTENTS = frozenset({
+    "coupon_registration_policy",
+    "coupon_usage_policy",
+    "signup_coupon_guidance",
+    "signup_first_purchase_benefit_policy",
+    "partner_member_coupon_policy",
+    "tire_manufacture_date_policy",
+    "delivery_delay_reservation_schedule_policy",
+    "tire_quality_warranty_policy",
+    "reservation_window_policy",
+    "external_tire_install_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+    "payment_error_troubleshooting",
+})
+_PAYMENT_ERROR_FAQ_ANCHORS = (
+    "결제 오류",
+    "결제창 열리지 않음",
+    "결제 진행 불가",
+    "팝업 차단",
+    "모바일웹 앱 재시도",
+    "PC 웹 재시도",
+)
+_SIGNUP_BENEFIT_FAQ_ANCHORS = (
+    "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰",
+    "회원 가입 마케팅 활용 동의 쿠폰 혜택",
+    "신규 회원 혜택 all my T 5% 쿠폰",
+)
+_SIGNUP_COUPON_FAQ_ANCHORS = (
+    "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰",
+    "회원 가입 마케팅 활용 동의 쿠폰 혜택",
+    "신규 회원 쿠폰 안내 all my T 5% 쿠폰",
+)
+_TIRE_MANUFACTURE_DATE_FAQ_ANCHORS = (
+    "타이어 제조일자 DOT 신품 기준",
+    "6개월 12개월 이내 정상 신품",
+)
+_TIRE_QUALITY_WARRANTY_FAQ_ANCHORS = (
+    "타이어 품질보증 제조상 과실 무상 교환 기준",
+    "측면 부풀음 점검 품질보증 조건",
+)
+_ASSURANCE_SERVICE_FAQ_ANCHORS = (
+    "안심서비스 안심플러스 디지털워런티 가입 기간 보상 조건",
+    "보증서 분실 장착비 별도 부담 안내",
+)
+_RESERVATION_POLICY_GUIDANCE_FAQ_ANCHORS = (
+    "장착 예약 취소 변경 장착점 변경 정책",
+    "예약 가능 기간 위약금 안내",
+)
+_INSTALLATION_WORK_POLICY_FAQ_ANCHORS = (
+    "장착 공임 추가 작업 폐타이어 비용 얼라인먼트 현장 결제",
+)
+_PROMOTION_GIFT_POLICY_FAQ_ANCHORS = (
+    "사은품 선착순 프로모션 조건 미달 반납 차감",
+)
+_TIRE_CONDITION_PHOTO_POLICY_FAQ_ANCHORS = (
+    "타이어 사진 판독 불가 매장 점검 마모도 측정",
+)
+_COUPON_USAGE_POLICY_FAQ_ANCHORS = (
+    "쿠폰 사용처 온라인 전용 오프라인 매장 사용 현장 결제 유의사항",
+)
+_COUPON_REGISTRATION_POLICY_FAQ_ANCHORS = (
+    "쿠폰 번호 등록 입력 사용 방법 쿠폰함",
+)
+_DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS = (
+    "배송 지연 예약 일정 자동 변경 해피콜 상품 미도착 일정 조정",
+)
+_RESERVATION_VERIFICATION_GUIDANCE_FAQ_ANCHORS = (
+    "예약 확인 매장에서 예약이 없다고 안내 차량번호 예약자 정보 주문 예약 내역 확인",
+)
+_RESERVATION_WINDOW_POLICY_FAQ_ANCHORS = (
+    "장착 예약일 최대 30일 이내 구매일로부터 1개월 이내 사전 구매 지원 불가",
+)
+_EXTERNAL_TIRE_INSTALL_POLICY_FAQ_ANCHORS = (
+    "타이어만 별도 수령 직접 장착 불가 온라인몰 지정 장착점 발송 장착 오프라인 매장 구매 후 장착 가능 장착비 매장별 상이",
+)
+
+
+def _augment_faq_query_for_policy(query: str) -> str:
+    text = str(query or "").strip()
+    policy_intent = current_support_policy_intent.get()
+    if policy_intent in _FAQ_METADATA_ONLY_POLICY_INTENTS:
+        return text
+    if policy_intent == "payment_error_troubleshooting":
+        anchors = _PAYMENT_ERROR_FAQ_ANCHORS
+    elif policy_intent == "signup_coupon_guidance":
+        anchors = _SIGNUP_COUPON_FAQ_ANCHORS
+    elif policy_intent == "signup_first_purchase_benefit_policy":
+        anchors = _SIGNUP_BENEFIT_FAQ_ANCHORS
+    elif policy_intent == "tire_manufacture_date_policy":
+        anchors = _TIRE_MANUFACTURE_DATE_FAQ_ANCHORS
+    elif policy_intent == "tire_quality_warranty_policy":
+        anchors = _TIRE_QUALITY_WARRANTY_FAQ_ANCHORS
+    elif policy_intent == "assurance_service_policy":
+        anchors = _ASSURANCE_SERVICE_FAQ_ANCHORS
+    elif policy_intent == "reservation_policy_guidance":
+        anchors = _RESERVATION_POLICY_GUIDANCE_FAQ_ANCHORS
+    elif policy_intent == "installation_work_policy":
+        anchors = _INSTALLATION_WORK_POLICY_FAQ_ANCHORS
+    elif policy_intent == "promotion_gift_policy":
+        anchors = _PROMOTION_GIFT_POLICY_FAQ_ANCHORS
+    elif policy_intent == "tire_condition_photo_policy":
+        anchors = _TIRE_CONDITION_PHOTO_POLICY_FAQ_ANCHORS
+    elif policy_intent == "coupon_usage_policy":
+        anchors = _COUPON_USAGE_POLICY_FAQ_ANCHORS
+    elif policy_intent == "coupon_registration_policy":
+        anchors = _COUPON_REGISTRATION_POLICY_FAQ_ANCHORS
+    elif policy_intent == "delivery_delay_reservation_schedule_policy":
+        anchors = _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS
+    elif policy_intent == "reservation_verification_guidance":
+        anchors = _RESERVATION_VERIFICATION_GUIDANCE_FAQ_ANCHORS
+    elif policy_intent == "reservation_window_policy":
+        anchors = _RESERVATION_WINDOW_POLICY_FAQ_ANCHORS
+    elif policy_intent == "external_tire_install_policy":
+        anchors = _EXTERNAL_TIRE_INSTALL_POLICY_FAQ_ANCHORS
+    else:
+        return text
+    missing_anchors = [anchor for anchor in anchors if anchor not in text]
+    if not missing_anchors:
+        return text
+    return " ".join(part for part in (text, *missing_anchors) if part)
+
+
+_GENERAL_INSTALLMENT_TYPE = "일반"
+_SMARTPAY_INSTALLMENT_TYPE = "스마트페이"
+
+
+@tool
+def get_static_faq_policy_tool(policy_key: str) -> dict:
+    """
+    Get an official deterministic FAQ policy answer by key.
+
+    Use this only when the router/planner already selected a policy key from
+    STATIC_FAQ_POLICY_DATABASE. Do not pass free-form user text.
+
+    Args:
+        policy_key: Exact policy intent key selected by the router/planner.
+    """
+    logger.debug("[TOOL][get_static_faq_policy_tool] policy_key=%s", policy_key)
+    policy = get_static_faq_policy(policy_key)
+    if policy is None:
+        return _error_response(
+            404,
+            {
+                "policy_key": policy_key,
+                "answer": None,
+                "message": "No static FAQ policy exists for this key.",
+            },
+        )
+    return _success_response(
+        200,
+        {
+            "policy_key": policy_key,
+            "answer": policy["answer"],
+            "quick_replies": policy["quick_replies"],
+            "predicted_domains": policy["predicted_domains"],
+        },
+    )
+
+
+def _normalize_card_installment_payment_type(payment_type: str | None) -> str:
+    value = str(payment_type or _GENERAL_INSTALLMENT_TYPE).strip().lower().replace(" ", "")
+    if value in {"", "general", "normal", "일반", "일반결제", "card", "cards"}:
+        return _GENERAL_INSTALLMENT_TYPE
+    if value in {"smartpay", "스마트페이", "스마트페이결제", "smart"}:
+        return _SMARTPAY_INSTALLMENT_TYPE
+    if value in {"all", "both", "전체", "둘다", "모두"}:
+        return "전체"
+    return _GENERAL_INSTALLMENT_TYPE
+
+
+def _filter_card_installments_by_payment_type(payload: dict[str, Any], payment_type: str | None) -> dict[str, Any]:
+    """Keep general card installments and Smart Pay rows separate."""
+    normalized_type = _normalize_card_installment_payment_type(payment_type)
+    cards = payload.get("cards")
+    if not isinstance(cards, list):
+        return payload
+
+    def _row_payment_type(row: Any) -> str:
+        if not isinstance(row, dict):
+            return _GENERAL_INSTALLMENT_TYPE
+        return _normalize_card_installment_payment_type(str(row.get("payment_type") or ""))
+
+    general_cards = [row for row in cards if _row_payment_type(row) == _GENERAL_INSTALLMENT_TYPE]
+    smartpay_cards = [row for row in cards if _row_payment_type(row) == _SMARTPAY_INSTALLMENT_TYPE]
+    filtered = dict(payload)
+    filtered["payment_type_filter"] = normalized_type
+    if normalized_type == _SMARTPAY_INSTALLMENT_TYPE:
+        filtered["cards"] = smartpay_cards
+    elif normalized_type == "전체":
+        filtered["cards"] = cards
+        filtered["cards_by_payment_type"] = {
+            _GENERAL_INSTALLMENT_TYPE: general_cards,
+            _SMARTPAY_INSTALLMENT_TYPE: smartpay_cards,
+        }
+    else:
+        filtered["cards"] = general_cards
+    return filtered
 
 
 DOMAIN = {
@@ -34,17 +301,6 @@ DOMAIN = {
     "escalate",
 }
 
-
-def _to_dict(res: Any) -> Any:
-    return res.to_dict() if hasattr(res, 'to_dict') else (res.model_dump() if hasattr(res, 'model_dump') else res)
-
-
-def _error_response(http_status: int | None, reason: str, message: str) -> dict:
-    return {"status": "error", "http_status": http_status, "reason": reason, "message": message}
-
-
-def _success_response(http_status: int, data: Any) -> dict:
-    return {"status": "success", "http_status": http_status, "data": data}
 
 @tool
 @tool_cache(ttl=3600)
@@ -192,6 +448,67 @@ def search_faq_rag_tool(
         return _error_response(None, str(e), "Failed to search FAQs using RAG")
 
 @tool
+def search_faq_hybrid_tool(query: str, top_k: int = 8) -> dict:
+    """
+    [HYBRID] FAQ search: keyword search + semantic search → RRF reranking → top_k items.
+
+    Use instead of get_faq_tool + search_faq_rag_tool when FAQ_SEARCH_MODE=hybrid.
+    Returns top_k FAQ items for the LLM to synthesise — no retry needed.
+
+    Args:
+        query (str): User question in Korean.
+        top_k (int): Max results to return (default 8).
+
+    Example: {"query": "환불 정책이 어떻게 되나요?"}
+    """
+    query = _augment_faq_query_for_policy(query)
+    logger.debug("[TOOL][search_faq_hybrid_tool] query=%s top_k=%s", query, top_k)
+    try:
+        openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
+        embedding_svc = get_embedding_service(
+            model=settings.EMBEDDING_MODEL,
+            provider=settings.EMBEDDING_PROVIDER,
+            api_key=openai_api_key,
+        )
+        qdrant_svc = get_qdrant_service(
+            host=settings.QDRANT_HOST,
+            port=settings.QDRANT_PORT,
+            api_key=settings.QDRANT_API_KEY or None,
+        )
+
+        query_vector = embedding_svc.embed_text_cached(query)
+        candidates = qdrant_svc.search_hybrid(
+            collection_name=settings.QDRANT_COLLECTION_FAQ,
+            query_vector=query_vector,
+            query_text=query,
+            top_k=top_k,
+        )
+
+        items = [
+            {
+                "question": r["payload"].get("question", ""),
+                "answer": r["payload"].get("answer", ""),
+                "metadata": r["payload"].get("metadata", {}),
+                "score": r.get("score"),
+                "raw_score": r.get("raw_score"),
+                "rank": r.get("rank"),
+                "source_rank_type": r.get("source_rank_type"),
+                "semantic_rank": r.get("semantic_rank"),
+                "keyword_rank": r.get("keyword_rank"),
+                "source": "FAQ Hybrid",
+            }
+            for r in candidates
+        ]
+        logger.info("[TOOL][search_faq_hybrid_tool] returned %d items:", len(items))
+        for i, item in enumerate(items):
+            logger.info("  [%d] %s", i + 1, item.get("question", "")[:80])
+        return _success_response(200, {"items": items})
+    except Exception as e:
+        logger.exception("[TOOL][search_faq_hybrid_tool] Failed")
+        return _error_response(None, str(e), "Failed to search FAQs")
+
+
+@tool
 def escalate_tool(
         mbr_no: None | str = None,
         inq_type_cd: None | str = None,
@@ -256,6 +573,9 @@ def transfer_to_qna_tool(
     )
 
     try:
+        cnsl_clss_seq = str(cnsl_clss_seq or "").strip()
+        if cnsl_clss_seq not in _QNA_CNSL_CLSS_SEQS:
+            cnsl_clss_seq = _DEFAULT_QNA_CNSL_CLSS_SEQ
         redict_link = make_qna_payload_urls(
             cnsl_clss_seq=cnsl_clss_seq,
             inq_tit_nm=inq_tit_nm,
@@ -280,3 +600,284 @@ def transfer_to_qna_tool(
     except Exception as e:
         logger.exception("[TOOL][transfer_to_qna_tool] Failed")
         return {"status": "error", "response": f"❌ **오류 발생**: {str(e)}\n\n> 다시 시도하시거나 고객센터로 직접 문의해주세요."}
+
+
+@tool
+def get_maintenance_dday_tool(mbr_car_reg_seq: str | None = None) -> dict:
+    """
+    회원 등록차량의 정비 D-day 매트릭스 조회 (7개 정비 항목).
+
+    Args:
+        mbr_car_reg_seq (str | None): 특정 차량의 정비 일정만 조회할 때 사용 (예: "2000002944").
+            None 이면 회원의 모든 등록차량 매트릭스 반환.
+
+    Returns:
+        {"status": "success", "data": {"cars": [
+          {"mbr_car_reg_seq": "...", "car_nm": "현대 그랜저",
+           "items": [
+             {"kind_cd": "001", "kind_nm": "얼라인먼트 점검",
+              "exp_dt": "2026-10-31", "dday": 165,
+              "status": "future|upcoming|expired",
+              "source": "noti_record|car_reg_fallback"}, ... (7개)
+           ]}, ...
+        ]}}
+
+    항목 코드:
+        001=얼라인먼트 점검 / 002=all my T 무상점검 / 003=엔진오일 교체 /
+        004=실내필터 교체 / 005=와이퍼 교체 / 006=타이어 교체 / 007=배터리 교체
+
+    Status:
+        - expired:  D+ (만기 경과)
+        - upcoming: D-0 ~ D-30 (만기 임박)
+        - future:   D-31 이상
+
+    Source:
+        - noti_record:      ST_NOTI_DDAY_INFO 의 실제 만기일
+        - car_reg_fallback: 행 없음 → 차량등록일 + 권장 개월수로 계산한 추정 만기일
+    """
+    logger.debug("[TOOL][get_maintenance_dday_tool] Called with: mbr_car_reg_seq=%s", mbr_car_reg_seq)
+
+    try:
+        response = get_maintenance_dday(client=get_client(), mbr_car_reg_seq=mbr_car_reg_seq)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get maintenance D-day",
+            )
+        logger.debug("[TOOL][get_maintenance_dday_tool] Response: %s", response.parsed)
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_maintenance_dday_tool] Failed")
+        return _error_response(None, str(e), "Failed to get maintenance D-day")
+
+
+# --------------------------------------------------------------------------- #
+#  Warranty (워런티 조회)                                                       #
+# --------------------------------------------------------------------------- #
+
+@tool
+@tool_cache(ttl=600)
+def get_product_warranties_tool(goods_no: str):
+    """
+    상품에 적용 가능한 워런티 종류를 조회한다 (ET_DGTL_WRT_APLY_INFO).
+
+    Use when: 사용자가 "이 타이어에 안심서비스 돼?", "이 상품 워런티 뭐 돼?",
+    "다이나프로 HPX 품질보증 가입 가능해?", "이 상품 30일 해피보증 적용돼?"
+    처럼 특정 상품의 워런티 적용 가능성을 묻는 경우.
+
+    Args:
+        goods_no (str): 상품 번호 (PR_GOODS_BASE.GOODS_NO). 직전 상품 카드/검색
+            결과에서 가져온 값을 그대로 사용. 사용자가 상품명만 언급하고
+            goods_no 가 컨텍스트에 없으면 먼저 search_product_tool 등으로
+            확인할 것 (이 도구는 search 하지 않는다).
+
+    Returns: status/http_status/data. data 구조:
+        {"goods_no": "...", "ptrn_cd": "K129",
+         "warranties": [{"wrt_tp_cd":"10","wrt_nm":"품질보증","is_plus":false}, ...]}
+
+        - wrt_tp_cd: "10"=품질보증 / "20"=안심서비스 (PLPR_YN='Y' 이면 동일 코드로
+          "안심플러스" 행이 추가됨, is_plus=true) / "30"=30일 해피보증 /
+          "40"=코드절상 무상교환.
+        - 상품이 없으면 ptrn_cd=null, warranties=[].
+        - 패턴은 있지만 적용 가능한 워런티가 0건이면 ptrn_cd 채워짐 + warranties=[].
+    """
+    logger.debug("[TOOL][get_product_warranties_tool] goods_no=%s", goods_no)
+    try:
+        response = get_product_warranties(goods_no=goods_no, client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get product warranties",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_product_warranties_tool] Failed")
+        return _error_response(None, str(e), "Failed to get product warranties")
+
+
+@tool
+@tool_cache(ttl=300)
+def get_my_relief_services_tool():
+    """
+    JWT 회원의 안심서비스 가입/보상 이력을 조회한다 (VW_ET_MBR_RELIEF_MAST_INFO).
+
+    Use when: 사용자가 안심서비스/안심플러스에 대해 본인의 가입·신청·보유 여부, 현재 상태,
+    유효/만료 여부, 만료일, 보상/클레임 처리 상태 또는 과거 이력을 확인하려는 경우.
+    일반 설명/조건 질문은 FAQ를 사용하고, 상품별 안심서비스 적용 가능 여부는 get_product_warranties_tool 을 사용한다.
+
+    Returns: status/http_status/data. data 구조:
+        {"relief_services": [
+            {"ord_no":"...", "vhcl_model_nm":"...", "join_state_nm":"정상",
+             "relief_state_nm":"가입완료", "relief_svc_dtime":"...",
+             "relief_end_dtime":"...", "relief_svc_distance":"...", "plus_yn":"Y"},
+            ...
+        ]}
+    """
+    logger.debug("[TOOL][get_my_relief_services_tool] called")
+    try:
+        response = get_my_relief_services(client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get my relief services",
+            )
+        return _success_response(response.status_code, _format_relief_service_dates(_to_dict(response.parsed)))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_relief_services_tool] Failed")
+        return _error_response(None, str(e), "Failed to get my relief services")
+
+
+@tool
+@tool_cache(ttl=300)
+def get_my_warranties_tool():
+    """
+    JWT 회원이 보유한 워런티 목록을 조회한다 (ET_DGTL_WRT_REG_INFO).
+
+    Use when: 사용자가 "내 워런티 알려줘", "내 품질보증 언제까지야", "내 워런티 현황", "내 워런티 보유 내역"
+    처럼 본인 보유 워런티를 묻는 경우. 인증된 JWT 의 회원번호를 자동 사용.
+
+    Returns: status/http_status/data. data 구조:
+        {"warranties": [
+            {"wrt_tp_cd":"10","wrt_nm":"품질보증",
+             "wrt_reg_date":"2025-04-15","wrt_exp_date":"2027-04-15",
+             "wrt_prgs_stat_cd":"200","wrt_prgs_stat_nm":"가입완료"},
+            ...
+        ]}
+
+        - 진행상태: "200"=가입완료 / "300"=기간만료 / "400"=보상완료.
+          ("100"=가입대기는 BE 단에서 응답에서 제외됨 — 노출 금지.)
+        - 가입일자 내림차순. 보유 워런티 0건이면 warranties=[].
+        - 회원 보유 응답에는 안심플러스 구분 컬럼이 없어 wrt_tp_cd='20' 은 모두
+          "안심서비스" 로 노출됨. "안심플러스 가입 여부" 같은 세부 구분은
+          현 BE 응답으로 단정 불가.
+    """
+    logger.debug("[TOOL][get_my_warranties_tool] called")
+    try:
+        response = get_my_warranties(client=get_client())
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get my warranties",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][get_my_warranties_tool] Failed")
+        return _error_response(None, str(e), "Failed to get my warranties")
+
+
+@tool
+@tool_cache(ttl=3600)
+def get_card_installments_tool(
+    tgt_amt: int | None = None,
+    payment_type: str | None = _GENERAL_INSTALLMENT_TYPE,
+):
+    """
+    진행중인 카드사별 무이자 할부 가능 정보를 조회한다 (OP_NINT_INST_BASE + OP_NINT_INST_DTL_INFO).
+
+    Use when: 사용자가 "무이자 할부 카드 알려줘", "신한카드 무이자 돼?",
+    "12개월 무이자 어떤 카드?", "30만원 결제 시 무이자 가능?" 처럼 카드사별
+    무이자 할부 적용 가능성을 묻는 경우. 결제 시점 직전 (preOrder/cart 컨텍스트) 에서
+    같은 질문이 나오면 c_transaction_agent 가 cross-agent 로 호출한다.
+
+    Args:
+        tgt_amt: 결제 예상 금액(원). 지정하면 NDI.TGT_AMT <= tgt_amt 인 행만 반환
+            (즉 그 금액 이상부터 적용되는 무이자 행). 미지정 시 전체 진행중 카드.
+        payment_type: 조회할 결제 기준. 일반 카드 무이자 질문은 "일반", 스마트페이 명시 질문은
+            "스마트페이", 둘 다 비교 요청은 "전체". 기본값은 "일반".
+
+    Returns: status/http_status/data. data 구조:
+        {"cards": [
+            {"iscm_cd":"01","iscm_nm":"신한카드","tgt_amt":50000,
+             "months":[2,3,6,12],"payment_type":"일반"},
+            {"iscm_cd":"01","iscm_nm":"신한카드","tgt_amt":300000,
+             "months":[12,24],"payment_type":"스마트페이"},
+            ...
+        ]}
+
+        - 진행중 (SYSDATE BETWEEN APLY_STRT_DTIME AND APLY_END_DTIME) 만 포함.
+        - 같은 카드사라도 결제유형(일반/스마트페이) 또는 기준금액별로 row 분리.
+        - 기본 응답은 일반 카드 무이자 row 만 포함한다. 스마트페이 row 는 payment_type="스마트페이"
+          또는 "전체" 요청에서만 포함한다.
+        - months 는 NINT_N_MM_YN='Y' 인 N 만 오름차순. N ∈ {2,3,...,12,24}.
+        - iscm_nm 은 FN_GET_COMMON_NAME_AI('PAY014') 결과 — 매핑 부재 시 null.
+        - payment_type 은 내부 필터 기준이다. 사용자 응답에는 내부 필드명/row 개념을 노출하지 않는다.
+    """
+    logger.debug("[TOOL][get_card_installments_tool] tgt_amt=%s payment_type=%s", tgt_amt, payment_type)
+    try:
+        kwargs: dict[str, Any] = {"client": get_client()}
+        if tgt_amt is not None:
+            kwargs["tgt_amt"] = tgt_amt
+        response = get_card_installments(**kwargs)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to get card installments",
+            )
+        parsed = _to_dict(response.parsed)
+        if isinstance(parsed, dict):
+            parsed = _filter_card_installments_by_payment_type(parsed, payment_type)
+        return _success_response(response.status_code, parsed)
+    except Exception as e:
+        logger.exception("[TOOL][get_card_installments_tool] Failed")
+        return _error_response(None, str(e), "Failed to get card installments")
+
+
+@tool
+@tool_cache(ttl=600)
+def check_coupon_stacking_tool(cpn_no_list: list[str]):
+    """
+    두 개 이상의 쿠폰을 동시에 사용할 수 있는지 (중복 적용 가능 여부) 를 조회한다.
+
+    Use when: 사용자가 "이 쿠폰이랑 저 쿠폰 같이 써도 돼?", "기획전 할인가에 생일쿠폰
+    더 쓸 수 있어?", "C72... 랑 C68... 같이 돼?" 처럼 두 개 이상의 쿠폰 ID 가 식별된
+    상태에서 중복 적용 가능 여부를 묻는 경우.
+
+    Args:
+        cpn_no_list: 비교할 쿠폰 번호 목록. 2개 이상 5개 이하. 1개는 비교 불가 (400).
+
+    Returns: status/http_status/data. data 구조:
+        {
+          "coupons": [
+            {"cpn_no":"C111","cpn_nm":"상품쿠폰A","cpn_tp_cd":"10",
+             "cpn_tp_nm":"상품쿠폰","cpn_dup_use_yn":"Y","found":true},
+            ...
+          ],
+          "pairs": [
+            {"cpn_no_a":"C111","cpn_no_b":"C222",
+             "can_stack":true,
+             "reason":"두 쿠폰 모두 중복 사용이 가능합니다."},
+            ...
+          ]
+        }
+
+        - pairs 는 입력 cpn_no 들의 모든 2-조합 (N개 → C(N,2) 개).
+        - can_stack: true=중복 가능, false=중복 불가, null=정책 안내 불가 (DBA 가이드
+          명시 없는 조합 — same TP, 30+30, 40+40, 30+40, 마스터 미발견 등).
+        - cpn_no, cpn_tp_cd, cpn_dup_use_yn 은 사용자 응답에 노출 금지 (내부 코드값).
+          cpn_nm, cpn_tp_nm, reason 만 사용자 응답에 사용.
+    """
+    logger.debug("[TOOL][check_coupon_stacking_tool] cpn_no_list=%s", cpn_no_list)
+    try:
+        if not cpn_no_list or len(cpn_no_list) < 2:
+            return _error_response(
+                400,
+                "InvalidInput",
+                "cpn_no_list 는 최소 2개 이상이어야 합니다.",
+            )
+        cpn_no_csv = ",".join(cpn_no_list)
+        response = stacking_check(client=get_client(), cpn_no=cpn_no_csv)
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to check coupon stacking",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][check_coupon_stacking_tool] Failed")
+        return _error_response(None, str(e), "Failed to check coupon stacking")

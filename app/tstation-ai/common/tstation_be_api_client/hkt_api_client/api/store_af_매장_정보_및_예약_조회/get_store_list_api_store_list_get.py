@@ -20,7 +20,9 @@ def _get_kwargs(
     svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
+    installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> dict[str, Any]:
 
@@ -70,12 +72,21 @@ def _get_kwargs(
 
     params["imported_car_only"] = imported_car_only
 
+    params["installable_only"] = installable_only
+
     json_chl_sct_cd: None | str | Unset
     if isinstance(chl_sct_cd, Unset):
         json_chl_sct_cd = UNSET
     else:
         json_chl_sct_cd = chl_sct_cd
     params["chl_sct_cd"] = json_chl_sct_cd
+
+    json_sort_by: None | str | Unset
+    if isinstance(sort_by, Unset):
+        json_sort_by = UNSET
+    else:
+        json_sort_by = sort_by
+    params["sort_by"] = json_sort_by
 
     params["limit"] = limit
 
@@ -131,7 +142,9 @@ def sync_detailed(
     svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
+    installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
@@ -148,7 +161,13 @@ def sync_detailed(
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         imported_car_only (bool | Unset): True 이면 수입차 특화점만 조회
             (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default: False.
+        installable_only (bool | Unset): True 이면 온라인 주문 장착 가능 매장만 조회
+            (VW_ET_SHOP_INFO.SMART_CARE_SHOP_YN IN ('Y', 'E')). 상품 선택 후 장착점 후보 조회용이며 일반 매장 조회 기본값은
+            False. Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
+        sort_by (None | str | Unset): 정렬 기준. 미지정 시 좌표 있으면 거리순, 없으면 SHOP_ID 순.
+            'rating'=평점순(SHOP_EVAL_CVRT_IDX DESC NULLS LAST), 'review_count'=리뷰 많은 순(정상 리뷰 카운트 DESC
+            NULLS LAST, 서브쿼리 활성화), 'distance'=거리순(xpos/ypos 필수, 좌표 없으면 default fallback).
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -168,7 +187,9 @@ def sync_detailed(
         svc_codes=svc_codes,
         all_my_t_only=all_my_t_only,
         imported_car_only=imported_car_only,
+        installable_only=installable_only,
         chl_sct_cd=chl_sct_cd,
+        sort_by=sort_by,
         limit=limit,
     )
 
@@ -190,7 +211,9 @@ def sync(
     svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
+    installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
@@ -207,7 +230,13 @@ def sync(
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         imported_car_only (bool | Unset): True 이면 수입차 특화점만 조회
             (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default: False.
+        installable_only (bool | Unset): True 이면 온라인 주문 장착 가능 매장만 조회
+            (VW_ET_SHOP_INFO.SMART_CARE_SHOP_YN IN ('Y', 'E')). 상품 선택 후 장착점 후보 조회용이며 일반 매장 조회 기본값은
+            False. Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
+        sort_by (None | str | Unset): 정렬 기준. 미지정 시 좌표 있으면 거리순, 없으면 SHOP_ID 순.
+            'rating'=평점순(SHOP_EVAL_CVRT_IDX DESC NULLS LAST), 'review_count'=리뷰 많은 순(정상 리뷰 카운트 DESC
+            NULLS LAST, 서브쿼리 활성화), 'distance'=거리순(xpos/ypos 필수, 좌표 없으면 default fallback).
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -228,7 +257,9 @@ def sync(
         svc_codes=svc_codes,
         all_my_t_only=all_my_t_only,
         imported_car_only=imported_car_only,
+        installable_only=installable_only,
         chl_sct_cd=chl_sct_cd,
+        sort_by=sort_by,
         limit=limit,
     ).parsed
 
@@ -244,7 +275,9 @@ async def asyncio_detailed(
     svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
+    installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> Response[HTTPValidationError | StoreListResponse]:
     """매장 목록 조회
@@ -261,7 +294,13 @@ async def asyncio_detailed(
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         imported_car_only (bool | Unset): True 이면 수입차 특화점만 조회
             (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default: False.
+        installable_only (bool | Unset): True 이면 온라인 주문 장착 가능 매장만 조회
+            (VW_ET_SHOP_INFO.SMART_CARE_SHOP_YN IN ('Y', 'E')). 상품 선택 후 장착점 후보 조회용이며 일반 매장 조회 기본값은
+            False. Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
+        sort_by (None | str | Unset): 정렬 기준. 미지정 시 좌표 있으면 거리순, 없으면 SHOP_ID 순.
+            'rating'=평점순(SHOP_EVAL_CVRT_IDX DESC NULLS LAST), 'review_count'=리뷰 많은 순(정상 리뷰 카운트 DESC
+            NULLS LAST, 서브쿼리 활성화), 'distance'=거리순(xpos/ypos 필수, 좌표 없으면 default fallback).
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -281,7 +320,9 @@ async def asyncio_detailed(
         svc_codes=svc_codes,
         all_my_t_only=all_my_t_only,
         imported_car_only=imported_car_only,
+        installable_only=installable_only,
         chl_sct_cd=chl_sct_cd,
+        sort_by=sort_by,
         limit=limit,
     )
 
@@ -301,7 +342,9 @@ async def asyncio(
     svc_codes: list[str] | None | Unset = UNSET,
     all_my_t_only: bool | Unset = False,
     imported_car_only: bool | Unset = False,
+    installable_only: bool | Unset = False,
     chl_sct_cd: None | str | Unset = UNSET,
+    sort_by: None | str | Unset = UNSET,
     limit: int | Unset = 20,
 ) -> HTTPValidationError | StoreListResponse | None:
     """매장 목록 조회
@@ -318,7 +361,13 @@ async def asyncio(
         all_my_t_only (bool | Unset): True 이면 all my T 매장만 조회 Default: False.
         imported_car_only (bool | Unset): True 이면 수입차 특화점만 조회
             (ET_SHOP_SPCL_SVC_INFO.SHOP_SPCL_SVC_SCT_CD = '216' 보유 매장) Default: False.
+        installable_only (bool | Unset): True 이면 온라인 주문 장착 가능 매장만 조회
+            (VW_ET_SHOP_INFO.SMART_CARE_SHOP_YN IN ('Y', 'E')). 상품 선택 후 장착점 후보 조회용이며 일반 매장 조회 기본값은
+            False. Default: False.
         chl_sct_cd (None | str | Unset): 채널 구분 코드. F=T'Station, S=The Tire Shop
+        sort_by (None | str | Unset): 정렬 기준. 미지정 시 좌표 있으면 거리순, 없으면 SHOP_ID 순.
+            'rating'=평점순(SHOP_EVAL_CVRT_IDX DESC NULLS LAST), 'review_count'=리뷰 많은 순(정상 리뷰 카운트 DESC
+            NULLS LAST, 서브쿼리 활성화), 'distance'=거리순(xpos/ypos 필수, 좌표 없으면 default fallback).
         limit (int | Unset): 반환할 최대 매장 수 Default: 20.
 
     Raises:
@@ -340,7 +389,9 @@ async def asyncio(
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
+            installable_only=installable_only,
             chl_sct_cd=chl_sct_cd,
+            sort_by=sort_by,
             limit=limit,
         )
     ).parsed

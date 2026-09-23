@@ -1,0 +1,204 @@
+"""RouteDecision — the single structured output of the router call."""
+
+from enum import Enum
+
+from pydantic import BaseModel, Field, model_validator
+
+from services.tstation.chat_v3.slots.schemas import SlotsPatch
+
+
+class BrandContext(BaseModel):
+    installed_brand: str | None = Field(
+        default=None,
+        description="Brand currently mounted on the user's vehicle, if the user states one.",
+    )
+    desired_brand: str | None = Field(
+        default=None,
+        description="Brand the user wants to buy, search, or receive recommendations for.",
+    )
+    excluded_brand: str | None = Field(
+        default=None,
+        description="Brand the user explicitly wants to exclude from recommendations.",
+    )
+    unsupported_brand_target: str | None = Field(
+        default=None,
+        description=(
+            "Unsupported brand only when that brand itself is the user's target for search, price, stock, "
+            "availability, or recommendation. Leave empty when the unsupported brand is only the installed brand."
+        ),
+    )
+    switch_to_supported_alternative: bool = Field(
+        default=False,
+        description=(
+            "True when the current turn abandons a previous unsupported brand and asks for a supported "
+            "alternative, including when no replacement brand is named."
+        ),
+    )
+
+
+class BenefitContext(BaseModel):
+    owned_coupon_exclusion: str | None = Field(
+        description=(
+            "Exact verbatim phrase from the current user turn that excludes the user's own/held coupons. "
+            "Leave empty unless the current turn explicitly changes scope away from owned coupons."
+        ),
+    )
+    unverified_benefit_target: str | None = Field(
+        description=(
+            "Exact verbatim phrase from the current user turn naming a private, hidden, VIP, black-card, "
+            "or otherwise unverified exclusive benefit. Generic percentage coupons are not such a target."
+        ),
+    )
+    unverified_access_request: str | None = Field(
+        description=(
+            "Exact verbatim phrase from the current user turn demanding the unverified benefit's link, code, "
+            "or equivalent private access. Leave empty for ordinary existence, location, or eligibility questions."
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_evidence_fields(cls, data: object) -> object:
+        if isinstance(data, dict):
+            for field_name in (
+                "owned_coupon_exclusion",
+                "unverified_benefit_target",
+                "unverified_access_request",
+            ):
+                data.setdefault(field_name, None)
+        return data
+
+
+class GuardId(str, Enum):
+    NONE = "none"
+    PII = "pii"
+    PRIVACY_CONTACT = "privacy_contact"
+    REGIONAL_CHEAPEST = "regional_cheapest"
+    UNSUPPORTED_BRAND = "unsupported_brand"
+    OTHER_BRAND_PURCHASE_CHANNEL = "other_brand_purchase_channel"
+    HANKOOK_ALTERNATIVE_PURCHASE_CHANNEL = "hankook_alternative_purchase_channel"
+    EXTERNAL_PRICE = "external_price"
+    PAST_EVENT_PAGE = "past_event_page"
+    COUPON_ISSUE_REQUEST = "coupon_issue_request"
+    EXPIRED_COUPON_OR_EVENT = "expired_coupon_or_event"
+    NONEXISTENT_BENEFIT = "nonexistent_benefit"
+    RESERVATION_DATE_RANGE = "reservation_date_range"
+    RESERVATION_MODIFY_REQUEST = "reservation_modify_request"
+    VEHICLE_TYPE_COMPATIBILITY = "vehicle_type_compatibility"
+    PICKUP_STATUS = "pickup_status"
+    PICKUP_INFO = "pickup_info"
+    DIRECT_HOME_DELIVERY = "direct_home_delivery"
+    SHIPPING_FEE_REGION = "shipping_fee_region"
+    ONLINE_STORE_PRICE_POLICY = "online_store_price_policy"
+    REGIONAL_PRICE_POLICY = "regional_price_policy"
+    PRODUCT_CODE_REQUEST = "product_code_request"
+    OUT_OF_SCOPE = "out_of_scope"
+
+
+class Domain(str, Enum):
+    LEADING = "LEADING"
+    DISCOVERY = "DISCOVERY"
+    TRANSACTION = "TRANSACTION"
+    SUPPORT = "SUPPORT"
+
+
+class ToolProfile(str, Enum):
+    """Narrow toolset for a clear single-flow turn; FULL binds the whole domain."""
+
+    FULL = "full"
+    TRANSACTION_STORE = "transaction_store"
+    TRANSACTION_ORDER = "transaction_order"
+    TRANSACTION_COUPON = "transaction_coupon"
+    TRANSACTION_PRICE_STOCK = "transaction_price_stock"
+    DISCOVERY_SEARCH = "discovery_search"
+    DISCOVERY_RECOMMENDATION = "discovery_recommendation"
+    DISCOVERY_EVENT_CONTENT = "discovery_event_content"
+
+
+class RouteDecision(BaseModel):
+    guard_id: GuardId = Field(
+        default=GuardId.NONE,
+        description="정책 가드에 해당하면 해당 id, 아니면 none",
+    )
+    domain: Domain = Field(
+        default=Domain.LEADING,
+        description="이번 턴을 처리할 주 업무 영역",
+    )
+    extra_domains: list[Domain] = Field(
+        default_factory=list,
+        description="주 영역 외에 이번 턴 처리에 함께 필요한 보조 영역 (예: 상품 미확정 상태의 주문 → DISCOVERY)",
+    )
+
+    def all_domains(self) -> list[str]:
+        ordered = [self.domain.value]
+        for extra in self.extra_domains:
+            if extra.value not in ordered:
+                ordered.append(extra.value)
+        return ordered
+
+    intents: list[str] = Field(
+        default_factory=list,
+        description="이번 턴의 세부 의도 키워드 (자유 서술, 1~3개)",
+    )
+    # Required on purpose (no default): fields with defaults are absent from the
+    # function-calling schema's `required` list and the mini model simply skips
+    # them
+    tool_profile: ToolProfile = Field(
+        description="이번 턴의 단일 흐름이 명확할 때만 좁은 프로필, 애매하면 full (프롬프트 6번 규칙 참고). 항상 출력하세요.",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_tool_profile(cls, data: object) -> object:
+        if isinstance(data, dict):
+            if not data.get("tool_profile"):
+                data["tool_profile"] = ToolProfile.FULL.value
+            if not data.get("benefit_context"):
+                data["benefit_context"] = {}
+        return data
+    slots_patch: SlotsPatch = Field(
+        default_factory=SlotsPatch,
+        description="이번 사용자 발화에서 새로 알 수 있게 된 슬롯 값만",
+    )
+    brand_context: BrandContext = Field(
+        default_factory=BrandContext,
+        description=(
+            "Role of tire brands mentioned in the current user turn. Distinguish installed/current brand, "
+            "desired purchase/recommendation brand, excluded brand, and a truly unsupported target brand."
+        ),
+    )
+    benefit_context: BenefitContext = Field(
+        description=(
+            "Current-turn verbatim evidence for coupon scope changes and unverified exclusive-benefit requests. "
+            "Never copy evidence from conversation history."
+        ),
+    )
+    installation_schedule_change: bool = Field(
+        default=False,
+        description=(
+            "True when the user wants to change the selected installation date or time for an active "
+            "preOrder/order confirmation. Do not set this for questions about why an order attempt failed."
+        ),
+    )
+    runflat_mixed_install_policy: bool = Field(
+        default=False,
+        description=(
+            "True when the current turn asks whether a runflat-tire vehicle may switch to (or mix in) "
+            "regular tires, including replacing only 2 of the 4 tires. See ROUTER_PROMPT's static FAQ "
+            "policy-key section for the exact criteria."
+        ),
+    )
+    support_needs_clarification: bool = Field(
+        default=False,
+        description=(
+            "True only when this is a T-Station SUPPORT request but the assistant must ask for missing "
+            "information before an official tool or static policy can answer it."
+        ),
+    )
+    needs_selection_card: bool = Field(
+        default=True,
+        description=(
+            "사용자가 이번 턴에 상품 목록에서 골라야 하거나(모델 선택·가격대별·추천 등) 카드가 꼭 필요하면 true. "
+            "특정 상품의 리뷰·스펙·비교·단순 가격 문의 등 정보만 원하면 false. 확실치 않으면 true."
+        ),
+    )

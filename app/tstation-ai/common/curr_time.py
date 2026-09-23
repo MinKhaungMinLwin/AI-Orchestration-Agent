@@ -1,5 +1,11 @@
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+
+
+def get_today() -> date:
+    """Today in the app's configured timezone — never the container clock (UTC)."""
+    tz_offset = int(os.getenv("TZ_OFFSET", "0"))
+    return datetime.now(timezone(timedelta(hours=tz_offset))).date()
 
 
 def get_current_time() -> str:

@@ -1,9 +1,49 @@
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 import jwt
 
 logger = logging.getLogger(__name__)
+
+TOKEN_EXPIRED_CODE = "TOKEN_EXPIRED"
+TOKEN_EXPIRED_MESSAGE = "로그인 시간이 만료되었습니다."
+
+
+def _parse_expire_at(value: object) -> Optional[datetime]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    dt = datetime.fromisoformat(text)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _parse_exp(value: object) -> Optional[datetime]:
+    if value is None or value == "":
+        return None
+    return datetime.fromtimestamp(float(value), tz=timezone.utc)
+
+
+def get_jwt_expiration(payload: dict) -> Optional[datetime]:
+    """Return token expiration time, preferring T'Station expire_at over JWT exp."""
+    expire_at = _parse_expire_at(payload.get("expire_at"))
+    if expire_at:
+        return expire_at
+    return _parse_exp(payload.get("exp"))
+
+
+def is_jwt_payload_expired(payload: dict, now: Optional[datetime] = None) -> bool:
+    exp_dt = get_jwt_expiration(payload)
+    if not exp_dt:
+        return False
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return current >= exp_dt
 
 
 def decode_jwt(token: str, secret: Optional[str] = None) -> Optional[dict]:
@@ -19,7 +59,7 @@ def decode_jwt(token: str, secret: Optional[str] = None) -> Optional[dict]:
             payload = jwt.decode(token, secret, algorithms=["HS256"])
         else:
             # Decode without verification - useful for extracting claims
-            payload = jwt.decode(token, options={"verify_signature": False})
+            payload = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
         logger.debug(f"JWT decoded successfully, payload keys: {payload.keys()}")
         return payload
     except jwt.InvalidTokenError as e:

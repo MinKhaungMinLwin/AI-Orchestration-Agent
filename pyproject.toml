@@ -15,6 +15,7 @@ dependencies = [
     "isort>=5.13.2",
     "pandas-stubs~=2.2.3",
     "openapi-python-client==0.28.3",
+    "kiwipiepy-model>=0.23.0",
 ]
 
 [dependency-groups]
@@ -56,6 +57,9 @@ tstation-ai = [
     # MCP
     "langchain-mcp-adapters==0.2.1",
     "langchain-community==0.4.1",
+    # langgraph
+    "langgraph==1.0.9",
+    "langgraph-prebuilt==1.0.8",
 
     # Tracing
     "langfuse==3.11.2",
@@ -89,14 +93,9 @@ tstation-ai = [
     # Override transitive dep for CVE fix
     "nltk>=3.9.3",
     "litellm>=1.83.0",
-]
 
-
-## UI Demo
-tstation-ui-demo = [
-    "httpx>=0.23",
-    "curlify>=2.2.1",
-    "streamlit>=1.14.1",
-    "streamlit-nested-layout>=0.1.4",
-    "streamlit-mermaid>=0.3.0",
+    # BM25 lexical leg for hybrid FAQ search
+    "rank-bm25>=0.2.2",
+    # Korean morphological tokenizer for BM25 (P1 improvement)
+    "kiwipiepy>=0.17.0",
 ]

@@ -8,6 +8,7 @@ from ...client import AuthenticatedClient, Client
 from ...models.http_validation_error import HTTPValidationError
 from ...models.rcmd_type import RcmdType
 from ...models.recommendation_response import RecommendationResponse
+from ...models.vehicle_type import VehicleType
 from ...types import UNSET, Response, Unset
 
 
@@ -16,10 +17,15 @@ def _get_kwargs(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
@@ -30,6 +36,8 @@ def _get_kwargs(
     params["limit"] = limit
 
     params["brand_cd"] = brand_cd
+
+    params["allow_cross_brand_fill"] = allow_cross_brand_fill
 
     json_car_lnc_cd: None | str | Unset
     if isinstance(car_lnc_cd, Unset):
@@ -58,6 +66,36 @@ def _get_kwargs(
     else:
         json_pfm_nm = pfm_nm
     params["pfm_nm"] = json_pfm_nm
+
+    json_prc_grd: None | str | Unset
+    if isinstance(prc_grd, Unset):
+        json_prc_grd = UNSET
+    else:
+        json_prc_grd = prc_grd
+    params["prc_grd"] = json_prc_grd
+
+    json_vehicle_type: None | str | Unset
+    if isinstance(vehicle_type, Unset):
+        json_vehicle_type = UNSET
+    elif isinstance(vehicle_type, VehicleType):
+        json_vehicle_type = vehicle_type.value
+    else:
+        json_vehicle_type = vehicle_type
+    params["vehicle_type"] = json_vehicle_type
+
+    json_min_price: int | None | Unset
+    if isinstance(min_price, Unset):
+        json_min_price = UNSET
+    else:
+        json_min_price = min_price
+    params["min_price"] = json_min_price
+
+    json_max_price: int | None | Unset
+    if isinstance(max_price, Unset):
+        json_max_price = UNSET
+    else:
+        json_max_price = max_price
+    params["max_price"] = json_max_price
 
     params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
@@ -106,10 +144,15 @@ def sync_detailed(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
     """상품 추천
 
@@ -120,6 +163,7 @@ def sync_detailed(
     `PR_GOODS_RCMD_SUM`)
     - **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)
     - **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)
+    - **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)
 
     **신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**
     - **wet**: 빗길 성능 (`WET` 높은 순)
@@ -139,17 +183,44 @@ def sync_detailed(
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
+    - **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)
+
+    **가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**
+    - `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw
+    '프리미엄' + '프리미엄+' 둘 다 매칭.
+
+    **가격 필터 (모든 rcmd_type 공통, 옵션)**
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
+    `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
+    포함합니다. 회원별 쿠폰 가격 재계산 없이 이 일반 혜택가 기준 결과 순서와 범위를 유지합니다.
+
+    **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
+    - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
+    '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.
 
     Args:
         rcmd_type (RcmdType):
-        limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
+        limit (int | Unset): 반환할 상품 수 (기본 10, 추천 최대 10). 10 초과 요청은 내부적으로 10개로 제한합니다. Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
+        allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
+            이면 요청 브랜드만 유지한다. Default: True.
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
-        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
-        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'/'올웨더'. '여름'/'겨울'/'사계절' 은
+            PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
+        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+            + tstation 에 적용됨 (discount/value 는 미적용).
+        prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
+            '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
+            rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
+        vehicle_type (None | Unset | VehicleType): 차량 타입 직교 필터. passenger=승용차/SEDAN/스포츠카, suv=SUV,
+            ev=전기차, truck_van=경트럭&밴/경트럭/카고트럭/덤프트럭. 명시 시 CAR_KND_NM NULL/국산차/수입차는 제외됨.
+        min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
+            min_price. 모든 rcmd_type 에 적용.
+        max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
+            max_price. 모든 rcmd_type 에 적용.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -163,10 +234,15 @@ def sync_detailed(
         rcmd_type=rcmd_type,
         limit=limit,
         brand_cd=brand_cd,
+        allow_cross_brand_fill=allow_cross_brand_fill,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        prc_grd=prc_grd,
+        vehicle_type=vehicle_type,
+        min_price=min_price,
+        max_price=max_price,
     )
 
     response = client.get_httpx_client().request(
@@ -182,10 +258,15 @@ def sync(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
     """상품 추천
 
@@ -196,6 +277,7 @@ def sync(
     `PR_GOODS_RCMD_SUM`)
     - **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)
     - **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)
+    - **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)
 
     **신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**
     - **wet**: 빗길 성능 (`WET` 높은 순)
@@ -215,17 +297,44 @@ def sync(
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
+    - **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)
+
+    **가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**
+    - `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw
+    '프리미엄' + '프리미엄+' 둘 다 매칭.
+
+    **가격 필터 (모든 rcmd_type 공통, 옵션)**
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
+    `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
+    포함합니다. 회원별 쿠폰 가격 재계산 없이 이 일반 혜택가 기준 결과 순서와 범위를 유지합니다.
+
+    **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
+    - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
+    '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.
 
     Args:
         rcmd_type (RcmdType):
-        limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
+        limit (int | Unset): 반환할 상품 수 (기본 10, 추천 최대 10). 10 초과 요청은 내부적으로 10개로 제한합니다. Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
+        allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
+            이면 요청 브랜드만 유지한다. Default: True.
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
-        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
-        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'/'올웨더'. '여름'/'겨울'/'사계절' 은
+            PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
+        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+            + tstation 에 적용됨 (discount/value 는 미적용).
+        prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
+            '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
+            rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
+        vehicle_type (None | Unset | VehicleType): 차량 타입 직교 필터. passenger=승용차/SEDAN/스포츠카, suv=SUV,
+            ev=전기차, truck_van=경트럭&밴/경트럭/카고트럭/덤프트럭. 명시 시 CAR_KND_NM NULL/국산차/수입차는 제외됨.
+        min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
+            min_price. 모든 rcmd_type 에 적용.
+        max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
+            max_price. 모든 rcmd_type 에 적용.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -240,10 +349,15 @@ def sync(
         rcmd_type=rcmd_type,
         limit=limit,
         brand_cd=brand_cd,
+        allow_cross_brand_fill=allow_cross_brand_fill,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        prc_grd=prc_grd,
+        vehicle_type=vehicle_type,
+        min_price=min_price,
+        max_price=max_price,
     ).parsed
 
 
@@ -253,10 +367,15 @@ async def asyncio_detailed(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> Response[HTTPValidationError | RecommendationResponse]:
     """상품 추천
 
@@ -267,6 +386,7 @@ async def asyncio_detailed(
     `PR_GOODS_RCMD_SUM`)
     - **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)
     - **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)
+    - **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)
 
     **신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**
     - **wet**: 빗길 성능 (`WET` 높은 순)
@@ -286,17 +406,44 @@ async def asyncio_detailed(
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
+    - **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)
+
+    **가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**
+    - `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw
+    '프리미엄' + '프리미엄+' 둘 다 매칭.
+
+    **가격 필터 (모든 rcmd_type 공통, 옵션)**
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
+    `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
+    포함합니다. 회원별 쿠폰 가격 재계산 없이 이 일반 혜택가 기준 결과 순서와 범위를 유지합니다.
+
+    **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
+    - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
+    '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.
 
     Args:
         rcmd_type (RcmdType):
-        limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
+        limit (int | Unset): 반환할 상품 수 (기본 10, 추천 최대 10). 10 초과 요청은 내부적으로 10개로 제한합니다. Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
+        allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
+            이면 요청 브랜드만 유지한다. Default: True.
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
-        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
-        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'/'올웨더'. '여름'/'겨울'/'사계절' 은
+            PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
+        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+            + tstation 에 적용됨 (discount/value 는 미적용).
+        prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
+            '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
+            rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
+        vehicle_type (None | Unset | VehicleType): 차량 타입 직교 필터. passenger=승용차/SEDAN/스포츠카, suv=SUV,
+            ev=전기차, truck_van=경트럭&밴/경트럭/카고트럭/덤프트럭. 명시 시 CAR_KND_NM NULL/국산차/수입차는 제외됨.
+        min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
+            min_price. 모든 rcmd_type 에 적용.
+        max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
+            max_price. 모든 rcmd_type 에 적용.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -310,10 +457,15 @@ async def asyncio_detailed(
         rcmd_type=rcmd_type,
         limit=limit,
         brand_cd=brand_cd,
+        allow_cross_brand_fill=allow_cross_brand_fill,
         car_lnc_cd=car_lnc_cd,
         tire_size=tire_size,
         season_nm=season_nm,
         pfm_nm=pfm_nm,
+        prc_grd=prc_grd,
+        vehicle_type=vehicle_type,
+        min_price=min_price,
+        max_price=max_price,
     )
 
     response = await client.get_async_httpx_client().request(**kwargs)
@@ -327,10 +479,15 @@ async def asyncio(
     rcmd_type: RcmdType,
     limit: int | Unset = 10,
     brand_cd: str,
+    allow_cross_brand_fill: bool | Unset = True,
     car_lnc_cd: None | str | Unset = UNSET,
     tire_size: None | str | Unset = UNSET,
     season_nm: None | str | Unset = UNSET,
     pfm_nm: None | str | Unset = UNSET,
+    prc_grd: None | str | Unset = UNSET,
+    vehicle_type: None | Unset | VehicleType = UNSET,
+    min_price: int | None | Unset = UNSET,
+    max_price: int | None | Unset = UNSET,
 ) -> HTTPValidationError | RecommendationResponse | None:
     """상품 추천
 
@@ -341,6 +498,7 @@ async def asyncio(
     `PR_GOODS_RCMD_SUM`)
     - **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)
     - **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)
+    - **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)
 
     **신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**
     - **wet**: 빗길 성능 (`WET` 높은 순)
@@ -360,17 +518,44 @@ async def asyncio(
     - **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)
     - **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)
     - **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)
+    - **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)
+
+    **가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**
+    - `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw
+    '프리미엄' + '프리미엄+' 둘 다 매칭.
+
+    **가격 필터 (모든 rcmd_type 공통, 옵션)**
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
+    `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
+    포함합니다. 회원별 쿠폰 가격 재계산 없이 이 일반 혜택가 기준 결과 순서와 범위를 유지합니다.
+
+    **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
+    - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
+    '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.
 
     Args:
         rcmd_type (RcmdType):
-        limit (int | Unset): 반환할 상품 수 (기본 10, 최대 100) Default: 10.
+        limit (int | Unset): 반환할 상품 수 (기본 10, 추천 최대 10). 10 초과 요청은 내부적으로 10개로 제한합니다. Default: 10.
         brand_cd (str): 각 브랜드(HK / LF / MC / PI / BS / CT / GY
+        allow_cross_brand_fill (bool | Unset): true 이면 HK 추천 결과가 부족할 때 타 브랜드로 최소 노출 수를 보충한다. false
+            이면 요청 브랜드만 유지한다. Default: True.
         car_lnc_cd (None | str | Unset): 차량 런칭 코드. tire_size가 없을 때만 사용
         tire_size (None | str | Unset): 타이어 사이즈 문자열. 예: 245/45R18 (공백/소문자 허용). 입력 시 car_lnc_cd보다
             우선 적용
-        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'. 신규(동적) rcmd_type 에만 적용됨.
-        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+        season_nm (None | str | Unset): 계절 직교 필터. 값: '여름'/'겨울'/'사계절'/'올웨더'. '여름'/'겨울'/'사계절' 은
+            PR_GOODS_BASE.SEASON_NM 매칭, '올웨더' 는 PR_PATTERN_BASE.ALLWEATHER_YN='Y' 매칭. 신규(동적) rcmd_type
             에만 적용됨.
+        pfm_nm (None | str | Unset): 성능 등급 직교 필터. 값: 'SPORT'/'COMFORT'/'RUNFLAT'. 신규(동적) rcmd_type
+            + tstation 에 적용됨 (discount/value 는 미적용).
+        prc_grd (None | str | Unset): 가격 등급 직교 필터 (PR_GOODS_BASE.PRC_GRD_NM). 값:
+            '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 DB 원본 '프리미엄' + '프리미엄+' 둘 다 매칭 (LIKE '프리미엄%'). 신규(동적)
+            rcmd_type + tstation 에 적용됨 (discount/value 는 미적용).
+        vehicle_type (None | Unset | VehicleType): 차량 타입 직교 필터. passenger=승용차/SEDAN/스포츠카, suv=SUV,
+            ev=전기차, truck_van=경트럭&밴/경트럭/카고트럭/덤프트럭. 명시 시 CAR_KND_NM NULL/국산차/수입차는 제외됨.
+        min_price (int | None | Unset): 최소 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) >=
+            min_price. 모든 rcmd_type 에 적용.
+        max_price (int | None | Unset): 최대 가격 필터 (원). NVL(EXTRA_FVR_SALE_PRC, SALE_PRC) <=
+            max_price. 모든 rcmd_type 에 적용.
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -386,9 +571,14 @@ async def asyncio(
             rcmd_type=rcmd_type,
             limit=limit,
             brand_cd=brand_cd,
+            allow_cross_brand_fill=allow_cross_brand_fill,
             car_lnc_cd=car_lnc_cd,
             tire_size=tire_size,
             season_nm=season_nm,
             pfm_nm=pfm_nm,
+            prc_grd=prc_grd,
+            vehicle_type=vehicle_type,
+            min_price=min_price,
+            max_price=max_price,
         )
     ).parsed

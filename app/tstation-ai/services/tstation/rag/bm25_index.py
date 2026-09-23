@@ -1,0 +1,213 @@
+"""In-memory BM25 index for FAQ hybrid search. Lazy-builds; auto-refreshes hourly."""
+
+import logging
+import shutil
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Optional
+
+import kiwipiepy_model
+from kiwipiepy import Kiwi
+
+logger = logging.getLogger(__name__)
+
+_TTL: float = 3600.0  # rebuild every hour; FAQ sync is weekly
+_COUNT_CHECK_INTERVAL: float = 60.0  # how often a cheap point-count drift check may run
+_RRF_K: int = 60
+
+def _kiwi_model_path() -> str | None:
+    model_path = Path(kiwipiepy_model.get_model_path())
+    if str(model_path).isascii():
+        return None
+
+    cache_path = Path(tempfile.gettempdir()) / f"kiwipiepy_model_{kiwipiepy_model.__version__}"
+    shutil.copytree(model_path, cache_path, dirs_exist_ok=True)
+    return str(cache_path)
+
+_kiwi = Kiwi(model_path=_kiwi_model_path())
+
+
+class Bm25FaqIndex:
+    """
+    In-memory BM25 index over FAQ question and answer texts, backed by a Qdrant collection.
+
+    Lazy-initialises on the first call to ensure_built(); refreshes every _TTL seconds.
+    Thread-safe: concurrent rebuild calls serialise via _build_lock; readers always see
+    a consistent snapshot (Python attribute assignment is atomic for simple types).
+
+    search() scores against both question and answer corpora independently,
+    then fuses via pure RRF (k=60) before returning top_k hits.
+    """
+
+    _instance: Optional["Bm25FaqIndex"] = None
+    _class_lock: threading.Lock = threading.Lock()
+
+    def __init__(self) -> None:
+        self._bm25_question = None
+        self._bm25_answer = None
+        self._point_ids: list[str] = []
+        self._payloads: dict[str, dict] = {}
+        self._built_at: float = 0.0
+        self._count_checked_at: float = 0.0
+        self._build_lock = threading.Lock()
+
+    @classmethod
+    def get(cls) -> "Bm25FaqIndex":
+        if cls._instance is None:
+            with cls._class_lock:
+                if cls._instance is None:
+                    cls._instance = Bm25FaqIndex()
+        return cls._instance
+
+    def ensure_built(self, qdrant_client, collection_name: str) -> None:
+        """Build or refresh the index if needed. Concurrent callers serialise on _build_lock.
+
+        Never raises: the collection may not exist yet (ingestion has not run), and a
+        keyword index is an optimisation — hybrid search degrades to semantic-only.
+        Leaving the index unbuilt means the next call retries, so it self-heals as
+        soon as the collection appears.
+        """
+        if not self._needs_rebuild(qdrant_client, collection_name):
+            return
+        built_at = self._built_at
+        with self._build_lock:
+            if self._built_at != built_at:  # another thread rebuilt while we waited
+                return
+            try:
+                self._build(qdrant_client, collection_name)
+            except Exception:
+                logger.warning(
+                    "[Bm25FaqIndex] Build from '%s' failed; keyword search disabled until it succeeds",
+                    collection_name,
+                    exc_info=True,
+                )
+
+    def _needs_rebuild(self, qdrant_client=None, collection_name: str = "") -> bool:
+        if self._bm25_question is None:
+            return True
+        now = time.monotonic()
+        if now - self._built_at >= _TTL:
+            return True
+        # The ingestion service may repopulate the collection at any time — notably
+        # right after a deploy, when this service booted first. A cheap point-count
+        # check (rate-limited) picks that up in seconds instead of a full TTL.
+        if qdrant_client is None or now - self._count_checked_at < _COUNT_CHECK_INTERVAL:
+            return False
+        self._count_checked_at = now
+        try:
+            live_count = qdrant_client.count(collection_name, exact=True).count
+        except Exception:
+            logger.debug("[Bm25FaqIndex] point-count check failed for '%s'", collection_name, exc_info=True)
+            return False
+        if live_count == len(self._point_ids):
+            return False
+        logger.info(
+            "[Bm25FaqIndex] '%s' changed (indexed=%d live=%d) — rebuilding",
+            collection_name,
+            len(self._point_ids),
+            live_count,
+        )
+        return True
+
+    def _build(self, qdrant_client, collection_name: str) -> None:
+        from rank_bm25 import BM25Plus
+
+        point_ids: list[str] = []
+        payloads: dict[str, dict] = {}
+        question_corpus: list[list[str]] = []
+        answer_corpus: list[list[str]] = []
+        offset = None
+
+        while True:
+            records, next_offset = qdrant_client.scroll(
+                collection_name=collection_name,
+                limit=200,
+                with_payload=True,
+                with_vectors=False,
+                offset=offset,
+            )
+            for r in records:
+                payload = r.payload or {}
+                pid = str(r.id)
+                point_ids.append(pid)
+                payloads[pid] = payload
+                question_corpus.append(self._tokenize(payload.get("question", "")))
+                answer_corpus.append(self._tokenize(payload.get("answer", "")))
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        if not question_corpus:
+            logger.warning("[Bm25FaqIndex] No documents found in '%s'; index not built", collection_name)
+            return
+
+        bm25_question = BM25Plus(question_corpus)
+        bm25_answer = BM25Plus(answer_corpus)
+        # Atomic swap: assign all fields before updating _built_at
+        self._bm25_question = bm25_question
+        self._bm25_answer = bm25_answer
+        self._point_ids = point_ids
+        self._payloads = payloads
+        self._built_at = time.monotonic()
+        logger.info("[Bm25FaqIndex] Built: %d documents from '%s' using %s", len(question_corpus), collection_name, type(bm25_question).__name__)
+        sample_text = payloads[point_ids[0]].get("question", "") if point_ids else ""
+        logger.info("[Bm25FaqIndex] tokenizer sample: %r → %s", sample_text[:40], question_corpus[0])
+
+    def search(self, query: str, top_k: int, fetch_k: int) -> list[dict]:
+        """Return top_k [{id, score, payload}] via internal RRF of top fetch_k question + answer BM25 candidates."""
+        if self._bm25_question is None:
+            return []
+        tokens = self._tokenize(query)
+        if not tokens:
+            return []
+
+        logger.info("[Bm25FaqIndex] tokens=%s", tokens)
+
+        q_scores = self._bm25_question.get_scores(tokens)
+        a_scores = self._bm25_answer.get_scores(tokens)
+
+        q_ranked = sorted(range(len(q_scores)), key=lambda i: q_scores[i], reverse=True)
+        a_ranked = sorted(range(len(a_scores)), key=lambda i: a_scores[i], reverse=True)
+
+        logger.info(
+            "[Bm25FaqIndex] top3 question-BM25: %s",
+            [(self._payloads[self._point_ids[i]].get("question", "")[:50], round(float(q_scores[i]), 3)) for i in q_ranked[:3] if q_scores[i] > 0],
+        )
+        logger.info(
+            "[Bm25FaqIndex] top3 answer-BM25:   %s",
+            [(self._payloads[self._point_ids[i]].get("question", "")[:50], round(float(a_scores[i]), 3)) for i in a_ranked[:3] if a_scores[i] > 0],
+        )
+
+        rrf_scores: dict[int, float] = {}
+        for rank, idx in enumerate(q_ranked[:fetch_k]):
+            if q_scores[idx] > 0.0:
+                rrf_scores[idx] = rrf_scores.get(idx, 0.0) + 1 / (_RRF_K + rank + 1)
+        for rank, idx in enumerate(a_ranked[:fetch_k]):
+            if a_scores[idx] > 0.0:
+                rrf_scores[idx] = rrf_scores.get(idx, 0.0) + 1 / (_RRF_K + rank + 1)
+
+        top_indices = sorted(rrf_scores, key=lambda i: rrf_scores[i], reverse=True)[:top_k]
+
+        results = [
+            {"id": self._point_ids[i], "score": rrf_scores[i], "payload": self._payloads[self._point_ids[i]]}
+            for i in top_indices
+        ]
+        logger.info(
+            "[Bm25FaqIndex] top3 after RRF: %s",
+            [(r["payload"].get("question", "")[:50], round(r["score"], 4)) for r in results[:3]],
+        )
+        return results
+
+    def is_ready(self) -> bool:
+        return self._bm25_question is not None
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        """Korean morpheme tokenisation — extracts content words (noun/verb/adj) for BM25."""
+        return [t.form for t in _kiwi.tokenize(text) if t.tag in ("NNG", "NNP", "VV", "VA", "XR")]
+
+
+def get_bm25_index() -> Bm25FaqIndex:
+    return Bm25FaqIndex.get()

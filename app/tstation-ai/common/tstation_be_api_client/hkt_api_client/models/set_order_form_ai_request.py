@@ -19,6 +19,8 @@ class SetOrderFormAIRequest:
         smrt_pay_yn (str): 스마트페이여부 (Y/N)
         drt_pur_yn (str): 주문하기여부 (Y: 주문하기, N: 장바구니)
         shop_seq (None | str | Unset): 방문매장 가맹점주문번호 ET_SHOP_INFO테이블 SHOP_SEQ 컬럼
+        shopId (None | str | Unset): 매장 ID (SHOP_ID). shopSeq 누락 시 BE에서 SHOP_SEQ로 변환
+        shop_id (None | str | Unset): 매장 ID (SHOP_ID). snake_case 호환 입력
         smrt_pay_inst_mm (None | str | Unset): 스마트페이시 할부개월수 (12/24)
         car_lnc_cd (None | str | Unset): 차량정보 WCODE
         rsv_date (None | str | Unset): 방문 예약일자 (YYYYMMDD)
@@ -29,6 +31,8 @@ class SetOrderFormAIRequest:
     smrt_pay_yn: str
     drt_pur_yn: str
     shop_seq: None | str | Unset = UNSET
+    shopId: None | str | Unset = UNSET
+    shop_id: None | str | Unset = UNSET
     smrt_pay_inst_mm: None | str | Unset = UNSET
     car_lnc_cd: None | str | Unset = UNSET
     rsv_date: None | str | Unset = UNSET
@@ -47,6 +51,18 @@ class SetOrderFormAIRequest:
             shop_seq = UNSET
         else:
             shop_seq = self.shop_seq
+
+        shopId: None | str | Unset
+        if isinstance(self.shopId, Unset):
+            shopId = UNSET
+        else:
+            shopId = self.shopId
+
+        shop_id: None | str | Unset
+        if isinstance(self.shop_id, Unset):
+            shop_id = UNSET
+        else:
+            shop_id = self.shop_id
 
         smrt_pay_inst_mm: None | str | Unset
         if isinstance(self.smrt_pay_inst_mm, Unset):
@@ -83,6 +99,10 @@ class SetOrderFormAIRequest:
         )
         if shop_seq is not UNSET:
             field_dict["shopSeq"] = shop_seq
+        if shopId is not UNSET:
+            field_dict["shopId"] = shopId
+        if shop_id is not UNSET:
+            field_dict["shop_id"] = shop_id
         if smrt_pay_inst_mm is not UNSET:
             field_dict["smrtPayInstMm"] = smrt_pay_inst_mm
         if car_lnc_cd is not UNSET:
@@ -111,6 +131,24 @@ class SetOrderFormAIRequest:
             return cast(None | str | Unset, data)
 
         shop_seq = _parse_shop_seq(d.pop("shopSeq", UNSET))
+
+        def _parse_shopId(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shopId = _parse_shopId(d.pop("shopId", UNSET))
+
+        def _parse_shop_id(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        shop_id = _parse_shop_id(d.pop("shop_id", UNSET))
 
         def _parse_smrt_pay_inst_mm(data: object) -> None | str | Unset:
             if data is None:
@@ -153,6 +191,8 @@ class SetOrderFormAIRequest:
             smrt_pay_yn=smrt_pay_yn,
             drt_pur_yn=drt_pur_yn,
             shop_seq=shop_seq,
+            shopId=shopId,
+            shop_id=shop_id,
             smrt_pay_inst_mm=smrt_pay_inst_mm,
             car_lnc_cd=car_lnc_cd,
             rsv_date=rsv_date,

@@ -25,13 +25,17 @@ class EventApplicableProductItem:
         extra_fvr_sale_prc (int | None | Unset): 최대 혜택 판매가. 회원 유형에 따라 PR_GOODS_DSCNT_PRC_INFO(일반) 또는
             PR_GOODS_ENTR_DSCNT_PRC_INFO(PARTNER)에서 join
         extra_fvr_sale_per (float | None | Unset): 최대 혜택 할인율 (%)
+        smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
         image_url (None | str | Unset): 대표 이미지 URL (PR_PTRN_IMG_INFO IMG_SCT_CD='80' + IMAGE_BASE_URL)
         label_pnwave (None | str | Unset): EU 소음 라벨 등급 코드 (LABEL_PNWAVE). 값: 'AA'(최저소음) / 'A'(저소음) / 그 외
         label_pnwave_nm (None | str | Unset): EU 소음 라벨 등급명 (DECODE(LABEL_PNWAVE)): '최저소음' / '저소음' / ''
         label_pndb (None | str | Unset): EU 소음 데시벨 라벨 값 (LABEL_PNDB)
-        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 예: '프리미엄+'/'프리미엄'/'스탠다드'/'이코노미'
+        prc_grd_nm (None | str | Unset): 가격 등급명 (PR_GOODS_BASE.PRC_GRD_NM). 응답값: '프리미엄' (DB 원본 '프리미엄+' 도 응답 단계에서 '프리미엄'
+            으로 정규화) / '스탠다드' / '이코노미'
         goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_PFM_NM). 예:
             'COMFORT'(정숙/승차감)/'SPORT'(고속/제동성)/'RUNFLAT'(런플랫)
+        t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
+        oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
         rating_avg (float | None | Unset): 패턴 평균 평점 (PR_GDAS_INFO.GDAS_SCR_VAL 평균, 0.0~5.0)
         review_count (int | None | Unset): 패턴 활성 리뷰 수
     """
@@ -45,12 +49,15 @@ class EventApplicableProductItem:
     sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_prc: int | None | Unset = UNSET
     extra_fvr_sale_per: float | None | Unset = UNSET
+    smrt_pay_yn: None | str | Unset = UNSET
     image_url: None | str | Unset = UNSET
     label_pnwave: None | str | Unset = UNSET
     label_pnwave_nm: None | str | Unset = UNSET
     label_pndb: None | str | Unset = UNSET
     prc_grd_nm: None | str | Unset = UNSET
     goods_pfm_nm: None | str | Unset = UNSET
+    t_oe_maker_1: None | str | Unset = UNSET
+    oe_badge_yn: None | str | Unset = UNSET
     rating_avg: float | None | Unset = UNSET
     review_count: int | None | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
@@ -102,6 +109,12 @@ class EventApplicableProductItem:
         else:
             extra_fvr_sale_per = self.extra_fvr_sale_per
 
+        smrt_pay_yn: None | str | Unset
+        if isinstance(self.smrt_pay_yn, Unset):
+            smrt_pay_yn = UNSET
+        else:
+            smrt_pay_yn = self.smrt_pay_yn
+
         image_url: None | str | Unset
         if isinstance(self.image_url, Unset):
             image_url = UNSET
@@ -138,6 +151,18 @@ class EventApplicableProductItem:
         else:
             goods_pfm_nm = self.goods_pfm_nm
 
+        t_oe_maker_1: None | str | Unset
+        if isinstance(self.t_oe_maker_1, Unset):
+            t_oe_maker_1 = UNSET
+        else:
+            t_oe_maker_1 = self.t_oe_maker_1
+
+        oe_badge_yn: None | str | Unset
+        if isinstance(self.oe_badge_yn, Unset):
+            oe_badge_yn = UNSET
+        else:
+            oe_badge_yn = self.oe_badge_yn
+
         rating_avg: float | None | Unset
         if isinstance(self.rating_avg, Unset):
             rating_avg = UNSET
@@ -172,6 +197,8 @@ class EventApplicableProductItem:
             field_dict["extra_fvr_sale_prc"] = extra_fvr_sale_prc
         if extra_fvr_sale_per is not UNSET:
             field_dict["extra_fvr_sale_per"] = extra_fvr_sale_per
+        if smrt_pay_yn is not UNSET:
+            field_dict["smrt_pay_yn"] = smrt_pay_yn
         if image_url is not UNSET:
             field_dict["image_url"] = image_url
         if label_pnwave is not UNSET:
@@ -184,6 +211,10 @@ class EventApplicableProductItem:
             field_dict["prc_grd_nm"] = prc_grd_nm
         if goods_pfm_nm is not UNSET:
             field_dict["goods_pfm_nm"] = goods_pfm_nm
+        if t_oe_maker_1 is not UNSET:
+            field_dict["t_oe_maker_1"] = t_oe_maker_1
+        if oe_badge_yn is not UNSET:
+            field_dict["oe_badge_yn"] = oe_badge_yn
         if rating_avg is not UNSET:
             field_dict["rating_avg"] = rating_avg
         if review_count is not UNSET:
@@ -261,6 +292,15 @@ class EventApplicableProductItem:
 
         extra_fvr_sale_per = _parse_extra_fvr_sale_per(d.pop("extra_fvr_sale_per", UNSET))
 
+        def _parse_smrt_pay_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        smrt_pay_yn = _parse_smrt_pay_yn(d.pop("smrt_pay_yn", UNSET))
+
         def _parse_image_url(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -315,6 +355,24 @@ class EventApplicableProductItem:
 
         goods_pfm_nm = _parse_goods_pfm_nm(d.pop("goods_pfm_nm", UNSET))
 
+        def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        t_oe_maker_1 = _parse_t_oe_maker_1(d.pop("t_oe_maker_1", UNSET))
+
+        def _parse_oe_badge_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        oe_badge_yn = _parse_oe_badge_yn(d.pop("oe_badge_yn", UNSET))
+
         def _parse_rating_avg(data: object) -> float | None | Unset:
             if data is None:
                 return data
@@ -343,12 +401,15 @@ class EventApplicableProductItem:
             sale_prc=sale_prc,
             extra_fvr_sale_prc=extra_fvr_sale_prc,
             extra_fvr_sale_per=extra_fvr_sale_per,
+            smrt_pay_yn=smrt_pay_yn,
             image_url=image_url,
             label_pnwave=label_pnwave,
             label_pnwave_nm=label_pnwave_nm,
             label_pndb=label_pndb,
             prc_grd_nm=prc_grd_nm,
             goods_pfm_nm=goods_pfm_nm,
+            t_oe_maker_1=t_oe_maker_1,
+            oe_badge_yn=oe_badge_yn,
             rating_avg=rating_avg,
             review_count=review_count,
         )

@@ -4,7 +4,7 @@ from contextvars import ContextVar
 from typing import Any, Iterator
 
 from config.env import Environment, settings
-from langfuse import Langfuse
+from langfuse import Langfuse, propagate_attributes
 from langfuse.langchain import CallbackHandler
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,23 @@ def set_trace_name(name: str | None) -> None:
     _trace_name_var.set(name)
 
 
+def _redact_system_entries(value: Any, placeholder: str) -> Any:
+    from langchain_core.messages import BaseMessage, SystemMessage
+
+    if isinstance(value, BaseMessage):
+        return SystemMessage(content=placeholder) if value.type == "system" else value
+    if isinstance(value, dict):
+        if str(value.get("role") or value.get("type") or "").lower() == "system":
+            return {**value, "content": placeholder}
+        return {key: _redact_system_entries(val, placeholder) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        if len(value) == 2 and isinstance(value[0], str) and value[0].lower() == "system":
+            return (value[0], placeholder) if isinstance(value, tuple) else [value[0], placeholder]
+        redacted_items = [_redact_system_entries(item, placeholder) for item in value]
+        return tuple(redacted_items) if isinstance(value, tuple) else redacted_items
+    return value
+
+
 class FilteredCallbackHandler(CallbackHandler):
     """LangChain callback handler that:
     - Replaces system prompts with ``[prompt:<name>]`` to keep generation spans small.
@@ -88,8 +105,9 @@ class FilteredCallbackHandler(CallbackHandler):
         parent_run_id: Any = None,
         **kwargs: Any,
     ) -> Any:
+        filtered_inputs = _redact_system_entries(inputs, f"[prompt:{self._prompt_name}]")
         result = super().on_chain_start(
-            serialized, inputs, run_id=run_id, parent_run_id=parent_run_id, **kwargs
+            serialized, filtered_inputs, run_id=run_id, parent_run_id=parent_run_id, **kwargs
         )
         # For the root chain of each callback handler (parent_run_id is None from
         # LangChain's perspective), override the trace name with the user message.
@@ -103,6 +121,22 @@ class FilteredCallbackHandler(CallbackHandler):
                     except Exception:
                         pass
         return result
+
+    def on_chain_end(
+        self,
+        outputs: dict[str, Any],
+        *,
+        run_id: Any,
+        parent_run_id: Any = None,
+        **kwargs: Any,
+    ) -> Any:
+        placeholder = f"[prompt:{self._prompt_name}]"
+        filtered_outputs = _redact_system_entries(outputs, placeholder)
+        if kwargs.get("inputs") is not None:
+            kwargs["inputs"] = _redact_system_entries(kwargs["inputs"], placeholder)
+        return super().on_chain_end(
+            filtered_outputs, run_id=run_id, parent_run_id=parent_run_id, **kwargs
+        )
 
     def on_chat_model_start(
         self,
@@ -137,6 +171,7 @@ def build_trace_config(
     tags: list[str] | None = None,
     extra_metadata: dict[str, Any] | None = None,
     prompt_name: str | None = None,
+    inherit_active_trace: bool = False,
 ) -> dict[str, Any]:
     """Return a LangChain RunnableConfig wired with the Langfuse callback and trace metadata."""
     metadata: dict[str, Any] = {}
@@ -158,10 +193,10 @@ def build_trace_config(
             tc: dict[str, str] = {"trace_id": trace_id}
             if parent_span_id:
                 tc["parent_span_id"] = parent_span_id
-            config["callbacks"] = [FilteredCallbackHandler(
-                prompt_name=prompt_name,
-                trace_context=tc,
-            )]
+            handler_kwargs: dict[str, Any] = {"prompt_name": prompt_name}
+            if not (inherit_active_trace and _has_matching_active_trace(trace_id)):
+                handler_kwargs["trace_context"] = tc
+            config["callbacks"] = [FilteredCallbackHandler(**handler_kwargs)]
         elif langfuse_handler is not None:
             config["callbacks"] = [langfuse_handler]
     # Stash trace_id and parent_span_id under `configurable` so downstream
@@ -197,6 +232,59 @@ class _NullSpan:
 _NULL_SPAN = _NullSpan()
 
 
+def _has_matching_active_trace(trace_id: str | None) -> bool:
+    if not trace_id:
+        return False
+    try:
+        return tracer.get_current_trace_id() == trace_id
+    except Exception:
+        return False
+
+
+@contextlib.contextmanager
+def active_trace_span(
+    name: str,
+    *,
+    trace_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    trace_name: str | None = None,
+    input: Any = None,
+    metadata: dict[str, Any] | None = None,
+) -> Iterator[Any]:
+    """Activate a root span and propagate trace-level identity to all child observations."""
+    if not _tracing_enabled or not trace_id:
+        yield _NULL_SPAN
+        return
+
+    truncated_input = truncate_for_trace(input, MAX_TRACE_INPUT_CHARS) if input is not None else None
+    stack = contextlib.ExitStack()
+    try:
+        span = stack.enter_context(
+            tracer.start_as_current_span(
+                name=name,
+                trace_context={"trace_id": trace_id},
+                input=truncated_input,
+                metadata=metadata,
+            )
+        )
+        stack.enter_context(
+            propagate_attributes(
+                session_id=session_id,
+                user_id=user_id,
+                trace_name=trace_name,
+            )
+        )
+    except Exception as exc:
+        stack.close()
+        logger.debug("[TRACE] Failed to activate span '%s': %s", name, exc)
+        yield _NULL_SPAN
+        return
+
+    with stack:
+        yield span
+
+
 @contextlib.contextmanager
 def trace_span(
     name: str,
@@ -211,16 +299,18 @@ def trace_span(
         return
 
     truncated_input = truncate_for_trace(input, MAX_TRACE_INPUT_CHARS) if input is not None else None
-    trace_context: dict[str, str] = {"trace_id": trace_id}
-    if parent_span_id:
-        trace_context["parent_span_id"] = parent_span_id
-
     try:
-        span = tracer.start_span(
-            name=name,
-            trace_context=trace_context,
-            input=truncated_input,
-        )
+        if _has_matching_active_trace(trace_id):
+            span = tracer.start_span(name=name, input=truncated_input)
+        else:
+            trace_context: dict[str, str] = {"trace_id": trace_id}
+            if parent_span_id:
+                trace_context["parent_span_id"] = parent_span_id
+            span = tracer.start_span(
+                name=name,
+                trace_context=trace_context,
+                input=truncated_input,
+            )
     except Exception as exc:
         logger.debug("[TRACE] Failed to start span '%s': %s", name, exc)
         yield _NULL_SPAN
@@ -233,3 +323,20 @@ def trace_span(
             span.end()
         except Exception as exc:
             logger.debug("[TRACE] Failed to end span '%s': %s", name, exc)
+
+
+def safe_trace_update(observation: Any, *, trace: bool = False, **kwargs: Any) -> None:
+    """Best-effort Langfuse observation/trace update.
+
+    Observability must never block or fail a chat response, so callers can use
+    this wrapper for non-critical metadata updates.
+    """
+    if observation is None:
+        return
+    try:
+        if trace:
+            observation.update_trace(**kwargs)
+        else:
+            observation.update(**kwargs)
+    except Exception as exc:
+        logger.debug("[TRACE] update failed: %s", exc)

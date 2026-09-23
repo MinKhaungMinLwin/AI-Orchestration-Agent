@@ -22,6 +22,7 @@ import os
 import struct
 import threading
 import time
+from collections import deque
 from typing import Optional, Protocol
 
 from Crypto.Cipher import AES
@@ -93,7 +94,7 @@ class KmsEnvelopeBackend:
         self._lock = threading.Lock()
         self._enc_dek: Optional[tuple[bytes, bytes, float]] = None  # (plain, enc, exp)
         self._dec_cache: dict[bytes, bytes] = {}
-        self._dec_order: list[bytes] = []
+        self._dec_order: deque[bytes] = deque()
 
     def _get_enc_dek(self) -> tuple[bytes, bytes]:
         with self._lock:
@@ -118,7 +119,7 @@ class KmsEnvelopeBackend:
                 self._dec_cache[encrypted_dek] = plain
                 self._dec_order.append(encrypted_dek)
                 while len(self._dec_order) > self.DECRYPT_CACHE_MAX:
-                    self._dec_cache.pop(self._dec_order.pop(0), None)
+                    self._dec_cache.pop(self._dec_order.popleft(), None)
         return plain
 
     def encrypt(self, plaintext: str) -> str:
@@ -166,9 +167,9 @@ class CryptoService:
             return plaintext
         try:
             return self._backend.encrypt(plaintext)
-        except Exception as exc:  # noqa: BLE001
-            logger.error(f"[CRYPTO] encrypt failed, storing plaintext: {exc}")
-            return plaintext
+        except Exception as exc:
+            logger.error(f"[CRYPTO] encrypt failed: {exc}")
+            raise RuntimeError("Chat encryption failed") from exc
 
     def decrypt(self, value: Optional[str]) -> Optional[str]:
         if value is None or value == "":
@@ -184,7 +185,7 @@ class CryptoService:
             return self._backend.decrypt(value)
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[CRYPTO] decrypt failed: {exc}")
-            return value
+            raise
 
 
 _crypto_service: Optional[CryptoService] = None

@@ -1,6 +1,6 @@
-FROM ghcr.io/astral-sh/uv:python3.12-alpine
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-RUN apk add --no-cache curl
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
 RUN uv venv
 COPY requirements.txt .
@@ -11,7 +11,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup && chown -R appuser:appgroup /app
+RUN groupadd -r appgroup && useradd -r -g appgroup appuser && chown -R appuser:appgroup /app
 USER appuser
 
 CMD ["uv", "run", "main.py"]
